@@ -15,9 +15,9 @@ This is a sophisticated rendering engine with real-time 3D-to-2D projection, lay
 **Layer-Based Rendering System**
 - Functionality: Renders the 3D world as a series of 2D depth layers that are cached and reused
 - Purpose: Achieve high performance by avoiding full 3D rendering while maintaining spatial accuracy
-- Trigger: On initial load and when camera moves perpendicular to layers
-- Progression: World initialized → Layers generated at depth intervals → Cached to memory → Composited for display → Reused during parallel movement
-- Success criteria: Smooth 60fps movement, visible layer separation, minimal re-rendering during lateral camera motion
+- Trigger: On initial load, when camera moves perpendicular to layers, or when camera rotation changes
+- Progression: World initialized → Layers generated at depth intervals → Cached to memory → Composited for display → Reused during parallel movement → Invalidated on rotation
+- Success criteria: Smooth 60fps movement, visible layer separation, minimal re-rendering during lateral camera motion, proper refresh on rotation
 
 **Free Camera Movement**
 - Functionality: WASD for XZ plane movement, Space/Shift for Y axis, mouse drag for look direction
@@ -29,9 +29,9 @@ This is a sophisticated rendering engine with real-time 3D-to-2D projection, lay
 **Intelligent Layer Cache Management**
 - Functionality: Generates and caches layers at specific depth intervals, regenerates only when necessary
 - Purpose: Minimize computational cost by reusing rendered layers during camera translation
-- Trigger: Camera movement perpendicular to layer planes exceeds threshold
-- Progression: Camera moves → Distance from cache origin calculated → If threshold exceeded, layers regenerated → Cache updated → Old layers discarded
-- Success criteria: Cache hits visible in debug overlay, performance improvement measurable
+- Trigger: Camera movement perpendicular to layer planes exceeds threshold OR rotation change exceeds threshold
+- Progression: Camera moves/rotates → Distance and rotation delta from cache origin calculated → If threshold exceeded, layers regenerated → Cache updated → Old layers discarded
+- Success criteria: Cache hits visible in debug overlay, performance improvement measurable, view updates correctly on rotation
 
 **Voxel World Generation**
 - Functionality: Procedurally generates a 3D voxel world with terrain, structures, and variation
@@ -47,6 +47,13 @@ This is a sophisticated rendering engine with real-time 3D-to-2D projection, lay
 - Trigger: Always visible or toggleable
 - Progression: Frame rendered → Stats collected → Overlay updated → Displayed
 - Success criteria: Real-time statistics, visible correlation between movement and cache behavior
+
+**Automated Testing Suite**
+- Functionality: Comprehensive unit and integration tests for renderer and UI components
+- Purpose: Ensure correctness and prevent regressions, especially for cache invalidation logic
+- Trigger: Developer runs tests manually or in watch mode
+- Progression: Tests execute → Assertions verify behavior → Pass/fail feedback → Coverage report generated
+- Success criteria: All tests pass, rotation cache invalidation tested, >80% code coverage
 
 ## Edge Case Handling
 

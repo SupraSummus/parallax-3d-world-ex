@@ -171,7 +171,11 @@ export class ParallaxRenderer {
 
   private needsCacheRefresh(): boolean {
     const threshold = this.layerSpacing * 0.5
-    return Math.abs(this.camera.z - this.lastCachePosition.z) > threshold
+    const positionChanged = Math.abs(this.camera.z - this.lastCachePosition.z) > threshold
+    const rotationChanged = 
+      Math.abs(this.camera.rotationY - this.lastCachePosition.rotationY) > 0.01 ||
+      Math.abs(this.camera.rotationX - this.lastCachePosition.rotationX) > 0.01
+    return positionChanged || rotationChanged
   }
 
   private createLayer(depth: number): Layer {
