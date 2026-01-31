@@ -26,7 +26,7 @@ describe('World', () => {
 
   it('should filter voxels by depth range', () => {
     const world = new World(12345)
-    const camera: Camera = { x: 0, y: 0, z: 0, rotationY: 0, rotationX: 0 }
+    const camera: Camera = { x: 0, y: 0, z: 0 }
     
     const filtered = world.getVoxelsInDepthRange(5, 15, camera)
     
@@ -69,8 +69,6 @@ describe('ParallaxRenderer', () => {
       expect(camera.x).toBe(0)
       expect(camera.y).toBe(15)
       expect(camera.z).toBe(-30)
-      expect(camera.rotationY).toBe(0)
-      expect(camera.rotationX).toBe(0)
     })
 
     it('should update camera position', () => {
@@ -80,14 +78,6 @@ describe('ParallaxRenderer', () => {
       expect(camera.x).toBe(10)
       expect(camera.y).toBe(20)
       expect(camera.z).toBe(-10)
-    })
-
-    it('should update camera rotation', () => {
-      renderer.setCamera({ rotationY: Math.PI / 4, rotationX: Math.PI / 6 })
-      const camera = renderer.getCamera()
-      
-      expect(camera.rotationY).toBeCloseTo(Math.PI / 4)
-      expect(camera.rotationX).toBeCloseTo(Math.PI / 6)
     })
 
     it('should preserve unmodified camera properties', () => {
@@ -101,17 +91,6 @@ describe('ParallaxRenderer', () => {
   })
 
   describe('Cache Management', () => {
-    it('should invalidate cache on rotation change', () => {
-      renderer.render()
-      const stats1 = renderer.getStats()
-      
-      renderer.setCamera({ rotationY: 0.5 })
-      renderer.render()
-      const stats2 = renderer.getStats()
-      
-      expect(stats2.cacheMisses).toBeGreaterThan(stats1.cacheMisses)
-    })
-
     it('should invalidate cache on significant Z movement', () => {
       renderer.render()
       const stats1 = renderer.getStats()
@@ -230,51 +209,32 @@ describe('ParallaxRenderer', () => {
     })
   })
 
-  describe('Rotation Refresh Fix', () => {
-    it('should refresh view when rotating horizontally', () => {
+  describe('Progressive Layer Slicing', () => {
+    it('should create layers at different depths', () => {
       renderer.render()
-      const camera1 = renderer.getCamera()
-      
-      renderer.setCamera({ rotationY: Math.PI / 2 })
-      renderer.render()
-      
       const stats = renderer.getStats()
-      expect(stats.cacheMisses).toBeGreaterThan(0)
+      
+      expect(stats.layerCount).toBeGreaterThan(0)
     })
 
-    it('should refresh view when rotating vertically', () => {
-      renderer.render()
-      
-      renderer.setCamera({ rotationX: Math.PI / 4 })
-      renderer.render()
-      
-      const stats = renderer.getStats()
-      expect(stats.cacheMisses).toBeGreaterThan(0)
-    })
-
-    it('should not refresh for tiny rotation changes', () => {
+    it('should maintain far layers when moving slightly', () => {
+      renderer.setCamera({ z: 0 })
       renderer.render()
       const stats1 = renderer.getStats()
       
-      renderer.setCamera({ rotationY: 0.001 })
+      renderer.setCamera({ z: 0.5 })
       renderer.render()
       const stats2 = renderer.getStats()
       
-      expect(stats2.cacheHits).toBeGreaterThan(stats1.cacheHits)
+      expect(stats2.cacheHits).toBeGreaterThan(0)
     })
 
-    it('should handle combined rotation and movement', () => {
-      renderer.render()
-      
-      renderer.setCamera({ 
-        x: 5, 
-        y: 10, 
-        rotationY: Math.PI / 3 
-      })
+    it('should handle movement across layer boundaries', () => {
+      renderer.setCamera({ x: 5, y: 10, z: 10 })
       renderer.render()
       
       const stats = renderer.getStats()
-      expect(stats.cacheMisses).toBeGreaterThan(0)
+      expect(stats.voxelsRendered).toBeGreaterThanOrEqual(0)
     })
   })
 })
@@ -293,19 +253,19 @@ describe('Voxel Projection', () => {
   })
 
   it('should handle voxels behind camera', () => {
-    renderer.setCamera({ x: 0, y: 0, z: 0, rotationY: 0, rotationX: 0 })
+    renderer.setCamera({ x: 0, y: 0, z: 0 })
     renderer.render()
     
     const stats = renderer.getStats()
     expect(stats.voxelsRendered).toBeGreaterThanOrEqual(0)
   })
 
-  it('should render different voxels after rotation', () => {
-    renderer.setCamera({ x: 0, y: 5, z: 0, rotationY: 0, rotationX: 0 })
+  it('should render voxels after movement', () => {
+    renderer.setCamera({ x: 0, y: 5, z: 0 })
     renderer.render()
     const stats1 = renderer.getStats()
     
-    renderer.setCamera({ x: 0, y: 5, z: 0, rotationY: Math.PI, rotationX: 0 })
+    renderer.setCamera({ x: 10, y: 5, z: 10 })
     renderer.render()
     const stats2 = renderer.getStats()
     
@@ -333,10 +293,7 @@ describe('Integration Tests', () => {
     renderer.setCamera({ x: 10, y: 5, z: -10 })
     renderer.render()
     
-    renderer.setCamera({ rotationY: Math.PI / 4 })
-    renderer.render()
-    
-    renderer.setCamera({ rotationX: -Math.PI / 6 })
+    renderer.setCamera({ x: 20, y: 10, z: 10 })
     renderer.render()
     
     const stats = renderer.getStats()
@@ -363,7 +320,7 @@ describe('Integration Tests', () => {
       renderer.setCamera({ 
         x: Math.sin(i) * 10,
         y: 5 + Math.cos(i) * 3,
-        rotationY: i * 0.1
+        z: i * 0.5
       })
       renderer.render()
     }

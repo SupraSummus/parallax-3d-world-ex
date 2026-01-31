@@ -20,8 +20,6 @@ function App() {
   const rendererRef = useRef<ParallaxRenderer | null>(null)
   const animationFrameRef = useRef<number | undefined>(undefined)
   const keysPressed = useRef<Set<string>>(new Set())
-  const mouseDown = useRef(false)
-  const lastMouse = useRef({ x: 0, y: 0 })
 
   const [stats, setStats] = useState<RenderStats>({
     fps: 60,
@@ -31,7 +29,7 @@ function App() {
     cacheMisses: 0,
     voxelsRendered: 0
   })
-  const [camera, setCamera] = useState<Camera>({ x: 0, y: 15, z: -30, rotationY: 0, rotationX: 0 })
+  const [camera, setCamera] = useState<Camera>({ x: 0, y: 15, z: -30 })
   const [showDebug, setShowDebug] = useState(true)
   const [layerSpacing, setLayerSpacing] = useState(5)
   const [moveSpeed, setMoveSpeed] = useState(0.5)
@@ -63,23 +61,19 @@ function App() {
       let moved = false
 
       if (keysPressed.current.has('w')) {
-        newCamera.x += Math.sin(newCamera.rotationY) * moveSpeed
-        newCamera.z += Math.cos(newCamera.rotationY) * moveSpeed
+        newCamera.z += moveSpeed
         moved = true
       }
       if (keysPressed.current.has('s')) {
-        newCamera.x -= Math.sin(newCamera.rotationY) * moveSpeed
-        newCamera.z -= Math.cos(newCamera.rotationY) * moveSpeed
+        newCamera.z -= moveSpeed
         moved = true
       }
       if (keysPressed.current.has('a')) {
-        newCamera.x += Math.cos(newCamera.rotationY) * moveSpeed
-        newCamera.z -= Math.sin(newCamera.rotationY) * moveSpeed
+        newCamera.x -= moveSpeed
         moved = true
       }
       if (keysPressed.current.has('d')) {
-        newCamera.x -= Math.cos(newCamera.rotationY) * moveSpeed
-        newCamera.z += Math.sin(newCamera.rotationY) * moveSpeed
+        newCamera.x += moveSpeed
         moved = true
       }
       if (keysPressed.current.has(' ')) {
@@ -123,48 +117,12 @@ function App() {
       keysPressed.current.delete(key)
     }
 
-    const handleMouseDown = (e: MouseEvent) => {
-      if (e.button === 0) {
-        mouseDown.current = true
-        lastMouse.current = { x: e.clientX, y: e.clientY }
-      }
-    }
-
-    const handleMouseUp = () => {
-      mouseDown.current = false
-    }
-
-    const handleMouseMove = (e: MouseEvent) => {
-      if (!mouseDown.current || !rendererRef.current) return
-
-      const dx = e.clientX - lastMouse.current.x
-      const dy = e.clientY - lastMouse.current.y
-
-      const currentCamera = rendererRef.current.getCamera()
-      const newCamera = {
-        ...currentCamera,
-        rotationY: currentCamera.rotationY - dx * 0.005,
-        rotationX: Math.max(-Math.PI / 3, Math.min(Math.PI / 3, currentCamera.rotationX - dy * 0.005))
-      }
-
-      rendererRef.current.setCamera(newCamera)
-      setCamera(newCamera)
-
-      lastMouse.current = { x: e.clientX, y: e.clientY }
-    }
-
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
-    window.addEventListener('mousedown', handleMouseDown)
-    window.addEventListener('mouseup', handleMouseUp)
-    window.addEventListener('mousemove', handleMouseMove)
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
-      window.removeEventListener('mousedown', handleMouseDown)
-      window.removeEventListener('mouseup', handleMouseUp)
-      window.removeEventListener('mousemove', handleMouseMove)
     }
   }, [])
 
@@ -190,8 +148,7 @@ function App() {
     <div className="relative w-screen h-screen overflow-hidden bg-background">
       <canvas
         ref={canvasRef}
-        className="absolute inset-0 cursor-move"
-        style={{ cursor: mouseDown.current ? 'grabbing' : 'grab' }}
+        className="absolute inset-0"
       />
 
       <div className="absolute top-6 left-6 pointer-events-none">
@@ -267,7 +224,7 @@ function App() {
           <h2 className="font-bold text-lg">Camera</h2>
         </div>
 
-        <div className="space-y-2 font-mono text-xs mb-4">
+          <div className="space-y-2 font-mono text-xs mb-4">
           <div className="flex justify-between">
             <span className="text-muted-foreground">Position</span>
             <span className="text-foreground">
@@ -275,10 +232,8 @@ function App() {
             </span>
           </div>
           <div className="flex justify-between">
-            <span className="text-muted-foreground">Rotation</span>
-            <span className="text-foreground">
-              {(camera.rotationY * 180 / Math.PI).toFixed(0)}°
-            </span>
+            <span className="text-muted-foreground">Active Layers</span>
+            <span className="text-primary">{stats.layerCount}</span>
           </div>
         </div>
 
@@ -346,7 +301,7 @@ function App() {
         <div className="text-xs text-muted-foreground space-y-1">
           <div className="flex items-center gap-2">
             <ArrowsOutCardinal size={14} />
-            <span>WASD - Move</span>
+            <span>WASD - Move Horizontally</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="w-3.5" />
@@ -354,7 +309,7 @@ function App() {
           </div>
           <div className="flex items-center gap-2">
             <span className="w-3.5" />
-            <span>Mouse Drag - Look</span>
+            <span>W/S also moves In/Out</span>
           </div>
         </div>
       </Card>

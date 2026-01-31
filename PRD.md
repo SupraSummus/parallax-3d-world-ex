@@ -1,6 +1,6 @@
 # Planning Guide
 
-A parallax-based 2.5D rendering engine that renders a full 3D voxel world using cached layers for efficient exploration and visualization, demonstrating innovative rendering techniques through layer reuse and intelligent depth compositing.
+A parallax-based 2.5D rendering engine that renders a full 3D voxel world using progressively-sized cached layers for efficient exploration and visualization, demonstrating innovative rendering techniques through intelligent layer boundaries and depth compositing with a fixed viewing direction.
 
 **Experience Qualities**:
 1. **Fluid** - Smooth camera movement and instant visual feedback through cached layer compositing
@@ -12,26 +12,26 @@ This is a sophisticated rendering engine with real-time 3D-to-2D projection, lay
 
 ## Essential Features
 
-**Layer-Based Rendering System**
-- Functionality: Renders the 3D world as a series of 2D depth layers that are cached and reused
-- Purpose: Achieve high performance by avoiding full 3D rendering while maintaining spatial accuracy
-- Trigger: On initial load, when camera moves perpendicular to layers, or when camera rotation changes
-- Progression: World initialized → Layers generated at depth intervals → Cached to memory → Composited for display → Reused during parallel movement → Invalidated on rotation
-- Success criteria: Smooth 60fps movement, visible layer separation, minimal re-rendering during lateral camera motion, proper refresh on rotation
+**Layer-Based Rendering System with Progressive Slicing**
+- Functionality: Renders the 3D world as a series of 2D depth layers that increase in size with distance (powers of 2)
+- Purpose: Achieve high performance by grouping distant voxels into larger layers while keeping near voxels detailed
+- Trigger: On initial load or when camera moves perpendicular to layers beyond layer boundaries
+- Progression: World initialized → Layers generated with power-of-2 boundaries relative to camera → Cached to memory → Composited for display → Reused during movement → Boundaries remain stable for far layers
+- Success criteria: Smooth 60fps movement, minimal layer regeneration when moving by 1 unit, far layer boundaries stay fixed probabilistically
 
-**Free Camera Movement**
-- Functionality: WASD for XZ plane movement, Space/Shift for Y axis, mouse drag for look direction
-- Purpose: Allow unrestricted exploration of the voxel world to test rendering under all conditions
-- Trigger: Keyboard input for position, mouse drag for rotation
-- Progression: Input detected → Camera position/rotation updated → Layers repositioned (parallel) or regenerated (perpendicular) → Scene composited → Rendered
-- Success criteria: Responsive controls, smooth transitions, proper depth perception maintained
+**Free Camera Movement (Fixed Direction)**
+- Functionality: WASD for horizontal/depth movement, Space/Shift for Y axis, no rotation - fixed viewing direction
+- Purpose: Allow exploration of the voxel world while maintaining consistent layer boundaries and viewing axes
+- Trigger: Keyboard input for position only
+- Progression: Input detected → Camera position updated → Layers repositioned (parallel) or regenerated (perpendicular/crossing boundaries) → Scene composited → Rendered
+- Success criteria: Responsive controls, smooth transitions, proper depth perception maintained, far layers remain stable during small movements
 
-**Intelligent Layer Cache Management**
-- Functionality: Generates and caches layers at specific depth intervals, regenerates only when necessary
-- Purpose: Minimize computational cost by reusing rendered layers during camera translation
-- Trigger: Camera movement perpendicular to layer planes exceeds threshold OR rotation change exceeds threshold
-- Progression: Camera moves/rotates → Distance and rotation delta from cache origin calculated → If threshold exceeded, layers regenerated → Cache updated → Old layers discarded
-- Success criteria: Cache hits visible in debug overlay, performance improvement measurable, view updates correctly on rotation
+**Intelligent Progressive Layer Cache Management**
+- Functionality: Generates layers at power-of-2 boundaries (1, 2, 4, 8, 16 units deep), with boundaries rounded to camera position
+- Purpose: Minimize layer regeneration - far layers stay stable when moving by 1 unit due to boundary rounding
+- Trigger: Camera movement perpendicular to layer planes crosses layer boundaries
+- Progression: Camera moves → Layer boundaries calculated based on rounded camera position → Layers outside boundaries discarded → New layers generated → Cache updated
+- Success criteria: Cache hits for small movements, layer boundaries aligned to powers of 2, visible layer depth progression
 
 **Voxel World Generation**
 - Functionality: Procedurally generates a 3D voxel world with terrain, structures, and variation
@@ -50,10 +50,10 @@ This is a sophisticated rendering engine with real-time 3D-to-2D projection, lay
 
 **Automated Testing Suite**
 - Functionality: Comprehensive unit and integration tests for renderer and UI components
-- Purpose: Ensure correctness and prevent regressions, especially for cache invalidation logic
+- Purpose: Ensure correctness and prevent regressions, especially for progressive layer boundary logic
 - Trigger: Developer runs tests manually or in watch mode
 - Progression: Tests execute → Assertions verify behavior → Pass/fail feedback → Coverage report generated
-- Success criteria: All tests pass, rotation cache invalidation tested, >80% code coverage
+- Success criteria: All tests pass, progressive layer slicing tested, fixed-direction rendering verified, >80% code coverage
 
 ## Edge Case Handling
 
@@ -66,7 +66,7 @@ This is a sophisticated rendering engine with real-time 3D-to-2D projection, lay
 
 ## Design Direction
 
-The design should evoke a technical, experimental aesthetic—like peering into a rendering research lab. Users should feel they're witnessing the inner workings of a clever optimization technique. The interface should be clean and minimal to let the rendering be the star, with precise typography and data visualization that emphasizes the computational sophistication.
+The design should evoke a technical, experimental aesthetic—like peering into a rendering research lab. Users should feel they're witnessing the inner workings of a clever layer-slicing optimization. The interface should be clean and minimal to let the rendering be the star, with precise typography and data visualization that emphasizes the progressive depth stratification and computational sophistication.
 
 ## Color Selection
 
@@ -96,7 +96,7 @@ A monospace font for technical precision and data display, paired with a geometr
 
 ## Animations
 
-Animations should emphasize the mechanical nature of the layer system—smooth, linear movements for layer sliding, subtle easing for UI transitions. When layers regenerate, a brief flicker or rebuild animation makes the caching system visible. Camera movement should be immediate and responsive with no artificial smoothing that might hide the rendering technique.
+Animations should emphasize the mechanical nature of the progressive layer system—smooth, linear movements for layer sliding, subtle easing for UI transitions. When layers regenerate due to boundary crossings, the system should feel responsive and deliberate. Camera movement should be immediate and responsive, with clear visual feedback when crossing layer boundaries.
 
 ## Component Selection
 
@@ -133,8 +133,8 @@ Animations should emphasize the mechanical nature of the layer system—smooth, 
   - Grid layouts: gap-3 for related controls
   
 - **Mobile**:
-  - Touch drag for camera rotation
-  - Virtual joystick overlay for movement (bottom-left)
+  - Touch drag for camera panning (X/Y movement)
+  - Two-finger swipe for depth (Z) movement
   - Simplified stats panel (collapsible)
-  - Pinch-to-zoom for layer spacing adjustment
+  - Pinch gesture for move speed adjustment
   - Reduced layer count for performance

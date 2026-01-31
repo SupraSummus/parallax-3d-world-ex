@@ -10,12 +10,11 @@ export interface Camera {
   x: number
   y: number
   z: number
-  rotationY: number
-  rotationX: number
 }
 
 export interface Layer {
   depth: number
+  size: number
   voxels: Voxel[]
   canvas: HTMLCanvasElement
   dirty: boolean
@@ -146,7 +145,7 @@ export class ParallaxRenderer {
     this.canvas = canvas
     this.ctx = canvas.getContext('2d')!
     this.world = world
-    this.camera = { x: 0, y: 15, z: -30, rotationY: 0, rotationX: 0 }
+    this.camera = { x: 0, y: 15, z: -30 }
     this.lastCachePosition = { ...this.camera }
     this.stats = {
       fps: 60,
@@ -172,19 +171,17 @@ export class ParallaxRenderer {
   private needsCacheRefresh(): boolean {
     const threshold = this.layerSpacing * 0.5
     const positionChanged = Math.abs(this.camera.z - this.lastCachePosition.z) > threshold
-    const rotationChanged = 
-      Math.abs(this.camera.rotationY - this.lastCachePosition.rotationY) > 0.01 ||
-      Math.abs(this.camera.rotationX - this.lastCachePosition.rotationX) > 0.01
-    return positionChanged || rotationChanged
+    return positionChanged
   }
 
-  private createLayer(depth: number): Layer {
+  private createLayer(depth: number, size: number = 1): Layer {
     const layerCanvas = document.createElement('canvas')
     layerCanvas.width = this.canvas.width
     layerCanvas.height = this.canvas.height
     
     return {
       depth,
+      size,
       voxels: [],
       canvas: layerCanvas,
       dirty: true
@@ -196,19 +193,14 @@ export class ParallaxRenderer {
     const dy = voxel.y - camera.y
     const dz = voxel.z - camera.z
 
-    const cosY = Math.cos(camera.rotationY)
-    const sinY = Math.sin(camera.rotationY)
-    const rotatedX = dx * cosY - dz * sinY
-    const rotatedZ = dx * sinY + dz * cosY
+    if (dz <= 0.1) return null
 
-    if (rotatedZ <= 0.1) return null
-
-    const scale = 600 / rotatedZ
-    const screenX = this.canvas.width / 2 + rotatedX * scale
+    const scale = 600 / dz
+    const screenX = this.canvas.width / 2 + dx * scale
     const screenY = this.canvas.height / 2 - dy * scale
     const size = Math.max(1, scale * 0.8)
 
-    return { x: screenX, y: screenY, size, depth: rotatedZ }
+    return { x: screenX, y: screenY, size, depth: dz }
   }
 
   private renderLayerToCanvas(layer: Layer) {
@@ -216,7 +208,7 @@ export class ParallaxRenderer {
     ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height)
 
     const minZ = layer.depth
-    const maxZ = layer.depth + this.layerSpacing
+    const maxZ = layer.depth + layer.size
     layer.voxels = this.world.getVoxelsInDepthRange(minZ, maxZ, this.lastCachePosition)
 
     const projected = layer.voxels
@@ -238,26 +230,71 @@ export class ParallaxRenderer {
     layer.dirty = false
   }
 
-  private updateLayers() {
-    const renderDistance = 100
-    const minDepth = -20
-    const maxDepth = renderDistance
+  private roundToLayerBoundary(z: number, layerSize: number): number {
+    return Math.floor(z / layerSize) * layerSize
+  }
 
-    const requiredDepths: number[] = []
-    for (let d = minDepth; d < maxDepth; d += this.layerSpacing) {
-      requiredDepths.push(d)
+  private getLayerBoundaries(): { depth: number; size: number }[] {
+    const boundaries: { depth: number; size: number }[] = []
+    const baseZ = this.roundToLayerBoundary(this.camera.z, 1)
+    
+    boundaries.push({ depth: baseZ - 2, size: 1 })
+    boundaries.push({ depth: baseZ - 1, size: 1 })
+    boundaries.push({ depth: baseZ, size: 1 })
+    boundaries.push({ depth: baseZ + 1, size: 1 })
+    boundaries.push({ depth: baseZ + 2, size: 1 })
+    
+    const roundedZ2 = this.roundToLayerBoundary(this.camera.z, 2)
+    for (let i = 1; i <= 3; i++) {
+      const d = roundedZ2 + i * 2
+      if (d > baseZ + 2) {
+        boundaries.push({ depth: d, size: 2 })
+      }
     }
+    
+    const roundedZ4 = this.roundToLayerBoundary(this.camera.z, 4)
+    for (let i = 1; i <= 3; i++) {
+      const d = roundedZ4 + i * 4
+      if (d > roundedZ2 + 6) {
+        boundaries.push({ depth: d, size: 4 })
+      }
+    }
+    
+    const roundedZ8 = this.roundToLayerBoundary(this.camera.z, 8)
+    for (let i = 1; i <= 3; i++) {
+      const d = roundedZ8 + i * 8
+      if (d > roundedZ4 + 12) {
+        boundaries.push({ depth: d, size: 8 })
+      }
+    }
+    
+    const roundedZ16 = this.roundToLayerBoundary(this.camera.z, 16)
+    for (let i = 1; i <= 3; i++) {
+      const d = roundedZ16 + i * 16
+      if (d > roundedZ8 + 24) {
+        boundaries.push({ depth: d, size: 16 })
+      }
+    }
+    
+    return boundaries
+  }
 
-    const existingDepths = Array.from(this.layers.keys())
-    existingDepths.forEach(depth => {
-      if (!requiredDepths.includes(depth)) {
-        this.layers.delete(depth)
+  private updateLayers() {
+    const boundaries = this.getLayerBoundaries()
+    const requiredKeys = boundaries.map(b => b.depth)
+
+    const existingKeys = Array.from(this.layers.keys())
+    existingKeys.forEach(key => {
+      if (!requiredKeys.includes(key)) {
+        this.layers.delete(key)
       }
     })
 
-    requiredDepths.forEach(depth => {
+    boundaries.forEach(({ depth, size }) => {
       if (!this.layers.has(depth)) {
-        this.layers.set(depth, this.createLayer(depth))
+        const layer = this.createLayer(depth, size)
+        layer.dirty = true
+        this.layers.set(depth, layer)
       }
     })
 
