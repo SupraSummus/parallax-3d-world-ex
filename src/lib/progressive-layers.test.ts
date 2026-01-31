@@ -27,7 +27,6 @@ describe('Progressive Layer Slicing', () => {
     
     renderer.setCamera({ x: 0, y: 0, z: 0 })
     renderer.render()
-    const stats1 = renderer.getStats()
     
     renderer.setCamera({ x: 0, y: 0, z: 1 })
     renderer.render()

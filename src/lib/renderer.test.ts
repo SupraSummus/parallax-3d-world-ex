@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { World, ParallaxRenderer, Camera, Voxel } from './renderer'
+import { describe, it, expect, beforeEach } from 'vitest'
+import { World, ParallaxRenderer, Camera } from './renderer'
 
 describe('World', () => {
   it('should generate voxels on initialization', () => {
@@ -220,7 +220,6 @@ describe('ParallaxRenderer', () => {
     it('should maintain far layers when moving slightly', () => {
       renderer.setCamera({ z: 0 })
       renderer.render()
-      const stats1 = renderer.getStats()
       
       renderer.setCamera({ z: 0.5 })
       renderer.render()

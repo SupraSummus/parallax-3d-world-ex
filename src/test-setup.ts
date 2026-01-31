@@ -1,4 +1,4 @@
-import { expect, afterEach, vi } from 'vitest'
+import { afterEach, vi } from 'vitest'
 import { cleanup } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'
 
@@ -34,7 +34,7 @@ HTMLCanvasElement.prototype.getContext = vi.fn(() => ({
   scale: vi.fn(),
   globalAlpha: 1,
   canvas: document.createElement('canvas'),
-})) as any
+})) as CanvasRenderingContext2D
 
 global.requestAnimationFrame = vi.fn((cb) => {
   setTimeout(cb, 16)
