@@ -297,16 +297,26 @@ function App() {
           Regenerate World
         </Button>
 
-        {!showDebug && (
+        <div className="flex gap-2 mb-3">
+          {!showDebug && (
+            <Button
+              onClick={() => setShowDebug(true)}
+              className="flex-1"
+              variant="outline"
+            >
+              <Eye size={16} className="mr-2" />
+              Performance
+            </Button>
+          )}
           <Button
-            onClick={() => setShowDebug(true)}
-            className="w-full"
+            onClick={() => setShowLayers(!showLayers)}
+            className="flex-1"
             variant="outline"
           >
-            <Eye size={16} className="mr-2" />
-            Show Performance
+            {showLayers ? <EyeSlash size={16} className="mr-2" /> : <Stack size={16} className="mr-2" />}
+            {showLayers ? 'Hide' : 'Show'} Layers
           </Button>
-        )}
+        </div>
 
         <Separator className="my-3" />
 
