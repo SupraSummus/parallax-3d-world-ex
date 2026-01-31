@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { ParallaxRenderer, World, Camera, RenderStats } from '@/lib/renderer'
+import { ParallaxRenderer, World, Camera, RenderStats, Layer } from '@/lib/renderer'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { Slider } from '@/components/ui/slider'
+import { LayerPreview } from '@/components/LayerPreview'
 import {
   ArrowsOutCardinal,
   ArrowClockwise,
@@ -12,7 +13,8 @@ import {
   EyeSlash,
   Cube,
   ChartLine,
-  Crosshair
+  Crosshair,
+  Stack
 } from '@phosphor-icons/react'
 
 function App() {
@@ -31,6 +33,8 @@ function App() {
   })
   const [camera, setCamera] = useState<Camera>({ x: 0, y: 15, z: -30 })
   const [showDebug, setShowDebug] = useState(true)
+  const [showLayers, setShowLayers] = useState(true)
+  const [layers, setLayers] = useState<Layer[]>([])
   const [layerSpacing, setLayerSpacing] = useState(5)
   const [moveSpeed, setMoveSpeed] = useState(0.5)
 
@@ -92,6 +96,7 @@ function App() {
 
       rendererRef.current.render()
       setStats(rendererRef.current.getStats())
+      setLayers(rendererRef.current.getLayers())
 
       animationFrameRef.current = requestAnimationFrame(gameLoop)
     }
@@ -137,6 +142,13 @@ function App() {
     setLayerSpacing(spacing)
     if (rendererRef.current) {
       rendererRef.current.setLayerSpacing(spacing)
+    }
+  }
+
+  const handleToggleLayerVisibility = (depth: number) => {
+    if (rendererRef.current) {
+      rendererRef.current.toggleLayerVisibility(depth)
+      setLayers(rendererRef.current.getLayers())
     }
   }
 
@@ -313,6 +325,15 @@ function App() {
           </div>
         </div>
       </Card>
+
+      {showLayers && (
+        <div className="absolute top-6 left-1/2 -translate-x-1/2 pointer-events-auto">
+          <LayerPreview 
+            layers={layers}
+            onToggleVisibility={handleToggleLayerVisibility}
+          />
+        </div>
+      )}
 
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
         <Crosshair size={24} className="text-primary/50" />

@@ -18,6 +18,7 @@ export interface Layer {
   voxels: Voxel[]
   canvas: HTMLCanvasElement
   dirty: boolean
+  visible: boolean
 }
 
 export interface RenderStats {
@@ -184,7 +185,8 @@ export class ParallaxRenderer {
       size,
       voxels: [],
       canvas: layerCanvas,
-      dirty: true
+      dirty: true,
+      visible: true
     }
   }
 
@@ -325,12 +327,14 @@ export class ParallaxRenderer {
         this.renderLayerToCanvas(layer)
       }
 
-      const offsetX = (this.camera.x - this.lastCachePosition.x) * (300 / (layer.depth + 50))
-      const offsetY = (this.camera.y - this.lastCachePosition.y) * (300 / (layer.depth + 50))
+      if (layer.visible) {
+        const offsetX = (this.camera.x - this.lastCachePosition.x) * (300 / (layer.depth + 50))
+        const offsetY = (this.camera.y - this.lastCachePosition.y) * (300 / (layer.depth + 50))
 
-      this.ctx.globalAlpha = Math.max(0.3, 1 - (layer.depth / 100))
-      this.ctx.drawImage(layer.canvas, offsetX, offsetY)
-      this.ctx.globalAlpha = 1
+        this.ctx.globalAlpha = Math.max(0.3, 1 - (layer.depth / 100))
+        this.ctx.drawImage(layer.canvas, offsetX, offsetY)
+        this.ctx.globalAlpha = 1
+      }
     })
 
     const frameTime = performance.now() - this.frameStartTime
@@ -365,5 +369,23 @@ export class ParallaxRenderer {
   regenerateWorld(seed?: number) {
     this.world = new World(seed)
     this.invalidateCache()
+  }
+
+  getLayers(): Layer[] {
+    return Array.from(this.layers.values()).sort((a, b) => a.depth - b.depth)
+  }
+
+  toggleLayerVisibility(depth: number) {
+    const layer = this.layers.get(depth)
+    if (layer) {
+      layer.visible = !layer.visible
+    }
+  }
+
+  setLayerVisibility(depth: number, visible: boolean) {
+    const layer = this.layers.get(depth)
+    if (layer) {
+      layer.visible = visible
+    }
   }
 }
