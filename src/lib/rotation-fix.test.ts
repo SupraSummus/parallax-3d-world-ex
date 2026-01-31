@@ -25,7 +25,6 @@ describe('Fixed View Direction', () => {
     const renderer = new ParallaxRenderer(canvas, world)
     
     renderer.render()
-    const initialStats = renderer.getStats()
     
     renderer.setCamera({ x: 10, y: 5, z: 10 })
     renderer.render()

@@ -10,7 +10,7 @@ describe('App Component', () => {
       clearRect: vi.fn(),
       drawImage: vi.fn(),
       globalAlpha: 1,
-    })) as any
+    })) as CanvasRenderingContext2D
   })
 
   it('should render the main title', () => {

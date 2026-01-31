@@ -61,7 +61,7 @@ function App() {
       if (!rendererRef.current) return
 
       const currentCamera = rendererRef.current.getCamera()
-      let newCamera = { ...currentCamera }
+      const newCamera = { ...currentCamera }
       let moved = false
 
       if (keysPressed.current.has('w')) {
