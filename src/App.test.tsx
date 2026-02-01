@@ -61,40 +61,34 @@ describe('App Component', () => {
     it('should hide performance stats when clicking eye slash', async () => {
       render(<App />)
       
-      // Find the Performance card and the hide button (EyeSlash icon button)
-      const performanceCards = screen.getAllByRole('button')
-      const hideButton = performanceCards.find(btn => btn.classList.contains('h-6'))
-      if (hideButton) {
-        fireEvent.click(hideButton)
-        
-        await waitFor(() => {
-          // The "Performance" heading should be gone from the performance card
-          // but "Performance" button might appear in World card
-          expect(screen.queryByText('Performance', { selector: 'h2' })).not.toBeInTheDocument()
-        })
-      }
+      // Find the hide button using its aria-label
+      const hideButton = screen.getByRole('button', { name: 'Hide performance stats' })
+      fireEvent.click(hideButton)
+      
+      await waitFor(() => {
+        // The "Performance" heading should be gone from the performance card
+        // but "Performance" button might appear in World card
+        expect(screen.queryByRole('heading', { name: 'Performance' })).not.toBeInTheDocument()
+      })
     })
 
     it('should show performance stats again when clicking show button', async () => {
       render(<App />)
       
       // Find and click the hide button to hide performance stats first
-      const performanceCards = screen.getAllByRole('button')
-      const hideButton = performanceCards.find(btn => btn.classList.contains('h-6'))
-      if (hideButton) {
-        fireEvent.click(hideButton)
-        
-        await waitFor(() => {
-          // The button shows "Performance" (not "Show Performance")
-          const showButton = screen.getByRole('button', { name: /Performance/ })
-          fireEvent.click(showButton)
-        })
-        
-        await waitFor(() => {
-          // Performance heading should be back
-          expect(screen.getByRole('heading', { name: 'Performance' })).toBeInTheDocument()
-        })
-      }
+      const hideButton = screen.getByRole('button', { name: 'Hide performance stats' })
+      fireEvent.click(hideButton)
+      
+      await waitFor(() => {
+        // The button shows "Performance" (not "Show Performance")
+        const showButton = screen.getByRole('button', { name: /Performance/ })
+        fireEvent.click(showButton)
+      })
+      
+      await waitFor(() => {
+        // Performance heading should be back
+        expect(screen.getByRole('heading', { name: 'Performance' })).toBeInTheDocument()
+      })
     })
   })
 
