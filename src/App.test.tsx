@@ -10,7 +10,7 @@ describe('App Component', () => {
       clearRect: vi.fn(),
       drawImage: vi.fn(),
       globalAlpha: 1,
-    })) as CanvasRenderingContext2D
+    })) as unknown as typeof HTMLCanvasElement.prototype.getContext
   })
 
   it('should render the main title', () => {
