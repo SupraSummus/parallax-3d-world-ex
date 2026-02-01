@@ -176,8 +176,10 @@ export class ParallaxRenderer {
 
   private needsCacheRefresh(): boolean {
     const threshold = this.layerSpacing * 0.5
-    const positionChanged = Math.abs(this.camera.z - this.lastCachePosition.z) > threshold
-    return positionChanged
+    const zChanged = Math.abs(this.camera.z - this.lastCachePosition.z) > threshold
+    // X and Y changes are handled by parallax offset, no need to re-render layers
+    // Only Z changes require cache refresh since voxels at each relative depth change
+    return zChanged
   }
 
   private createLayer(depth: number, size: number = 1): Layer {
@@ -243,34 +245,34 @@ export class ParallaxRenderer {
 
   private getLayerBoundaries(): { depth: number; size: number }[] {
     const boundaries: { depth: number; size: number }[] = []
-    const baseZ = this.roundToLayerBoundary(this.camera.z, this.layerSpacing)
+    
+    // Use relative depths (distance from camera) not absolute world coordinates
+    // Positive depth = in front of camera, negative = behind camera
     
     // Near layers using layerSpacing as base unit
+    // Start slightly behind camera (-2 * spacing) and extend forward
     const nearCount = Math.max(1, Math.floor(5 / Math.max(1, this.layerSpacing / 5)))
     for (let i = -2; i <= nearCount; i++) {
-      boundaries.push({ depth: baseZ + i * this.layerSpacing, size: this.layerSpacing })
+      const relativeDepth = i * this.layerSpacing
+      boundaries.push({ depth: relativeDepth, size: this.layerSpacing })
     }
     
     // Medium distance layers with 2x spacing
     const mediumSpacing = this.layerSpacing * 2
-    const roundedZ2 = this.roundToLayerBoundary(this.camera.z, mediumSpacing)
     const mediumCount = Math.max(1, Math.floor(3 / Math.max(1, this.layerSpacing / 5)))
+    const nearMaxDepth = nearCount * this.layerSpacing
     for (let i = 1; i <= mediumCount; i++) {
-      const d = roundedZ2 + i * mediumSpacing
-      if (d > baseZ + nearCount * this.layerSpacing) {
-        boundaries.push({ depth: d, size: mediumSpacing })
-      }
+      const relativeDepth = nearMaxDepth + i * mediumSpacing
+      boundaries.push({ depth: relativeDepth, size: mediumSpacing })
     }
     
     // Far layers with 4x spacing
     const farSpacing = this.layerSpacing * 4
-    const roundedZ4 = this.roundToLayerBoundary(this.camera.z, farSpacing)
     const farCount = Math.max(1, Math.floor(2 / Math.max(1, this.layerSpacing / 5)))
+    const mediumMaxDepth = nearMaxDepth + mediumCount * mediumSpacing
     for (let i = 1; i <= farCount; i++) {
-      const d = roundedZ4 + i * farSpacing
-      if (d > roundedZ2 + mediumCount * mediumSpacing) {
-        boundaries.push({ depth: d, size: farSpacing })
-      }
+      const relativeDepth = mediumMaxDepth + i * farSpacing
+      boundaries.push({ depth: relativeDepth, size: farSpacing })
     }
     
     return boundaries
