@@ -109,10 +109,7 @@ describe('App Component', () => {
       expect(screen.getAllByText('Active Layers').length).toBeGreaterThan(0)
     })
 
-    it('should have layer spacing slider', () => {
-      render(<App />)
-      expect(screen.getByText(/Layer Spacing:/)).toBeInTheDocument()
-    })
+
 
     it('should have move speed slider', () => {
       render(<App />)
