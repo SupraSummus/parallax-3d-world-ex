@@ -6,11 +6,11 @@ afterEach(() => {
   cleanup()
 })
 
-global.ResizeObserver = vi.fn().mockImplementation(() => ({
+globalThis.ResizeObserver = vi.fn().mockImplementation(() => ({
   observe: vi.fn(),
   unobserve: vi.fn(),
   disconnect: vi.fn(),
-}))
+})) as unknown as typeof ResizeObserver
 
 HTMLCanvasElement.prototype.getContext = vi.fn(() => ({
   fillStyle: '',
@@ -36,9 +36,9 @@ HTMLCanvasElement.prototype.getContext = vi.fn(() => ({
   canvas: document.createElement('canvas'),
 })) as unknown as typeof HTMLCanvasElement.prototype.getContext
 
-global.requestAnimationFrame = vi.fn((cb) => {
+globalThis.requestAnimationFrame = vi.fn((cb) => {
   setTimeout(cb, 16)
   return 1
-})
+}) as unknown as typeof requestAnimationFrame
 
-global.cancelAnimationFrame = vi.fn()
+globalThis.cancelAnimationFrame = vi.fn() as unknown as typeof cancelAnimationFrame

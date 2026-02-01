@@ -35,7 +35,6 @@ function App() {
   const [showDebug, setShowDebug] = useState(true)
   const [showLayers, setShowLayers] = useState(true)
   const [layers, setLayers] = useState<Layer[]>([])
-  const [layerSpacing, setLayerSpacing] = useState(5)
   const [moveSpeed, setMoveSpeed] = useState(0.5)
 
   useEffect(() => {
@@ -134,14 +133,6 @@ function App() {
   const handleRegenerateWorld = () => {
     if (rendererRef.current) {
       rendererRef.current.regenerateWorld(Date.now())
-    }
-  }
-
-  const handleLayerSpacingChange = (value: number[]) => {
-    const spacing = value[0]
-    setLayerSpacing(spacing)
-    if (rendererRef.current) {
-      rendererRef.current.setLayerSpacing(spacing)
     }
   }
 
@@ -253,20 +244,6 @@ function App() {
         <Separator className="my-3" />
 
         <div className="space-y-3">
-          <div>
-            <label className="text-xs text-muted-foreground mb-2 block">
-              Layer Spacing: {layerSpacing}
-            </label>
-            <Slider
-              value={[layerSpacing]}
-              onValueChange={handleLayerSpacingChange}
-              min={2}
-              max={15}
-              step={1}
-              className="w-full"
-            />
-          </div>
-
           <div>
             <label className="text-xs text-muted-foreground mb-2 block">
               Move Speed: {moveSpeed.toFixed(1)}
