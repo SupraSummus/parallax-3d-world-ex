@@ -28,7 +28,8 @@ describe('Progressive Layer Slicing', () => {
     renderer.setCamera({ x: 0, y: 0, z: 0 })
     renderer.render()
     
-    renderer.setCamera({ x: 0, y: 0, z: 1 })
+    // X/Y movements don't trigger cache invalidation, only Z movements beyond threshold
+    renderer.setCamera({ x: 1, y: 0, z: 0 })
     renderer.render()
     const stats2 = renderer.getStats()
     
