@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-deprecated */
+// Phosphor icon names like ChartLine are deprecated in favor of ChartLineIcon,
+// but the Icon suffixed versions are not exported at package level
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { ParallaxRenderer, World, Camera, SessionStats, Layer } from '@/lib/renderer'
 import { Card } from '@/components/ui/card'
@@ -5,7 +8,6 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { Slider } from '@/components/ui/slider'
-import { ScrollArea } from '@/components/ui/scroll-area'
 import { LayerPreview } from '@/components/LayerPreview'
 import {
   ArrowsOutCardinal,
@@ -248,7 +250,7 @@ function App() {
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => setShowStats(false)}
+              onClick={() => { setShowStats(false) }}
               className="h-6 w-6 p-0"
               aria-label="Hide statistics"
             >
@@ -350,7 +352,7 @@ function App() {
             </label>
             <Slider
               value={[moveSpeed]}
-              onValueChange={(v) => setMoveSpeed(v[0])}
+              onValueChange={(v) => { setMoveSpeed(v[0]) }}
               min={0.1}
               max={2}
               step={0.1}
@@ -378,7 +380,7 @@ function App() {
         <div className="flex gap-2 mb-3">
           {!showStats && (
             <Button
-              onClick={() => setShowStats(true)}
+              onClick={() => { setShowStats(true) }}
               className="flex-1"
               variant="outline"
             >
@@ -387,7 +389,7 @@ function App() {
             </Button>
           )}
           <Button
-            onClick={() => setShowLayers(!showLayers)}
+            onClick={() => { setShowLayers(!showLayers) }}
             className="flex-1"
             variant="outline"
           >

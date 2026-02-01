@@ -158,7 +158,11 @@ export class ParallaxRenderer {
 
   constructor(canvas: HTMLCanvasElement, world: World) {
     this.canvas = canvas
-    this.ctx = canvas.getContext('2d')!
+    const ctx = canvas.getContext('2d')
+    if (!ctx) {
+      throw new Error('Failed to get 2d context')
+    }
+    this.ctx = ctx
     this.world = world
     this.camera = { x: 0, y: 15, z: -30 }
     this.lastCachePosition = { ...this.camera }
@@ -186,6 +190,7 @@ export class ParallaxRenderer {
 
   private invalidateCacheWithMiss() {
     this.invalidateCache()
+    this.sessionStats.cacheMisses++
   }
 
   private needsCacheRefresh(): boolean {
@@ -225,7 +230,8 @@ export class ParallaxRenderer {
   }
 
   private renderLayerToCanvas(layer: Layer) {
-    const ctx = layer.canvas.getContext('2d')!
+    const ctx = layer.canvas.getContext('2d')
+    if (!ctx) return 0
     ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height)
 
     const minZ = layer.depth
@@ -237,14 +243,12 @@ export class ParallaxRenderer {
         const proj = this.projectVoxel(voxel, this.lastCachePosition)
         return proj ? { ...proj, color: voxel.color } : null
       })
-      .filter(p => p !== null)
-      .sort((a, b) => b!.depth - a!.depth)
+      .filter((p): p is { x: number; y: number; size: number; depth: number; color: string } => p !== null)
+      .sort((a, b) => b.depth - a.depth)
 
     projected.forEach(p => {
-      if (p) {
-        ctx.fillStyle = p.color
-        ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size)
-      }
+      ctx.fillStyle = p.color
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size)
     })
 
     layer.dirty = false
@@ -310,7 +314,7 @@ export class ParallaxRenderer {
   render() {
     this.updateStartTime = performance.now()
     
-    const updateInfo = this.updateLayers()
+    this.updateLayers()
     
     this.ctx.fillStyle = '#0a0a15'
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height)
