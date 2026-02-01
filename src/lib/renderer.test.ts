@@ -114,15 +114,6 @@ describe('ParallaxRenderer', () => {
       expect(stats2.cacheHits).toBeGreaterThan(stats1.cacheHits)
     })
 
-    it('should invalidate cache when layer spacing changes', () => {
-      renderer.render()
-      renderer.setLayerSpacing(10)
-      renderer.render()
-      
-      const stats = renderer.getStats()
-      expect(stats.cacheMisses).toBeGreaterThan(0)
-    })
-
     it('should invalidate cache on world regeneration', () => {
       renderer.render()
       const stats1 = renderer.getStats()
@@ -143,16 +134,22 @@ describe('ParallaxRenderer', () => {
       expect(stats.layerCount).toBeGreaterThan(0)
     })
 
-    it('should adjust layer count based on layer spacing', () => {
-      renderer.setLayerSpacing(5)
+    it('should use power-of-2 layer sizes', () => {
       renderer.render()
-      const stats1 = renderer.getStats()
+      const layers = renderer.getLayers()
       
-      renderer.setLayerSpacing(15)
+      layers.forEach(layer => {
+        expect([1, 2, 4, 8, 16, 32, 64]).toContain(layer.size)
+      })
+    })
+
+    it('should place layers at integer multiples of their depth', () => {
       renderer.render()
-      const stats2 = renderer.getStats()
+      const layers = renderer.getLayers()
       
-      expect(stats2.layerCount).toBeLessThan(stats1.layerCount)
+      layers.forEach(layer => {
+        expect(layer.depth % layer.size).toBe(0)
+      })
     })
 
     it('should render voxels to layers', () => {
