@@ -312,7 +312,11 @@ describe('Integration Tests', () => {
     }
     
     const avgFrameTime = frameTimes.reduce((a, b) => a + b) / frameTimes.length
-    // Allow for reasonable test environment performance (500ms per frame)
+    // Note: 500ms threshold is intentionally high for CI test environments.
+    // In production with GPU acceleration, frame times are typically <20ms.
+    // The test environment uses software rendering without hardware acceleration,
+    // resulting in higher frame times. This threshold validates the renderer
+    // completes without hanging, not production performance.
     expect(avgFrameTime).toBeLessThan(500)
   })
 
