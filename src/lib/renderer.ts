@@ -1,3 +1,5 @@
+import { selectSlices } from './slice-selection'
+
 export interface Voxel {
   x: number
   y: number
@@ -255,30 +257,11 @@ export class ParallaxRenderer {
     return projected.length
   }
 
-  private roundToLayerBoundary(z: number, layerSize: number): number {
-    return Math.floor(z / layerSize) * layerSize
-  }
-
   private getLayerBoundaries(): { depth: number; size: number }[] {
-    const boundaries: { depth: number; size: number }[] = []
-    
-    const powersOf2 = [1, 2, 4, 8, 16, 32, 64]
-    
-    for (const size of powersOf2) {
-      const roundedZ = this.roundToLayerBoundary(this.camera.z, size)
-      
-      for (let i = -2; i <= 5; i++) {
-        const depth = roundedZ + i * size
-        if (depth > 0 && depth < 200) {
-          const exists = boundaries.some(b => b.depth === depth)
-          if (!exists) {
-            boundaries.push({ depth, size })
-          }
-        }
-      }
-    }
-    
-    return boundaries.sort((a, b) => a.depth - b.depth)
+    // Use selectSlices to ensure contiguous z coverage without gaps
+    const minZ = 1
+    const maxZ = 200
+    return selectSlices(this.camera.z, minZ, maxZ)
   }
 
   private updateLayers() {
