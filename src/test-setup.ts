@@ -34,7 +34,7 @@ HTMLCanvasElement.prototype.getContext = vi.fn(() => ({
   scale: vi.fn(),
   globalAlpha: 1,
   canvas: document.createElement('canvas'),
-})) as CanvasRenderingContext2D
+})) as unknown as typeof HTMLCanvasElement.prototype.getContext
 
 global.requestAnimationFrame = vi.fn((cb) => {
   setTimeout(cb, 16)
