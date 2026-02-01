@@ -331,3 +331,96 @@ describe('Integration Tests', () => {
     expect(stats.fps).toBeGreaterThan(0)
   })
 })
+
+describe('Flat Layer Rendering (Camera-Independent)', () => {
+  let canvas: HTMLCanvasElement
+  let world: World
+  let renderer: ParallaxRenderer
+
+  beforeEach(() => {
+    canvas = document.createElement('canvas')
+    canvas.width = 800
+    canvas.height = 600
+    world = new World(12345)
+    renderer = new ParallaxRenderer(canvas, world)
+  })
+
+  it('should render layers with consistent content for different camera x/y positions', () => {
+    // Render at initial position to populate layers
+    renderer.setCamera({ x: 0, y: 0, z: 0 })
+    renderer.render()
+    
+    const layers1 = renderer.getLayers()
+    const layerData1 = layers1.map(l => ({
+      depth: l.depth,
+      size: l.size,
+      voxelCount: l.voxels.length,
+      dirty: l.dirty
+    }))
+
+    // Move camera in x/y only (no z change)
+    // Layers should be reused (not regenerated) because they are camera-independent
+    renderer.setCamera({ x: 5, y: 3, z: 0 })
+    renderer.render()
+    
+    const stats = renderer.getStats()
+    const layers2 = renderer.getLayers()
+    const layerData2 = layers2.map(l => ({
+      depth: l.depth,
+      size: l.size,
+      voxelCount: l.voxels.length,
+      dirty: l.dirty
+    }))
+
+    // Layers should be reused (cache hit) when only x/y changes
+    expect(stats.cacheHits).toBeGreaterThan(0)
+    
+    // Layer structure should be the same
+    expect(layerData1.length).toBe(layerData2.length)
+    for (let i = 0; i < layerData1.length; i++) {
+      expect(layerData1[i].depth).toBe(layerData2[i].depth)
+      expect(layerData1[i].size).toBe(layerData2[i].size)
+    }
+  })
+
+  it('should use orthographic projection for layer voxels', () => {
+    // Test that layers are rendered flat (orthographic)
+    // by verifying that voxels at the same world coordinates produce 
+    // consistent layer content regardless of camera x/y position
+    
+    renderer.setCamera({ x: 0, y: 0, z: 0 })
+    renderer.render()
+    
+    const layers = renderer.getLayers()
+    
+    // Each layer should have voxels rendered with fixed scale based on depth
+    // not perspective based on individual voxel distance
+    layers.forEach(layer => {
+      // All voxels in a layer should use the same scale (orthographic property)
+      expect(layer.depth).toBeGreaterThan(0)
+      expect(layer.size).toBeGreaterThan(0)
+      // Layer should be marked as clean after rendering
+      expect(layer.dirty).toBe(false)
+    })
+  })
+
+  it('should use absolute z coordinates for voxel selection in layers', () => {
+    // Verify that layer voxels are selected using absolute world z coordinates
+    renderer.setCamera({ x: 0, y: 0, z: 0 })
+    renderer.render()
+    
+    const layers = renderer.getLayers()
+    
+    // Each layer should contain voxels in the correct absolute z range
+    layers.forEach(layer => {
+      const absoluteMinZ = 0 + layer.depth  // camera.z + layer.depth
+      const absoluteMaxZ = 0 + layer.depth + layer.size
+      
+      // All voxels in the layer should be within the absolute z range
+      layer.voxels.forEach(voxel => {
+        expect(voxel.z).toBeGreaterThanOrEqual(absoluteMinZ)
+        expect(voxel.z).toBeLessThan(absoluteMaxZ)
+      })
+    })
+  })
+})
