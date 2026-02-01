@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
-import { ParallaxRenderer, World, Camera, RenderStats, Layer } from '@/lib/renderer'
+import { useEffect, useRef, useState, useCallback } from 'react'
+import { ParallaxRenderer, World, Camera, SessionStats, Layer } from '@/lib/renderer'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { Slider } from '@/components/ui/slider'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import { LayerPreview } from '@/components/LayerPreview'
 import {
   ArrowsOutCardinal,
@@ -14,28 +15,43 @@ import {
   Cube,
   ChartLine,
   Crosshair,
-  Stack
+  Stack,
+  ClockCounterClockwise
 } from '@phosphor-icons/react'
 
 function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rendererRef = useRef<ParallaxRenderer | null>(null)
-  const animationFrameRef = useRef<number | undefined>(undefined)
   const keysPressed = useRef<Set<string>>(new Set())
+  const movementInterval = useRef<number | undefined>(undefined)
 
-  const [stats, setStats] = useState<RenderStats>({
-    fps: 60,
-    frameTime: 16,
+  const [sessionStats, setSessionStats] = useState<SessionStats>({
+    totalUpdates: 0,
+    totalRenderTime: 0,
+    totalLayersRegenerated: 0,
+    totalVoxelsRendered: 0,
+    averageCacheEfficiency: 0,
+    lastUpdate: null,
     layerCount: 0,
+    voxelsRendered: 0,
     cacheHits: 0,
     cacheMisses: 0,
-    voxelsRendered: 0
+    fps: 0,
+    frameTime: 0
   })
   const [camera, setCamera] = useState<Camera>({ x: 0, y: 15, z: -30 })
-  const [showDebug, setShowDebug] = useState(true)
+  const [showStats, setShowStats] = useState(true)
   const [showLayers, setShowLayers] = useState(true)
   const [layers, setLayers] = useState<Layer[]>([])
   const [moveSpeed, setMoveSpeed] = useState(0.5)
+
+  const requestRender = useCallback(() => {
+    if (rendererRef.current) {
+      rendererRef.current.render()
+      setSessionStats(rendererRef.current.getSessionStats())
+      setLayers(rendererRef.current.getLayers())
+    }
+  }, [])
 
   useEffect(() => {
     const canvas = canvasRef.current
@@ -46,6 +62,7 @@ function App() {
       canvas.height = window.innerHeight
       if (rendererRef.current) {
         rendererRef.current.resize(window.innerWidth, window.innerHeight)
+        requestRender()
       }
     }
 
@@ -56,7 +73,15 @@ function App() {
     const renderer = new ParallaxRenderer(canvas, world)
     rendererRef.current = renderer
 
-    const gameLoop = () => {
+    requestRender()
+
+    return () => {
+      window.removeEventListener('resize', resizeCanvas)
+    }
+  }, [requestRender])
+
+  useEffect(() => {
+    const updateCamera = () => {
       if (!rendererRef.current) return
 
       const currentCamera = rendererRef.current.getCamera()
@@ -91,34 +116,79 @@ function App() {
       if (moved) {
         rendererRef.current.setCamera(newCamera)
         setCamera(newCamera)
+        requestRender()
       }
-
-      rendererRef.current.render()
-      setStats(rendererRef.current.getStats())
-      setLayers(rendererRef.current.getLayers())
-
-      animationFrameRef.current = requestAnimationFrame(gameLoop)
     }
 
-    gameLoop()
+    if (keysPressed.current.size > 0) {
+      movementInterval.current = window.setInterval(updateCamera, 16)
+    }
 
     return () => {
-      if (animationFrameRef.current) {
-        cancelAnimationFrame(animationFrameRef.current)
+      if (movementInterval.current) {
+        clearInterval(movementInterval.current)
       }
-      window.removeEventListener('resize', resizeCanvas)
     }
-  }, [moveSpeed])
+  }, [moveSpeed, requestRender])
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
+      const wasEmpty = keysPressed.current.size === 0
       keysPressed.current.add(key)
+      
+      if (wasEmpty && keysPressed.current.size > 0) {
+        const updateCamera = () => {
+          if (!rendererRef.current) return
+
+          const currentCamera = rendererRef.current.getCamera()
+          const newCamera = { ...currentCamera }
+          let moved = false
+
+          if (keysPressed.current.has('w')) {
+            newCamera.z += moveSpeed
+            moved = true
+          }
+          if (keysPressed.current.has('s')) {
+            newCamera.z -= moveSpeed
+            moved = true
+          }
+          if (keysPressed.current.has('a')) {
+            newCamera.x -= moveSpeed
+            moved = true
+          }
+          if (keysPressed.current.has('d')) {
+            newCamera.x += moveSpeed
+            moved = true
+          }
+          if (keysPressed.current.has(' ')) {
+            newCamera.y += moveSpeed
+            moved = true
+          }
+          if (keysPressed.current.has('shift')) {
+            newCamera.y -= moveSpeed
+            moved = true
+          }
+
+          if (moved) {
+            rendererRef.current.setCamera(newCamera)
+            setCamera(newCamera)
+            requestRender()
+          }
+        }
+
+        movementInterval.current = window.setInterval(updateCamera, 16)
+      }
     }
 
     const handleKeyUp = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
       keysPressed.current.delete(key)
+      
+      if (keysPressed.current.size === 0 && movementInterval.current) {
+        clearInterval(movementInterval.current)
+        movementInterval.current = undefined
+      }
     }
 
     window.addEventListener('keydown', handleKeyDown)
@@ -127,25 +197,30 @@ function App() {
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
+      if (movementInterval.current) {
+        clearInterval(movementInterval.current)
+      }
     }
-  }, [])
+  }, [moveSpeed, requestRender])
 
   const handleRegenerateWorld = () => {
     if (rendererRef.current) {
       rendererRef.current.regenerateWorld(Date.now())
+      requestRender()
     }
   }
 
   const handleToggleLayerVisibility = (depth: number) => {
     if (rendererRef.current) {
       rendererRef.current.toggleLayerVisibility(depth)
-      setLayers(rendererRef.current.getLayers())
+      requestRender()
     }
   }
 
-  const cacheHitRate = stats.cacheHits + stats.cacheMisses > 0
-    ? Math.round((stats.cacheHits / (stats.cacheHits + stats.cacheMisses)) * 100)
-    : 0
+  const lastUpdate = sessionStats.lastUpdate
+  const avgRenderTime = sessionStats.totalUpdates > 0 
+    ? (sessionStats.totalRenderTime / sessionStats.totalUpdates).toFixed(2)
+    : '0.00'
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-background">
@@ -159,65 +234,90 @@ function App() {
           PARALLAX ENGINE
         </h1>
         <p className="text-sm text-muted-foreground mt-1">
-          2.5D Rendering with Layer Cache
+          Event-Driven 2.5D Rendering
         </p>
       </div>
 
-      {showDebug && (
-        <Card className="absolute top-6 right-6 p-4 bg-card/90 backdrop-blur-sm pointer-events-auto w-72">
+      {showStats && (
+        <Card className="absolute top-6 right-6 p-4 bg-card/90 backdrop-blur-sm pointer-events-auto w-80">
           <div className="flex items-center justify-between mb-3">
             <div className="flex items-center gap-2">
               <ChartLine className="text-primary" size={20} />
-              <h2 className="font-bold text-lg">Performance</h2>
+              <h2 className="font-bold text-lg">Render Statistics</h2>
             </div>
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => setShowDebug(false)}
+              onClick={() => setShowStats(false)}
               className="h-6 w-6 p-0"
-              aria-label="Hide performance stats"
+              aria-label="Hide statistics"
             >
               <EyeSlash size={16} />
             </Button>
           </div>
 
-          <div className="space-y-2 font-mono text-xs">
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">FPS</span>
-              <span className={stats.fps < 30 ? 'text-destructive' : 'text-primary'}>
-                {stats.fps}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Frame Time</span>
-              <span className="text-foreground">{stats.frameTime.toFixed(2)}ms</span>
+          <div className="space-y-3">
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <ClockCounterClockwise size={16} className="text-muted-foreground" />
+                <h3 className="text-sm font-semibold">Session Total</h3>
+              </div>
+              <div className="space-y-1.5 font-mono text-xs pl-6">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Total Updates</span>
+                  <span className="text-primary font-bold">{sessionStats.totalUpdates}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Avg Render Time</span>
+                  <span className="text-foreground">{avgRenderTime}ms</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Avg Cache Efficiency</span>
+                  <Badge variant={sessionStats.averageCacheEfficiency > 70 ? 'default' : 'secondary'}>
+                    {sessionStats.averageCacheEfficiency.toFixed(1)}%
+                  </Badge>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Total Voxels</span>
+                  <span className="text-foreground">{sessionStats.totalVoxelsRendered.toLocaleString()}</span>
+                </div>
+              </div>
             </div>
 
-            <Separator className="my-2" />
-
-            <div className="flex justify-between items-center">
-              <span className="text-muted-foreground">Cache</span>
-              <Badge variant={cacheHitRate > 70 ? 'default' : 'destructive'}>
-                {cacheHitRate}%
-              </Badge>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Hits / Misses</span>
-              <span className="text-foreground">
-                {stats.cacheHits} / {stats.cacheMisses}
-              </span>
-            </div>
-
-            <Separator className="my-2" />
-
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Active Layers</span>
-              <span className="text-primary">{stats.layerCount}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-muted-foreground">Voxels/Frame</span>
-              <span className="text-foreground">{stats.voxelsRendered}</span>
-            </div>
+            {lastUpdate && (
+              <>
+                <Separator />
+                <div>
+                  <h3 className="text-sm font-semibold mb-2">Last Update</h3>
+                  <div className="space-y-1.5 font-mono text-xs">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Render Time</span>
+                      <span className="text-foreground">{lastUpdate.renderTime.toFixed(2)}ms</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Active Layers</span>
+                      <span className="text-primary">{lastUpdate.layerCount}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Reused / Regenerated</span>
+                      <span className="text-foreground">
+                        <span className="text-accent">{lastUpdate.layersReused}</span> / <span className="text-destructive">{lastUpdate.layersRegenerated}</span>
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Cache Efficiency</span>
+                      <Badge variant={lastUpdate.cacheEfficiency > 70 ? 'default' : 'secondary'}>
+                        {lastUpdate.cacheEfficiency.toFixed(1)}%
+                      </Badge>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Voxels Rendered</span>
+                      <span className="text-foreground">{lastUpdate.voxelsRendered.toLocaleString()}</span>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </Card>
       )}
@@ -228,7 +328,7 @@ function App() {
           <h2 className="font-bold text-lg">Camera</h2>
         </div>
 
-          <div className="space-y-2 font-mono text-xs mb-4">
+        <div className="space-y-2 font-mono text-xs mb-4">
           <div className="flex justify-between">
             <span className="text-muted-foreground">Position</span>
             <span className="text-foreground">
@@ -237,7 +337,7 @@ function App() {
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Active Layers</span>
-            <span className="text-primary">{stats.layerCount}</span>
+            <span className="text-primary">{layers.length}</span>
           </div>
         </div>
 
@@ -276,14 +376,14 @@ function App() {
         </Button>
 
         <div className="flex gap-2 mb-3">
-          {!showDebug && (
+          {!showStats && (
             <Button
-              onClick={() => setShowDebug(true)}
+              onClick={() => setShowStats(true)}
               className="flex-1"
               variant="outline"
             >
               <Eye size={16} className="mr-2" />
-              Performance
+              Stats
             </Button>
           )}
           <Button

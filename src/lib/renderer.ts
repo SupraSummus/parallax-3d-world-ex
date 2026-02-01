@@ -21,13 +21,29 @@ export interface Layer {
   visible: boolean
 }
 
-export interface RenderStats {
-  fps: number
-  frameTime: number
+export interface UpdateStats {
+  renderTime: number
   layerCount: number
+  layersReused: number
+  layersRegenerated: number
+  voxelsRendered: number
+  cacheEfficiency: number
+  timestamp: number
+}
+
+export interface SessionStats {
+  totalUpdates: number
+  totalRenderTime: number
+  totalLayersRegenerated: number
+  totalVoxelsRendered: number
+  averageCacheEfficiency: number
+  lastUpdate: UpdateStats | null
+  layerCount: number
+  voxelsRendered: number
   cacheHits: number
   cacheMisses: number
-  voxelsRendered: number
+  fps: number
+  frameTime: number
 }
 
 export class World {
@@ -137,9 +153,8 @@ export class ParallaxRenderer {
   private camera: Camera
   private layers: Map<number, Layer> = new Map()
   private lastCachePosition: Camera
-  private stats: RenderStats
-  private frameStartTime: number = 0
-  private frameTimes: number[] = []
+  private sessionStats: SessionStats
+  private updateStartTime: number = 0
 
   constructor(canvas: HTMLCanvasElement, world: World) {
     this.canvas = canvas
@@ -147,13 +162,19 @@ export class ParallaxRenderer {
     this.world = world
     this.camera = { x: 0, y: 15, z: -30 }
     this.lastCachePosition = { ...this.camera }
-    this.stats = {
-      fps: 60,
-      frameTime: 16,
+    this.sessionStats = {
+      totalUpdates: 0,
+      totalRenderTime: 0,
+      totalLayersRegenerated: 0,
+      totalVoxelsRendered: 0,
+      averageCacheEfficiency: 0,
+      lastUpdate: null,
       layerCount: 0,
+      voxelsRendered: 0,
       cacheHits: 0,
       cacheMisses: 0,
-      voxelsRendered: 0
+      fps: 0,
+      frameTime: 0
     }
   }
 
@@ -165,7 +186,6 @@ export class ParallaxRenderer {
 
   private invalidateCacheWithMiss() {
     this.invalidateCache()
-    this.stats.cacheMisses++
   }
 
   private needsCacheRefresh(): boolean {
@@ -227,8 +247,8 @@ export class ParallaxRenderer {
       }
     })
 
-    this.stats.voxelsRendered += projected.length
     layer.dirty = false
+    return projected.length
   }
 
   private roundToLayerBoundary(z: number, layerSize: number): number {
@@ -277,30 +297,37 @@ export class ParallaxRenderer {
     })
 
     if (this.needsCacheRefresh()) {
-      this.stats.cacheMisses++
       this.lastCachePosition = { ...this.camera }
       this.invalidateCache()
-    } else {
-      this.stats.cacheHits++
+      this.sessionStats.cacheMisses++
+      return { cacheRefreshed: true }
     }
-
-    this.stats.layerCount = this.layers.size
+    
+    this.sessionStats.cacheHits++
+    return { cacheRefreshed: false }
   }
 
   render() {
-    this.frameStartTime = performance.now()
-    this.stats.voxelsRendered = 0
-
+    this.updateStartTime = performance.now()
+    
+    const updateInfo = this.updateLayers()
+    
     this.ctx.fillStyle = '#0a0a15'
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height)
 
-    this.updateLayers()
-
     const sortedLayers = Array.from(this.layers.values()).sort((a, b) => b.depth - a.depth)
+    
+    let layersRegenerated = 0
+    let layersReused = 0
+    let totalVoxels = 0
 
     sortedLayers.forEach(layer => {
       if (layer.dirty) {
-        this.renderLayerToCanvas(layer)
+        const voxelCount = this.renderLayerToCanvas(layer)
+        totalVoxels += voxelCount
+        layersRegenerated++
+      } else {
+        layersReused++
       }
 
       if (layer.visible) {
@@ -313,15 +340,33 @@ export class ParallaxRenderer {
       }
     })
 
-    const frameTime = performance.now() - this.frameStartTime
-    this.frameTimes.push(frameTime)
-    if (this.frameTimes.length > 60) {
-      this.frameTimes.shift()
+    const renderTime = performance.now() - this.updateStartTime
+    const totalLayers = sortedLayers.length
+    const cacheEfficiency = totalLayers > 0 ? (layersReused / totalLayers) * 100 : 0
+    
+    const updateStats: UpdateStats = {
+      renderTime,
+      layerCount: totalLayers,
+      layersReused,
+      layersRegenerated,
+      voxelsRendered: totalVoxels,
+      cacheEfficiency,
+      timestamp: Date.now()
     }
     
-    const avgFrameTime = this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length
-    this.stats.frameTime = avgFrameTime
-    this.stats.fps = Math.round(1000 / avgFrameTime)
+    this.sessionStats.totalUpdates++
+    this.sessionStats.totalRenderTime += renderTime
+    this.sessionStats.totalLayersRegenerated += layersRegenerated
+    this.sessionStats.totalVoxelsRendered += totalVoxels
+    this.sessionStats.averageCacheEfficiency = 
+      (this.sessionStats.averageCacheEfficiency * (this.sessionStats.totalUpdates - 1) + cacheEfficiency) / 
+      this.sessionStats.totalUpdates
+    this.sessionStats.lastUpdate = updateStats
+    
+    this.sessionStats.layerCount = totalLayers
+    this.sessionStats.voxelsRendered = totalVoxels
+    this.sessionStats.frameTime = renderTime
+    this.sessionStats.fps = renderTime > 0 ? Math.round(1000 / renderTime) : 0
   }
 
   getCamera(): Camera {
@@ -332,8 +377,12 @@ export class ParallaxRenderer {
     this.camera = { ...this.camera, ...camera }
   }
 
-  getStats(): RenderStats {
-    return { ...this.stats }
+  getSessionStats(): SessionStats {
+    return { ...this.sessionStats }
+  }
+
+  getStats(): SessionStats {
+    return this.getSessionStats()
   }
 
   resize(width: number, height: number) {

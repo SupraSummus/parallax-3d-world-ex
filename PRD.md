@@ -7,17 +7,17 @@ A parallax-based 2.5D rendering engine that renders a full 3D voxel world using 
 2. **Hypnotic** - Mesmerizing depth perception as layers slide past each other during exploration
 3. **Technical** - Showcases the rendering innovation with visible layer transitions and performance metrics
 
-**Complexity Level**: Complex Application (advanced functionality, likely with multiple views)
-This is a sophisticated rendering engine with real-time 3D-to-2D projection, layer management, caching systems, camera controls, and performance optimization. It requires advanced state management and computational geometry.
+**Complexity Level**: Complex Application (advanced functionality, with event-driven rendering)
+This is a sophisticated rendering engine with real-time 3D-to-2D projection, layer management, caching systems, camera controls, and performance optimization. It uses an event-driven architecture that only renders when state changes (camera movement, world regeneration), eliminating wasteful continuous frame rendering.
 
 ## Essential Features
 
 **Layer-Based Rendering System with Progressive Slicing**
 - Functionality: Renders the 3D world as a series of 2D depth layers that increase in size with distance (powers of 2)
 - Purpose: Achieve high performance by grouping distant voxels into larger layers while keeping near voxels detailed
-- Trigger: On initial load or when camera moves perpendicular to layers beyond layer boundaries
+- Trigger: Only when camera moves perpendicular to layers beyond layer boundaries or world changes
 - Progression: World initialized → Layers generated with power-of-2 boundaries relative to camera → Cached to memory → Composited for display → Reused during movement → Boundaries remain stable for far layers
-- Success criteria: Smooth 60fps movement, minimal layer regeneration when moving by 1 unit, far layer boundaries stay fixed probabilistically
+- Success criteria: No continuous rendering when idle, minimal layer regeneration when moving by 1 unit, far layer boundaries stay fixed probabilistically
 
 **Free Camera Movement (Fixed Direction)**
 - Functionality: WASD for horizontal/depth movement, Space/Shift for Y axis, no rotation - fixed viewing direction
@@ -41,12 +41,12 @@ This is a sophisticated rendering engine with real-time 3D-to-2D projection, lay
 - Progression: Seed selected → Noise functions generate terrain → Structures placed → Trees/features added → World model stored in memory
 - Success criteria: Varied, explorable terrain with clear depth differentiation
 
-**Debug Visualization**
-- Functionality: Overlay showing FPS, layer count, cache status, camera position, and render statistics
-- Purpose: Make the technical innovation visible and measurable
-- Trigger: Always visible or toggleable
-- Progression: Frame rendered → Stats collected → Overlay updated → Displayed
-- Success criteria: Real-time statistics, visible correlation between movement and cache behavior
+**Debug Visualization & Event-Driven Statistics**
+- Functionality: Statistics display showing update events, cache efficiency, render time, and layer regeneration metrics
+- Purpose: Make the technical innovation visible through meaningful metrics focused on the event-driven architecture
+- Trigger: Always visible or toggleable, updates only when render events occur
+- Progression: Render event triggered → Stats collected → Session totals accumulated → Last update details displayed → No continuous frame counting
+- Success criteria: Real-time event statistics, visible correlation between movement and cache behavior, clear indication of render efficiency
 
 **Automated Testing Suite**
 - Functionality: Comprehensive unit and integration tests for renderer and UI components
@@ -96,7 +96,7 @@ A monospace font for technical precision and data display, paired with a geometr
 
 ## Animations
 
-Animations should emphasize the mechanical nature of the progressive layer system—smooth, linear movements for layer sliding, subtle easing for UI transitions. When layers regenerate due to boundary crossings, the system should feel responsive and deliberate. Camera movement should be immediate and responsive, with clear visual feedback when crossing layer boundaries.
+Animations should emphasize the mechanical nature of the progressive layer system—smooth, linear movements for layer sliding, subtle easing for UI transitions. When layers regenerate due to boundary crossings, the system should feel responsive and deliberate. Camera movement is event-driven with clear visual feedback when crossing layer boundaries. The system renders only when necessary, eliminating wasteful continuous frame updates.
 
 ## Component Selection
 
