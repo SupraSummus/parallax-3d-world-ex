@@ -1,5 +1,9 @@
 import { selectSlices } from './slice-selection'
 
+// Projection scale factor: determines the size of voxels relative to their distance
+// Higher values = larger voxels at the same depth
+const PROJECTION_SCALE_FACTOR = 600
+
 export interface Voxel {
   x: number
   y: number
@@ -226,6 +230,14 @@ export class ParallaxRenderer {
     }
   }
 
+  /**
+   * Computes the projection scale for a given depth.
+   * Used for both perspective and orthographic projection.
+   */
+  private getProjectionScale(depth: number): number {
+    return PROJECTION_SCALE_FACTOR / depth
+  }
+
   private projectVoxel(voxel: Voxel, camera: Camera): { x: number; y: number; size: number; depth: number } | null {
     const dx = voxel.x - camera.x
     const dy = voxel.y - camera.y
@@ -233,7 +245,7 @@ export class ParallaxRenderer {
 
     if (dz <= 0.1) return null
 
-    const scale = 600 / dz
+    const scale = this.getProjectionScale(dz)
     const screenX = this.canvas.width / 2 + dx * scale
     const screenY = this.canvas.height / 2 - dy * scale
     const size = Math.max(1, scale * 0.8)
@@ -250,7 +262,7 @@ export class ParallaxRenderer {
     if (referenceDepth <= 0.1) return null
 
     // Use a fixed orthographic scale based on the layer's reference depth
-    const scale = 600 / referenceDepth
+    const scale = this.getProjectionScale(referenceDepth)
     
     // Position voxels relative to world origin (camera-independent)
     const screenX = this.canvas.width / 2 + voxel.x * scale
@@ -363,7 +375,9 @@ export class ParallaxRenderer {
         // Apply parallax offset based on camera position
         // Closer layers (smaller depth) have larger parallax effect
         const referenceDepth = layer.depth + layer.size / 2
-        const scale = 600 / referenceDepth
+        const scale = this.getProjectionScale(referenceDepth)
+        // Offset is negative for X because moving camera right should shift view left
+        // Offset is positive for Y because screen Y is inverted (positive Y = up in world, down in screen)
         const offsetX = -this.camera.x * scale
         const offsetY = this.camera.y * scale
 
