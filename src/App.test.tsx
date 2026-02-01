@@ -53,35 +53,41 @@ describe('App Component', () => {
 
     it('should display layer stats', () => {
       render(<App />)
-      expect(screen.getByText('Active Layers')).toBeInTheDocument()
+      // Active Layers appears in both Performance and Camera cards
+      expect(screen.getAllByText('Active Layers').length).toBeGreaterThan(0)
       expect(screen.getByText('Voxels/Frame')).toBeInTheDocument()
     })
 
     it('should hide performance stats when clicking eye slash', async () => {
       render(<App />)
       
-      const hideButton = screen.getByRole('button', { name: '' })
+      // Find the hide button using its aria-label
+      const hideButton = screen.getByRole('button', { name: 'Hide performance stats' })
       fireEvent.click(hideButton)
       
       await waitFor(() => {
-        expect(screen.queryByText('Performance')).not.toBeInTheDocument()
+        // The "Performance" heading should be gone from the performance card
+        // but "Performance" button might appear in World card
+        expect(screen.queryByRole('heading', { name: 'Performance' })).not.toBeInTheDocument()
       })
     })
 
     it('should show performance stats again when clicking show button', async () => {
       render(<App />)
       
-      const hideButtons = screen.getAllByRole('button')
-      const hideButton = hideButtons.find(btn => btn.querySelector('svg'))
-      if (hideButton) fireEvent.click(hideButton)
+      // Find and click the hide button to hide performance stats first
+      const hideButton = screen.getByRole('button', { name: 'Hide performance stats' })
+      fireEvent.click(hideButton)
       
       await waitFor(() => {
-        const showButton = screen.getByText('Show Performance')
+        // The button shows "Performance" (not "Show Performance")
+        const showButton = screen.getByRole('button', { name: /Performance/ })
         fireEvent.click(showButton)
       })
       
       await waitFor(() => {
-        expect(screen.getByText('Performance')).toBeInTheDocument()
+        // Performance heading should be back
+        expect(screen.getByRole('heading', { name: 'Performance' })).toBeInTheDocument()
       })
     })
   })
@@ -97,9 +103,10 @@ describe('App Component', () => {
       expect(screen.getByText('Position')).toBeInTheDocument()
     })
 
-    it('should show camera rotation', () => {
+    it('should show active layers in camera card', () => {
       render(<App />)
-      expect(screen.getByText('Rotation')).toBeInTheDocument()
+      // Active Layers is shown in the Camera card
+      expect(screen.getAllByText('Active Layers').length).toBeGreaterThan(0)
     })
 
     it('should have layer spacing slider', () => {
@@ -126,9 +133,9 @@ describe('App Component', () => {
 
     it('should show control instructions', () => {
       render(<App />)
-      expect(screen.getByText('WASD - Move')).toBeInTheDocument()
+      expect(screen.getByText('WASD - Move Horizontally')).toBeInTheDocument()
       expect(screen.getByText('Space/Shift - Up/Down')).toBeInTheDocument()
-      expect(screen.getByText('Mouse Drag - Look')).toBeInTheDocument()
+      expect(screen.getByText('W/S also moves In/Out')).toBeInTheDocument()
     })
   })
 

@@ -21,7 +21,8 @@ describe('World', () => {
     const world1 = new World(42)
     const world2 = new World(99)
     
-    expect(world1.voxels[0].x).not.toBe(world2.voxels[0].x)
+    // Voxel count should differ since heights depend on the seed
+    expect(world1.voxels.length).not.toBe(world2.voxels.length)
   })
 
   it('should filter voxels by depth range', () => {

@@ -184,6 +184,7 @@ function App() {
               variant="ghost"
               onClick={() => setShowDebug(false)}
               className="h-6 w-6 p-0"
+              aria-label="Hide performance stats"
             >
               <EyeSlash size={16} />
             </Button>

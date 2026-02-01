@@ -40,7 +40,7 @@ export class World {
   }
 
   private noise(x: number, y: number, z: number): number {
-    const n = Math.sin(x * 12.9898 + y * 78.233 + z * 45.164) * 43758.5453
+    const n = Math.sin(x * 12.9898 + y * 78.233 + z * 45.164 + this.seed * 0.001) * 43758.5453
     return n - Math.floor(n)
   }
 
@@ -160,13 +160,18 @@ export class ParallaxRenderer {
 
   setLayerSpacing(spacing: number) {
     this.layerSpacing = spacing
-    this.invalidateCache()
+    this.invalidateCacheWithMiss()
   }
 
   private invalidateCache() {
     this.layers.forEach(layer => {
       layer.dirty = true
     })
+  }
+
+  private invalidateCacheWithMiss() {
+    this.invalidateCache()
+    this.stats.cacheMisses++
   }
 
   private needsCacheRefresh(): boolean {
@@ -238,43 +243,33 @@ export class ParallaxRenderer {
 
   private getLayerBoundaries(): { depth: number; size: number }[] {
     const boundaries: { depth: number; size: number }[] = []
-    const baseZ = this.roundToLayerBoundary(this.camera.z, 1)
+    const baseZ = this.roundToLayerBoundary(this.camera.z, this.layerSpacing)
     
-    boundaries.push({ depth: baseZ - 2, size: 1 })
-    boundaries.push({ depth: baseZ - 1, size: 1 })
-    boundaries.push({ depth: baseZ, size: 1 })
-    boundaries.push({ depth: baseZ + 1, size: 1 })
-    boundaries.push({ depth: baseZ + 2, size: 1 })
+    // Near layers using layerSpacing as base unit
+    const nearCount = Math.max(1, Math.floor(5 / Math.max(1, this.layerSpacing / 5)))
+    for (let i = -2; i <= nearCount; i++) {
+      boundaries.push({ depth: baseZ + i * this.layerSpacing, size: this.layerSpacing })
+    }
     
-    const roundedZ2 = this.roundToLayerBoundary(this.camera.z, 2)
-    for (let i = 1; i <= 3; i++) {
-      const d = roundedZ2 + i * 2
-      if (d > baseZ + 2) {
-        boundaries.push({ depth: d, size: 2 })
+    // Medium distance layers with 2x spacing
+    const mediumSpacing = this.layerSpacing * 2
+    const roundedZ2 = this.roundToLayerBoundary(this.camera.z, mediumSpacing)
+    const mediumCount = Math.max(1, Math.floor(3 / Math.max(1, this.layerSpacing / 5)))
+    for (let i = 1; i <= mediumCount; i++) {
+      const d = roundedZ2 + i * mediumSpacing
+      if (d > baseZ + nearCount * this.layerSpacing) {
+        boundaries.push({ depth: d, size: mediumSpacing })
       }
     }
     
-    const roundedZ4 = this.roundToLayerBoundary(this.camera.z, 4)
-    for (let i = 1; i <= 3; i++) {
-      const d = roundedZ4 + i * 4
-      if (d > roundedZ2 + 6) {
-        boundaries.push({ depth: d, size: 4 })
-      }
-    }
-    
-    const roundedZ8 = this.roundToLayerBoundary(this.camera.z, 8)
-    for (let i = 1; i <= 3; i++) {
-      const d = roundedZ8 + i * 8
-      if (d > roundedZ4 + 12) {
-        boundaries.push({ depth: d, size: 8 })
-      }
-    }
-    
-    const roundedZ16 = this.roundToLayerBoundary(this.camera.z, 16)
-    for (let i = 1; i <= 3; i++) {
-      const d = roundedZ16 + i * 16
-      if (d > roundedZ8 + 24) {
-        boundaries.push({ depth: d, size: 16 })
+    // Far layers with 4x spacing
+    const farSpacing = this.layerSpacing * 4
+    const roundedZ4 = this.roundToLayerBoundary(this.camera.z, farSpacing)
+    const farCount = Math.max(1, Math.floor(2 / Math.max(1, this.layerSpacing / 5)))
+    for (let i = 1; i <= farCount; i++) {
+      const d = roundedZ4 + i * farSpacing
+      if (d > roundedZ2 + mediumCount * mediumSpacing) {
+        boundaries.push({ depth: d, size: farSpacing })
       }
     }
     
@@ -363,12 +358,12 @@ export class ParallaxRenderer {
   resize(width: number, height: number) {
     this.canvas.width = width
     this.canvas.height = height
-    this.invalidateCache()
+    this.invalidateCacheWithMiss()
   }
 
   regenerateWorld(seed?: number) {
     this.world = new World(seed)
-    this.invalidateCache()
+    this.invalidateCacheWithMiss()
   }
 
   getLayers(): Layer[] {
