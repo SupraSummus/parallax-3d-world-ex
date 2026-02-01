@@ -20,7 +20,7 @@ describe('App Component', () => {
 
   it('should render the subtitle', () => {
     render(<App />)
-    expect(screen.getByText('2.5D Rendering with Layer Cache')).toBeInTheDocument()
+    expect(screen.getByText('Event-Driven 2.5D Rendering')).toBeInTheDocument()
   })
 
   it('should render canvas element', () => {
@@ -32,43 +32,42 @@ describe('App Component', () => {
   describe('Performance Stats', () => {
     it('should show performance card by default', () => {
       render(<App />)
-      expect(screen.getByText('Performance')).toBeInTheDocument()
+      expect(screen.getByText('Render Statistics')).toBeInTheDocument()
     })
 
     it('should display FPS stat', () => {
       render(<App />)
-      expect(screen.getByText('FPS')).toBeInTheDocument()
+      // The stats are shown under "Session Total" section
+      expect(screen.getByText('Total Updates')).toBeInTheDocument()
     })
 
     it('should display frame time stat', () => {
       render(<App />)
-      expect(screen.getByText('Frame Time')).toBeInTheDocument()
+      expect(screen.getByText('Avg Render Time')).toBeInTheDocument()
     })
 
     it('should display cache stats', () => {
       render(<App />)
-      expect(screen.getByText('Cache')).toBeInTheDocument()
-      expect(screen.getByText('Hits / Misses')).toBeInTheDocument()
+      expect(screen.getByText('Avg Cache Efficiency')).toBeInTheDocument()
     })
 
     it('should display layer stats', () => {
       render(<App />)
-      // Active Layers appears in both Performance and Camera cards
+      // Active Layers appears in both Render Statistics and Camera cards
       expect(screen.getAllByText('Active Layers').length).toBeGreaterThan(0)
-      expect(screen.getByText('Voxels/Frame')).toBeInTheDocument()
+      expect(screen.getByText('Total Voxels')).toBeInTheDocument()
     })
 
     it('should hide performance stats when clicking eye slash', async () => {
       render(<App />)
       
       // Find the hide button using its aria-label
-      const hideButton = screen.getByRole('button', { name: 'Hide performance stats' })
+      const hideButton = screen.getByRole('button', { name: 'Hide statistics' })
       fireEvent.click(hideButton)
       
       await waitFor(() => {
-        // The "Performance" heading should be gone from the performance card
-        // but "Performance" button might appear in World card
-        expect(screen.queryByRole('heading', { name: 'Performance' })).not.toBeInTheDocument()
+        // The "Render Statistics" heading should be gone from the stats card
+        expect(screen.queryByText('Render Statistics')).not.toBeInTheDocument()
       })
     })
 
@@ -76,18 +75,18 @@ describe('App Component', () => {
       render(<App />)
       
       // Find and click the hide button to hide performance stats first
-      const hideButton = screen.getByRole('button', { name: 'Hide performance stats' })
+      const hideButton = screen.getByRole('button', { name: 'Hide statistics' })
       fireEvent.click(hideButton)
       
       await waitFor(() => {
-        // The button shows "Performance" (not "Show Performance")
-        const showButton = screen.getByRole('button', { name: /Performance/ })
+        // The "Stats" button should appear when stats are hidden
+        const showButton = screen.getByRole('button', { name: /Stats/ })
         fireEvent.click(showButton)
       })
       
       await waitFor(() => {
-        // Performance heading should be back
-        expect(screen.getByRole('heading', { name: 'Performance' })).toBeInTheDocument()
+        // Render Statistics heading should be back
+        expect(screen.getByText('Render Statistics')).toBeInTheDocument()
       })
     })
   })

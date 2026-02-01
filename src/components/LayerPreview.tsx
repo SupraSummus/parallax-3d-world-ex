@@ -1,3 +1,6 @@
+/* eslint-disable @typescript-eslint/no-deprecated */
+// Phosphor icon names like Stack are deprecated in favor of StackIcon,
+// but the Icon suffixed versions are not exported at package level
 import { useEffect, useRef } from 'react'
 import { Layer } from '@/lib/renderer'
 import { Card } from '@/components/ui/card'
@@ -24,7 +27,8 @@ function LayerItem({ layer, onToggleVisibility }: LayerItemProps) {
     const canvas = canvasRef.current
     if (!canvas) return
 
-    const ctx = canvas.getContext('2d')!
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
     const scale = 0.15
 
     canvas.width = layer.canvas.width * scale
@@ -35,8 +39,8 @@ function LayerItem({ layer, onToggleVisibility }: LayerItemProps) {
 
   const voxelCount = layer.voxels.length
   const depthRange = layer.size === 1 
-    ? `${layer.depth}` 
-    : `${layer.depth} to ${layer.depth + layer.size - 1}`
+    ? String(layer.depth) 
+    : `${String(layer.depth)} to ${String(layer.depth + layer.size - 1)}`
 
   return (
     <div className="flex items-start gap-3 p-3 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors">
@@ -68,7 +72,7 @@ function LayerItem({ layer, onToggleVisibility }: LayerItemProps) {
           </div>
           <Switch
             checked={layer.visible}
-            onCheckedChange={() => onToggleVisibility(layer.depth)}
+            onCheckedChange={() => { onToggleVisibility(layer.depth) }}
             className="data-[state=checked]:bg-primary"
           />
         </div>
