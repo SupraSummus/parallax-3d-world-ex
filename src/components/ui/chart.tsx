@@ -8,6 +8,13 @@ import { cn } from "@/lib/utils"
 // Format: { THEME_NAME: CSS_SELECTOR }
 const THEMES = { light: "", dark: ".dark" } as const
 
+// Helper function to safely type-cast payload arrays
+function asTypedPayload<TValue extends ValueType = ValueType, TName extends NameType = NameType>(
+  payload: unknown
+): ReadonlyArray<Payload<TValue, TName>> | undefined {
+  return payload as ReadonlyArray<Payload<TValue, TName>> | undefined
+}
+
 export type ChartConfig = {
   [k in string]: {
     label?: ReactNode
@@ -129,7 +136,7 @@ function ChartTooltipContent({
   const { config } = useChart()
 
   const tooltipLabel = useMemo(() => {
-    const typedPayload = payload as ReadonlyArray<Payload<ValueType, NameType>> | undefined
+    const typedPayload = asTypedPayload(payload)
     if (hideLabel || !typedPayload || typedPayload.length === 0) {
       return null
     }
@@ -167,7 +174,7 @@ function ChartTooltipContent({
     labelKey,
   ])
 
-  const typedPayload = payload as ReadonlyArray<Payload<ValueType, NameType>> | undefined
+  const typedPayload = asTypedPayload(payload)
   if (!active || !typedPayload || typedPayload.length === 0) {
     return null
   }
@@ -191,7 +198,7 @@ function ChartTooltipContent({
 
           return (
             <div
-              key={String(item.dataKey ?? index)}
+              key={String(item.dataKey ?? item.name ?? index)}
               className={cn(
                 "[&>svg]:text-muted-foreground flex w-full flex-wrap items-stretch gap-2 [&>svg]:h-2.5 [&>svg]:w-2.5",
                 indicator === "dot" && "items-center"
