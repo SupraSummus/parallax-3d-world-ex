@@ -148,7 +148,8 @@ describe('ParallaxRenderer', () => {
       const layers = renderer.getLayers()
       
       layers.forEach(layer => {
-        expect(layer.depth % layer.size).toBe(0)
+        // Use equality comparison (==) to treat -0 and 0 as equal
+        expect(layer.depth % layer.size == 0).toBe(true)
       })
     })
 
