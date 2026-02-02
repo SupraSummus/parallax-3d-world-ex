@@ -90,7 +90,7 @@ Layer State: INACTIVE → VISIBLE → RENDERING → CACHED → VISIBLE → INACT
 
 ### Implementation Notes
 
-1. `selectSlices(minZ, maxZ)` - No longer takes cameraZ parameter
+1. `selectSlices(cameraZ, minRelativeDepth, maxRelativeDepth)` - Uses cameraZ to compute visible range, but layer boundaries are aligned to absolute world coordinates
 2. Layer boundaries are globally consistent across frames
 3. `updateLayers()` determines visibility based on camera.z
 4. Cache invalidation only when:

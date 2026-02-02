@@ -233,7 +233,7 @@ describe('Slice Selection', () => {
           
           expect(containingSlice).toBeDefined()
           // The slice should be aligned to its size
-          expect(containingSlice!.depth % containingSlice!.size == 0).toBe(true)
+          expect(containingSlice!.depth % containingSlice!.size === 0).toBe(true)
         }
       })
     })
