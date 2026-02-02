@@ -1,23 +1,42 @@
-# ✨ Welcome to Your Spark Template!
-You've just launched your brand-new Spark Template Codespace — everything’s fired up and ready for you to explore, build, and create with Spark!
+# Parallax Voxel Engine
 
-This template is your blank canvas. It comes with a minimal setup to help you get started quickly with Spark development.
+A parallax-based 2.5D rendering engine that renders a 3D voxel world using progressively-sized cached layers for efficient exploration and visualization.
 
-🚀 What's Inside?
-- A clean, minimal Spark environment
-- Pre-configured for local development
-- Ready to scale with your ideas
-  
-🧠 What Can You Do?
+## Quick Start
 
-Right now, this is just a starting point — the perfect place to begin building and testing your Spark applications.
+```bash
+# Install dependencies
+npm install
 
-🧹 Just Exploring?
-No problem! If you were just checking things out and don’t need to keep this code:
+# Start development server
+npm run dev
 
-- Simply delete your Spark.
-- Everything will be cleaned up — no traces left behind.
+# Run tests
+npx vitest run
 
-📄 License For Spark Template Resources 
+# Lint code
+npm run lint
+```
 
-The Spark Template files and resources from GitHub are licensed under the terms of the MIT license, Copyright GitHub, Inc.
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| **[AGENTS.md](AGENTS.md)** | AI agent development guide (start here for AI agents) |
+| [PRD.md](PRD.md) | Product requirements and feature specifications |
+| [DESIGN.md](DESIGN.md) | Technical architecture and rendering design |
+| [TESTING.md](TESTING.md) | Testing guide and patterns |
+| [CHANGES.md](CHANGES.md) | Recent changes and bug fixes |
+| [SECURITY.md](SECURITY.md) | Security vulnerability reporting |
+
+## Features
+
+- **Layer-based rendering** with power-of-2 progressive slicing
+- **Free camera movement** (WASD + Space/Shift)
+- **Intelligent caching** for smooth performance
+- **Procedural voxel world** generation
+- **Debug visualization** with performance metrics
+
+## License
+
+The Spark Template files and resources from GitHub are licensed under the MIT license, Copyright GitHub, Inc.
