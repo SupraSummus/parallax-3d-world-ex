@@ -382,7 +382,7 @@ function App() {
           <label className="text-xs text-muted-foreground mb-2 block">
             World Type
           </label>
-          <Select value={worldType} onValueChange={(value: WorldType) => { handleWorldTypeChange(value) }}>
+          <Select value={worldType} onValueChange={handleWorldTypeChange}>
             <SelectTrigger className="w-full">
               <SelectValue placeholder="Select world type" />
             </SelectTrigger>
