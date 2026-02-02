@@ -2,12 +2,13 @@
 // Phosphor icon names like ChartLine are deprecated in favor of ChartLineIcon,
 // but the Icon suffixed versions are not exported at package level
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { ParallaxRenderer, World, Camera, SessionStats, Layer } from '@/lib/renderer'
+import { ParallaxRenderer, World, Camera, SessionStats, Layer, WorldType, WORLD_TYPES } from '@/lib/renderer'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { Slider } from '@/components/ui/slider'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { LayerPreview } from '@/components/LayerPreview'
 import {
   ArrowsOutCardinal,
@@ -46,6 +47,7 @@ function App() {
   const [showLayers, setShowLayers] = useState(true)
   const [layers, setLayers] = useState<Layer[]>([])
   const [moveSpeed, setMoveSpeed] = useState(0.5)
+  const [worldType, setWorldType] = useState<WorldType>('forest')
 
   const requestRender = useCallback(() => {
     if (rendererRef.current) {
@@ -207,7 +209,15 @@ function App() {
 
   const handleRegenerateWorld = () => {
     if (rendererRef.current) {
-      rendererRef.current.regenerateWorld(Date.now())
+      rendererRef.current.regenerateWorld(Date.now(), worldType)
+      requestRender()
+    }
+  }
+
+  const handleWorldTypeChange = (newWorldType: WorldType) => {
+    setWorldType(newWorldType)
+    if (rendererRef.current) {
+      rendererRef.current.regenerateWorld(Date.now(), newWorldType)
       requestRender()
     }
   }
@@ -366,6 +376,24 @@ function App() {
         <div className="flex items-center gap-2 mb-3">
           <Cube className="text-primary" size={20} />
           <h2 className="font-bold text-lg">World</h2>
+        </div>
+
+        <div className="mb-3">
+          <label className="text-xs text-muted-foreground mb-2 block">
+            World Type
+          </label>
+          <Select value={worldType} onValueChange={handleWorldTypeChange}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select world type" />
+            </SelectTrigger>
+            <SelectContent>
+              {WORLD_TYPES.map((type) => (
+                <SelectItem key={type.value} value={type.value}>
+                  {type.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
 
         <Button
