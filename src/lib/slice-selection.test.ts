@@ -198,8 +198,8 @@ describe('Slice Selection', () => {
       // Check that common layers (by absolute z) have the same boundaries
       let commonLayers = 0
       sliceMap1.forEach((slice1, depth) => {
-        if (sliceMap2.has(depth)) {
-          const slice2 = sliceMap2.get(depth)!
+        const slice2 = sliceMap2.get(depth)
+        if (slice2) {
           // Same absolute depth should have same size
           expect(slice1.size).toBe(slice2.size)
           commonLayers++
@@ -232,8 +232,10 @@ describe('Slice Selection', () => {
           )
           
           expect(containingSlice).toBeDefined()
-          // The slice should be aligned to its size
-          expect(containingSlice!.depth % containingSlice!.size === 0).toBe(true)
+          if (containingSlice) {
+            // The slice should be aligned to its size
+            expect(containingSlice.depth % containingSlice.size === 0).toBe(true)
+          }
         }
       })
     })
