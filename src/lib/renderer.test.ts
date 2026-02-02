@@ -148,7 +148,9 @@ describe('ParallaxRenderer', () => {
       const layers = renderer.getLayers()
       
       layers.forEach(layer => {
-        expect(layer.depth % layer.size).toBe(0)
+        // Layers should be aligned to their size boundaries
+        // Note: -0 === 0 is true in JavaScript
+        expect(layer.depth % layer.size === 0).toBe(true)
       })
     })
 

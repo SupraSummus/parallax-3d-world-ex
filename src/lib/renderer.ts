@@ -527,30 +527,40 @@ export class ParallaxRenderer {
     return { x: screenX, y: screenY, size, zInLayer }
   }
 
-  private renderLayerToCanvas(layer: Layer) {
+  private renderLayerToCanvas(layer: Layer, cameraForRendering: Camera) {
     const ctx = layer.canvas.getContext('2d')
     if (!ctx) return 0
     ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height)
 
-    const minZ = layer.depth
-    const maxZ = layer.depth + layer.size
-    
-    // Get voxels using absolute z coordinates based on the cache position
-    // The layer represents voxels from z = cacheZ + minZ to z = cacheZ + maxZ
-    const absoluteMinZ = this.lastCachePosition.z + minZ
-    const absoluteMaxZ = this.lastCachePosition.z + maxZ
+    // Layer depth and size are now in ABSOLUTE world coordinates
+    const absoluteMinZ = layer.depth
+    const absoluteMaxZ = layer.depth + layer.size
     layer.voxels = this.world.getVoxelsInAbsoluteZRange(absoluteMinZ, absoluteMaxZ)
 
-    // Use flat (orthographic) projection - camera-independent
-    // The reference depth determines the scale (smaller = closer = larger voxels)
-    const referenceDepth = layer.depth + layer.size / 2
+    // Calculate viewing distance from camera to layer center
+    // This determines the scale - farther layers appear smaller
+    const layerCenterZ = layer.depth + layer.size / 2
+    const viewingDistance = layerCenterZ - cameraForRendering.z
+    
+    // Skip layers behind the camera
+    if (viewingDistance <= 0.1) {
+      layer.dirty = false
+      return 0
+    }
+    
+    // Use viewing distance for scale calculation
+    const scale = this.getProjectionScale(viewingDistance)
     
     const projected = layer.voxels
       .map(voxel => {
-        const proj = this.projectVoxelFlat(voxel, referenceDepth)
-        return proj ? { ...proj, color: voxel.color } : null
+        // Position voxels relative to world origin (camera-independent)
+        const screenX = this.canvas.width / 2 + voxel.x * scale
+        const screenY = this.canvas.height / 2 - voxel.y * scale
+        // Use scale * 1.1 to ensure no gaps between voxels (slight overlap)
+        const size = Math.max(1, scale * 1.1)
+        
+        return { x: screenX, y: screenY, size, zInLayer: voxel.z, color: voxel.color }
       })
-      .filter((p): p is { x: number; y: number; size: number; zInLayer: number; color: string } => p !== null)
       .sort((a, b) => b.zInLayer - a.zInLayer)
 
     projected.forEach(p => {
@@ -607,6 +617,7 @@ export class ParallaxRenderer {
     this.ctx.fillStyle = '#0a0a15'
     this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height)
 
+    // Sort layers by depth (farther layers first, so closer layers render on top)
     const sortedLayers = Array.from(this.layers.values()).sort((a, b) => b.depth - a.depth)
     
     let layersRegenerated = 0
@@ -614,8 +625,17 @@ export class ParallaxRenderer {
     let totalVoxels = 0
 
     sortedLayers.forEach(layer => {
+      // Calculate viewing distance from current camera position
+      const layerCenterZ = layer.depth + layer.size / 2
+      const viewingDistance = layerCenterZ - this.camera.z
+      
+      // Skip layers behind the camera
+      if (viewingDistance <= 0.1) {
+        return
+      }
+      
       if (layer.dirty) {
-        const voxelCount = this.renderLayerToCanvas(layer)
+        const voxelCount = this.renderLayerToCanvas(layer, this.camera)
         totalVoxels += voxelCount
         layersRegenerated++
       } else {
@@ -623,22 +643,20 @@ export class ParallaxRenderer {
       }
 
       if (layer.visible) {
-        // Layers are rendered flat (camera-independent) at world origin
-        // Apply parallax offset based on camera position
-        // Closer layers (smaller depth) have larger parallax effect
-        const referenceDepth = layer.depth + layer.size / 2
-        const scale = this.getProjectionScale(referenceDepth)
+        // Calculate parallax offset based on viewing distance
+        // Closer layers (smaller viewing distance) move more with camera
+        const scale = this.getProjectionScale(viewingDistance)
+        
         // Offset is negative for X because moving camera right should shift view left
         // Offset is positive for Y because screen Y is inverted (positive Y = up in world, down in screen)
         const offsetX = -this.camera.x * scale
         const offsetY = this.camera.y * scale
 
-        // Layers are now opaque (no alpha modification)
         this.ctx.drawImage(layer.canvas, offsetX, offsetY)
         
         // Add a semi-transparent fog layer after each voxel layer
-        // The fog intensity increases with depth to create depth perception
-        const fogIntensity = Math.min(0.15, layer.depth / 500)
+        // The fog intensity increases with viewing distance to create depth perception
+        const fogIntensity = Math.min(0.15, viewingDistance / 500)
         if (fogIntensity > 0.01) {
           this.ctx.fillStyle = `rgba(10, 10, 21, ${String(fogIntensity)})`
           this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height)
