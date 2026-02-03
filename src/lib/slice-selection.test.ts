@@ -566,4 +566,47 @@ describe('Slice Selection', () => {
       })
     })
   })
+
+  describe('Configurable depth multiplier', () => {
+    it('should support non-power-of-2 multipliers', () => {
+      // With multiplier 3, sizes should be: 1, 3, 9, 27, 64 (capped)
+      const slices = selectSlices(0, 1, 100, 3)
+      expect(slices.length).toBeGreaterThan(0)
+      
+      // Verify no gaps
+      for (let i = 0; i < slices.length - 1; i++) {
+        const currentEnd = slices[i].depth + slices[i].size
+        const nextStart = slices[i + 1].depth
+        expect(currentEnd).toBe(nextStart)
+      }
+    })
+
+    it('should produce contiguous coverage with multiplier 1.5', () => {
+      const slices = selectSlices(0, 1, 100, 1.5)
+      expect(slices.length).toBeGreaterThan(0)
+      
+      // Verify no gaps
+      for (let i = 0; i < slices.length - 1; i++) {
+        const currentEnd = slices[i].depth + slices[i].size
+        const nextStart = slices[i + 1].depth
+        expect(currentEnd).toBe(nextStart)
+      }
+    })
+
+    it('should produce different number of slices with different multipliers', () => {
+      const slicesMultiplier2 = selectSlices(0, 1, 200, 2)
+      const slicesMultiplier3 = selectSlices(0, 1, 200, 3)
+      
+      // Different multipliers should produce different slice counts
+      // Higher multiplier = faster growth = fewer slices needed
+      expect(slicesMultiplier2.length).not.toBe(slicesMultiplier3.length)
+    })
+
+    it('should default to multiplier 2 when not specified', () => {
+      const slicesDefault = selectSlices(0, 1, 100)
+      const slicesExplicit = selectSlices(0, 1, 100, 2)
+      
+      expect(slicesDefault).toEqual(slicesExplicit)
+    })
+  })
 })

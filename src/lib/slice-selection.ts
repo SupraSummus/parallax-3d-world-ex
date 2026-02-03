@@ -44,28 +44,32 @@ export interface SliceBoundary {
 
 const MIN_SIZE = 1
 const MAX_SIZE = 64
+export const DEFAULT_DEPTH_MULTIPLIER = 2
 
 /**
  * Gets the maximum candidate size for a given z-coordinate.
  * This is a starting point - the actual size may be smaller due to alignment constraints.
- * Uses a geometric scale where max size equals the largest power of 2 that is <= |z|.
+ * Uses a geometric scale where max size equals the largest power of the multiplier that is <= |z|.
  * 
  * Note: The actual slice size is determined by alignment in generateSlicesForRange().
  * This function only provides the upper bound.
  * 
  * @param absoluteZ - Absolute z-coordinate in world space
- * @returns Maximum power-of-2 size for a slice at this z (1, 2, 4, 8, 16, 32, or 64)
+ * @param depthMultiplier - The geometric progression multiplier (default 2 for power-of-2)
+ * @returns Maximum size for a slice at this z, based on the multiplier progression (rounded to integer)
  */
-export function getSliceSizeForAbsoluteZ(absoluteZ: number): number {
+export function getSliceSizeForAbsoluteZ(absoluteZ: number, depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER): number {
   const absZ = Math.abs(absoluteZ)
   
   if (absZ < 1) return MIN_SIZE
   
-  // Use log2 to determine the largest power of 2 <= absZ
-  const log2Z = Math.log2(absZ)
-  const sizeExponent = Math.min(Math.floor(log2Z), Math.log2(MAX_SIZE))
+  // Use log to determine the largest power of multiplier <= absZ
+  const logZ = Math.log(absZ) / Math.log(depthMultiplier)
+  const sizeExponent = Math.min(Math.floor(logZ), Math.log(MAX_SIZE) / Math.log(depthMultiplier))
   
-  return Math.max(MIN_SIZE, Math.pow(2, sizeExponent))
+  // Round to nearest integer for proper alignment with integer z-coordinates
+  const rawSize = Math.pow(depthMultiplier, sizeExponent)
+  return Math.max(MIN_SIZE, Math.round(rawSize))
 }
 
 /**
@@ -79,10 +83,11 @@ export function getSliceSizeForAbsoluteZ(absoluteZ: number): number {
  * For generating contiguous slices, use generateSlicesForRange() instead.
  * 
  * @param z - Absolute z-coordinate in world space
+ * @param depthMultiplier - The geometric progression multiplier (default 2)
  * @returns The slice boundary that contains this z-coordinate
  */
-export function getSliceContainingZ(z: number): SliceBoundary {
-  const size = getSliceSizeForAbsoluteZ(z)
+export function getSliceContainingZ(z: number, depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER): SliceBoundary {
+  const size = getSliceSizeForAbsoluteZ(z, depthMultiplier)
   const depth = Math.floor(z / size) * size
   return { depth, size }
 }
@@ -96,7 +101,7 @@ export function getSliceContainingZ(z: number): SliceBoundary {
  * 
  * ## Alignment-Based Sizing
  * 
- * The actual slice size at each position is the largest power-of-2 that:
+ * The actual slice size at each position is the largest power of the multiplier that:
  * 1. Evenly divides the starting depth (depth % size == 0)
  * 2. Does not exceed the candidate size from getSliceSizeForAbsoluteZ()
  * 
@@ -110,9 +115,10 @@ export function getSliceContainingZ(z: number): SliceBoundary {
  * 
  * @param minZ - Minimum z-coordinate (absolute world space)
  * @param maxZ - Maximum z-coordinate (absolute world space)
+ * @param depthMultiplier - The geometric progression multiplier (default 2 for power-of-2)
  * @returns Array of slice boundaries sorted by depth
  */
-export function generateSlicesForRange(minZ: number, maxZ: number): SliceBoundary[] {
+export function generateSlicesForRange(minZ: number, maxZ: number, depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER): SliceBoundary[] {
   if (minZ >= maxZ) {
     return []
   }
@@ -122,7 +128,7 @@ export function generateSlicesForRange(minZ: number, maxZ: number): SliceBoundar
   
   while (currentZ < maxZ) {
     // Get the canonical slice for this position
-    const size = getSliceSizeForAbsoluteZ(currentZ)
+    const size = getSliceSizeForAbsoluteZ(currentZ, depthMultiplier)
     
     // Align to size boundary
     let depth = Math.floor(currentZ / size) * size
@@ -130,7 +136,7 @@ export function generateSlicesForRange(minZ: number, maxZ: number): SliceBoundar
     // If alignment moved us backward, find a smaller slice that starts at or after currentZ
     if (depth < currentZ) {
       // Try progressively smaller sizes until we find one that aligns correctly
-      let adjustedSize = size / 2
+      let adjustedSize = Math.max(MIN_SIZE, Math.round(size / depthMultiplier))
       let foundValidSize = false
       
       while (adjustedSize >= MIN_SIZE) {
@@ -140,7 +146,12 @@ export function generateSlicesForRange(minZ: number, maxZ: number): SliceBoundar
           foundValidSize = true
           break
         }
-        adjustedSize = adjustedSize / 2
+        const previousSize = adjustedSize
+        adjustedSize = Math.max(MIN_SIZE, Math.round(adjustedSize / depthMultiplier))
+        // Exit if size can't decrease further (prevents infinite loop at MIN_SIZE)
+        if (adjustedSize >= previousSize) {
+          break
+        }
       }
       
       // If no smaller size worked, use size 1 slice at current position
@@ -173,13 +184,14 @@ export function generateSlicesForRange(minZ: number, maxZ: number): SliceBoundar
  * @param cameraZ - Camera z position in world space
  * @param minRelativeDepth - Minimum viewing depth (relative to camera)
  * @param maxRelativeDepth - Maximum viewing depth (relative to camera)
+ * @param depthMultiplier - The geometric progression multiplier (default 2 for power-of-2)
  * @returns Array of slice boundaries sorted by depth (in absolute world coordinates)
  */
-export function selectSlices(cameraZ: number, minRelativeDepth: number, maxRelativeDepth: number): SliceBoundary[] {
+export function selectSlices(cameraZ: number, minRelativeDepth: number, maxRelativeDepth: number, depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER): SliceBoundary[] {
   // Convert relative depths to absolute world z-coordinates
   const visibleMinZ = cameraZ + minRelativeDepth
   const visibleMaxZ = cameraZ + maxRelativeDepth
   
   // Generate camera-independent slices for the visible range
-  return generateSlicesForRange(visibleMinZ, visibleMaxZ)
+  return generateSlicesForRange(visibleMinZ, visibleMaxZ, depthMultiplier)
 }

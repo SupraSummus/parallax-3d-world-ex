@@ -48,6 +48,7 @@ function App() {
   const [layers, setLayers] = useState<Layer[]>([])
   const [moveSpeed, setMoveSpeed] = useState(0.5)
   const [worldType, setWorldType] = useState<WorldType>('forest')
+  const [depthMultiplier, setDepthMultiplier] = useState(2)
 
   const requestRender = useCallback(() => {
     if (rendererRef.current) {
@@ -229,6 +230,15 @@ function App() {
     }
   }
 
+  const handleDepthMultiplierChange = (value: number[]) => {
+    const newMultiplier = value[0]
+    setDepthMultiplier(newMultiplier)
+    if (rendererRef.current) {
+      rendererRef.current.setDepthMultiplier(newMultiplier)
+      requestRender()
+    }
+  }
+
   const lastUpdate = sessionStats.lastUpdate
   const avgRenderTime = sessionStats.totalUpdates > 0 
     ? (sessionStats.totalRenderTime / sessionStats.totalUpdates).toFixed(2)
@@ -365,6 +375,19 @@ function App() {
               onValueChange={(v) => { setMoveSpeed(v[0]) }}
               min={0.1}
               max={2}
+              step={0.1}
+              className="w-full"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-muted-foreground mb-2 block">
+              Depth Multiplier: {depthMultiplier.toFixed(1)}
+            </label>
+            <Slider
+              value={[depthMultiplier]}
+              onValueChange={handleDepthMultiplierChange}
+              min={1.2}
+              max={4}
               step={0.1}
               className="w-full"
             />
