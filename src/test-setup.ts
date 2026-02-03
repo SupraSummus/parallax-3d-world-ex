@@ -6,37 +6,39 @@ afterEach(() => {
   cleanup()
 })
 
-globalThis.ResizeObserver = vi.fn().mockImplementation(() => ({
-  observe: vi.fn(),
-  unobserve: vi.fn(),
-  disconnect: vi.fn(),
-})) as unknown as typeof ResizeObserver
+globalThis.ResizeObserver = vi.fn(function(this: ResizeObserver) {
+  this.observe = vi.fn()
+  this.unobserve = vi.fn()
+  this.disconnect = vi.fn()
+}) as unknown as typeof ResizeObserver
 
-HTMLCanvasElement.prototype.getContext = vi.fn(() => ({
-  fillStyle: '',
-  strokeStyle: '',
-  lineWidth: 1,
-  fillRect: vi.fn(),
-  strokeRect: vi.fn(),
-  clearRect: vi.fn(),
-  drawImage: vi.fn(),
-  beginPath: vi.fn(),
-  closePath: vi.fn(),
-  moveTo: vi.fn(),
-  lineTo: vi.fn(),
-  arc: vi.fn(),
-  fill: vi.fn(),
-  stroke: vi.fn(),
-  save: vi.fn(),
-  restore: vi.fn(),
-  translate: vi.fn(),
-  rotate: vi.fn(),
-  scale: vi.fn(),
-  globalAlpha: 1,
-  canvas: document.createElement('canvas'),
-})) as unknown as typeof HTMLCanvasElement.prototype.getContext
+HTMLCanvasElement.prototype.getContext = vi.fn(function() {
+  return {
+    fillStyle: '',
+    strokeStyle: '',
+    lineWidth: 1,
+    fillRect: vi.fn(),
+    strokeRect: vi.fn(),
+    clearRect: vi.fn(),
+    drawImage: vi.fn(),
+    beginPath: vi.fn(),
+    closePath: vi.fn(),
+    moveTo: vi.fn(),
+    lineTo: vi.fn(),
+    arc: vi.fn(),
+    fill: vi.fn(),
+    stroke: vi.fn(),
+    save: vi.fn(),
+    restore: vi.fn(),
+    translate: vi.fn(),
+    rotate: vi.fn(),
+    scale: vi.fn(),
+    globalAlpha: 1,
+    canvas: document.createElement('canvas'),
+  }
+}) as unknown as typeof HTMLCanvasElement.prototype.getContext
 
-globalThis.requestAnimationFrame = vi.fn((cb: FrameRequestCallback) => {
+globalThis.requestAnimationFrame = vi.fn(function(cb: FrameRequestCallback) {
   setTimeout(() => { cb(performance.now()) }, 16)
   return 1
 }) as unknown as typeof requestAnimationFrame
