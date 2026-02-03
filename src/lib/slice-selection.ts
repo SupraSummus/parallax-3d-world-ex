@@ -111,7 +111,9 @@ function getSliceContainingZ(z: number, depthMultiplier: number = DEFAULT_DEPTH_
       size = testSize
     }
     const nextSize = Math.round(testSize * depthMultiplier)
-    if (nextSize <= testSize) break // Prevent infinite loop
+    // Guard against precision issues with Math.round that could cause infinite loop
+    // when depthMultiplier is close to 1 or rounding produces same/smaller value
+    if (nextSize <= testSize) break
     testSize = nextSize
   }
   
