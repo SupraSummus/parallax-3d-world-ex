@@ -1,0 +1,21 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "src/main.tsx!",
+    "src/**/*.test.{ts,tsx}"
+  ],
+  "project": [
+    "src/**/*.{ts,tsx}!"
+  ],
+  "ignore": [
+    "src/vite-end.d.ts"
+  ],
+  "ignoreBinaries": [
+    "fuser"
+  ],
+  "ignoreDependencies": [
+    "@vitest/coverage-v8",
+    "tw-animate-css",
+    "@radix-ui/colors"
+  ]
+}
