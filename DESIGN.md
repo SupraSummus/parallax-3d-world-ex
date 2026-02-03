@@ -2,116 +2,107 @@
 
 ## Overview
 
-The parallax rendering engine uses two distinct mechanisms that must be **decoupled** for smooth movement:
+The parallax rendering engine uses **two distinct mechanisms** that work together:
 
-1. **World Slicing** - Partitions the 3D world into layers at fixed z-boundaries
-2. **View Positioning** - Positions layers on screen based on camera position
+### Mechanism 1: Camera-Independent World Slicing
+- Slices have **FIXED positions in absolute world coordinates**
+- Slice sizes are determined by **absolute z-coordinate** (geometric progression)
+- Slices are rendered **FLAT (orthographic)** without any camera/perspective info
+- Slice boundaries are globally consistent and never change
+- Slices exist lazily - only rendered when requested by the camera
 
-## Problem Statement
-
-Previously, these mechanisms were coupled: layer boundaries were calculated relative to the camera z-position. This caused layers to "jump" when moving forward/backward because:
-- Layer boundaries shifted with camera movement
-- Layers would split, merge, or suddenly appear at different z-positions
-- The result was jerky/stepwise motion in the z-direction
-
-Sideways movement (x/y) was already smooth because layers only needed repositioning, not recalculation.
+### Mechanism 2: Camera-Dependent Selection & Compositing
+- Camera determines **WHICH slices are visible** (selection based on viewing range)
+- Selected slices are rendered lazily when first requested
+- **Compositing applies parallax effect** using camera position
+- Closer layers move more with camera movement, creating depth perception
 
 ## Design Principles
 
-### Separation of Concerns
+### World Slicing (Mechanism 1 - Camera-Independent)
+
+Slices are defined based on **absolute z-coordinate** using geometric progression:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     World Slicing                                │
-│  - Fixed absolute z-boundaries in world space                    │
-│  - Power-of-2 sizes aligned to world coordinates                 │
-│  - Independent of camera position                                │
-│  - Cached and reused across frames                               │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     View Positioning                             │
-│  - Camera determines which layers are visible                    │
-│  - Parallax offset calculated per layer                          │
-│  - Smooth interpolation for all movement directions              │
-│  - Only regenerates when layers enter/exit view                  │
-└─────────────────────────────────────────────────────────────────┘
+World Z:  0    1    2    4         8                16               32
+          │────│────│────│─────────│─────────────────│─────────────────│...
+          │ 1  │ 1  │ 2  │    4    │        8        │       16        │
+          └────┴────┴────┴─────────┴─────────────────┴─────────────────┘
+          Geometric slice sizes (size = largest power of 2 ≤ |z|)
 ```
 
-### World Slicing (Camera-Independent)
+Key properties:
+- Slice size = largest power of 2 ≤ |absolute z|
+- Slices are aligned to their size boundaries (z=8 has size-8 slice starting at 8)
+- Capped at maxSize (64) to prevent extremely large slices
+- **Same z-coordinate always belongs to same slice regardless of camera position**
+- Slices are rendered flat/orthographic (no perspective)
 
-Layers are defined in **absolute world coordinates** using **geometric progression**:
+### Selection & Compositing (Mechanism 2 - Camera-Dependent)
 
-```
-World Z:  0    1    2    4         8                16
-          │────│────│────│─────────│─────────────────│...
-          │ 1  │ 1  │ 2  │    4    │        8        │
-          └────┴────┴────┴─────────┴─────────────────┘
-          Geometric layer sizes (each slice size = largest power of 2 ≤ z)
-```
+Given fixed world slices:
+1. **Selection**: Camera position determines visible range: `[camera.z + minDepth, camera.z + maxDepth]`
+2. **Lazy Rendering**: Slices overlapping visible range are rendered (flat) on demand
+3. **Compositing**: Rendered slices are composited with parallax offset based on camera position
+4. **Parallax Effect**: `offset = -camera.xy * scale(viewingDistance)` - closer layers move more
 
-The slicing algorithm achieves **O(log n) slices for distance n**:
-1. Starts from a fixed minimum z-value (e.g., 0 or world minimum)
-2. Uses geometric power-of-2 sizes where slice size = largest power of 2 ≤ |z|
-3. Each slice covers a range that doubles in size:
-   - z=1 → size 1 (covers 1-2)
-   - z=2 → size 2 (covers 2-4)
-   - z=4 → size 4 (covers 4-8)
-   - z=8 → size 8 (covers 8-16)
-   - etc.
-4. Aligns boundaries to size multiples (e.g., size-8 layers start at z=0, 8, 16...)
-5. Caps at maxSize (64) to prevent extremely large slices
-6. **Does NOT depend on camera position**
+### Slice Progression Example
 
-This geometric progression means covering distance n requires only ~log₂(n) slices,
-plus a linear term for distances beyond the maxSize cap.
+For any camera position, world z-coordinates map to consistent slices:
 
-### View Positioning (Camera-Dependent)
-
-Given fixed world layers, the view positioning:
-1. Determines visible range: `[camera.z + minDepth, camera.z + maxDepth]`
-2. Selects layers that overlap with visible range
-3. Calculates parallax offset for each layer based on camera position
-4. Layers smoothly slide as camera moves in any direction
+| World Z Range | Size | Slice Start |
+|--------------|------|-------------|
+| [0, 1)       | 1    | 0           |
+| [1, 2)       | 1    | 1           |
+| [2, 4)       | 2    | 2           |
+| [4, 8)       | 4    | 4           |
+| [8, 16)      | 8    | 8           |
+| [16, 32)     | 16   | 16          |
+| [32, 64)     | 32   | 32          |
+| [64, 128)    | 64   | 64          |
+| [128, 192)   | 64   | 128 (capped)|
 
 ### Layer Lifecycle
 
 ```
-Layer State: INACTIVE → VISIBLE → RENDERING → CACHED → VISIBLE → INACTIVE
-                 │          │          │          │          │
-                 └──────────┼──────────┼──────────┼──────────┘
-                         (enters view)       (exits view)
+Layer State: REQUESTED → FLAT_RENDER → CACHED → COMPOSITED
+                 │            │           │          │
+      (Camera selects) (Orthographic) (Reused)  (Parallax applied)
 ```
 
-- **INACTIVE**: Layer exists in world but not needed for current view
-- **VISIBLE**: Layer enters visible range, needs to be rendered
-- **RENDERING**: Voxels are projected and cached to off-screen canvas
-- **CACHED**: Layer content is reused, only position updates
-- **On z-movement**: Different layers become visible, but visible ones stay cached
+- **REQUESTED**: Camera's visible range overlaps this slice
+- **FLAT_RENDER**: Slice voxels rendered orthographically (camera-independent)
+- **CACHED**: Rendered slice content reused across frames
+- **COMPOSITED**: Slice drawn to screen with parallax offset based on camera
 
 ### Cache Strategy
 
-| Movement Type | Cache Behavior |
-|---------------|----------------|
-| X/Y movement  | All layers cached, only parallax offset changes |
-| Z movement (small) | Most layers cached, edge layers may enter/exit |
-| Z movement (large) | More layers invalidated, but core layers reused |
+| Movement Type | Slice Behavior | Cache Behavior |
+|---------------|----------------|----------------|
+| X/Y movement  | Same slices visible | Cached, only parallax offset changes |
+| Z movement (small) | Some slices enter/exit view | Cached slices reused, new ones rendered |
+| Z movement (large) | Many slices enter/exit view | More new slices rendered |
 
-### Implementation Notes
+### Key Insight: Why Camera-Independent Slicing?
 
-1. `selectSlices(cameraZ, minRelativeDepth, maxRelativeDepth)` - Uses cameraZ to compute visible range, but layer boundaries are aligned to absolute world coordinates
-2. Layer boundaries are globally consistent across frames
-3. `updateLayers()` determines visibility based on camera.z
-4. Cache invalidation only when:
-   - World regenerates
-   - Canvas resizes
-   - Layer enters view for first time
+If slices moved with camera (viewing-distance-based), objects would "jump" between different-sized slices as camera moves. With camera-independent slicing:
+
+- World z=10 is **always** in the slice [8, 16) with size 8
+- Moving camera toward z=10 doesn't change which slice contains it
+- The parallax effect during compositing creates proper depth perception
+- No visual discontinuities during smooth camera movement
+
+### Implementation Functions
+
+1. `getSliceSizeForAbsoluteZ(z)` - Returns power-of-2 size based on absolute z
+2. `getSliceContainingZ(z)` - Returns the canonical slice for a z-coordinate
+3. `generateSlicesForRange(minZ, maxZ)` - Generates camera-independent slices
+4. `selectSlices(cameraZ, minRelativeDepth, maxRelativeDepth)` - Camera selects visible slices
 
 ## Benefits
 
-- **O(log n) efficiency**: Covering distance n requires only ~log₂(n) slices due to geometric progression
-- **Smooth z-movement**: Layers don't jump because boundaries are fixed
-- **Better caching**: Same layers reused across frames
-- **Predictable behavior**: Layer structure is deterministic
-- **Performance**: Less layer regeneration overall
+- **O(log n) efficiency**: Covering distance n requires only ~log₂(n) slices
+- **Stable boundaries**: Same z always in same slice, no visual jumping
+- **Better caching**: Slices reused when camera moves laterally
+- **Predictable behavior**: Slice structure is deterministic and globally consistent
+- **Proper parallax**: Compositing stage applies depth-based movement

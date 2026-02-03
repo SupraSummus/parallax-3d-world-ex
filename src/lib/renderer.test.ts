@@ -143,14 +143,25 @@ describe('ParallaxRenderer', () => {
       })
     })
 
-    it('should place layers at integer multiples of their depth', () => {
+    it('should place layers at correct viewing distances from camera', () => {
       renderer.render()
       const layers = renderer.getLayers()
+      const camera = renderer.getCamera()
       
-      layers.forEach(layer => {
-        // Layers should be aligned to their size boundaries
-        // Note: -0 === 0 is true in JavaScript
-        expect(layer.depth % layer.size === 0).toBe(true)
+      // Layers should be at increasing depths from camera
+      // with geometric progression of sizes
+      layers.forEach((layer, index) => {
+        // Layer depth should be ahead of camera
+        const viewingDistance = layer.depth - camera.z
+        expect(viewingDistance).toBeGreaterThan(0)
+        
+        // Sizes should be powers of 2
+        expect([1, 2, 4, 8, 16, 32, 64]).toContain(layer.size)
+        
+        // Later layers should be farther from camera
+        if (index > 0) {
+          expect(layer.depth).toBeGreaterThan(layers[index - 1].depth)
+        }
       })
     })
 

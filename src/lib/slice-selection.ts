@@ -1,96 +1,156 @@
 /**
  * Slice Selection Module
  * 
- * This module provides a function to select contiguous slices for rendering a 3D world
- * in a parallax engine. Slices are selected such that:
- * 1. They form contiguous z coverage with no gaps
- * 2. Smaller slices (more detail) are used for near viewing distances
- * 3. Larger slices (less detail) are used for far viewing distances
- * 4. Slice sizes are powers of 2 and aligned to their size boundaries
- * 5. Slices are defined in ABSOLUTE world coordinates (camera-independent)
- * 6. **O(log n) slices are used to cover distance n** - geometric progression ensures
- *    that each slice doubles in size, so covering distance n requires only ~log2(n) slices
+ * This module implements a two-mechanism rendering system:
  * 
- * The key insight is that slice boundaries are FIXED in world space,
- * not dependent on camera position. This ensures smooth movement in all directions.
- * The camera only determines WHICH slices are visible, not WHERE their boundaries are.
+ * ## Mechanism 1: Camera-Independent World Slicing
+ * - Slices have FIXED positions in absolute world coordinates
+ * - Slice sizes are determined by absolute z-coordinate (geometric progression)
+ * - Slices are rendered FLAT (orthographic) without any camera/perspective info
+ * - Slice boundaries are globally consistent and never change
  * 
- * The geometric progression works as follows:
- * - Slice at z=1 has size 1 (covers 1-2)
- * - Slice at z=2 has size 2 (covers 2-4)
- * - Slice at z=4 has size 4 (covers 4-8)
- * - Slice at z=8 has size 8 (covers 8-16)
+ * ## Mechanism 2: Camera-Dependent Selection & Compositing
+ * - Camera determines WHICH slices are visible (selection based on viewing range)
+ * - Selected slices are rendered lazily when requested
+ * - Compositing applies parallax effect using camera position
+ * 
+ * The geometric progression for ABSOLUTE z-coordinates:
+ * - z ∈ [1, 2): size 1
+ * - z ∈ [2, 4): size 2
+ * - z ∈ [4, 8): size 4
+ * - z ∈ [8, 16): size 8
  * - etc.
  * 
- * This is bounded by a maxSize (currently 64) to prevent extremely large slices.
+ * This achieves O(log n) slices for distance n while maintaining camera-independence.
  */
 
 export interface SliceBoundary {
-  /** The starting z-coordinate in world space (absolute) */
+  /** The starting z-coordinate in world space (absolute, camera-independent) */
   depth: number
   /** The thickness of this slice in z-units */
   size: number
 }
 
+const MIN_SIZE = 1
+const MAX_SIZE = 64
+
 /**
  * Determines the appropriate slice size for a given absolute z-coordinate.
- * Uses a geometric scale where slice size equals the largest power of 2 that is <= absZ.
+ * Uses a geometric scale where slice size equals the largest power of 2 that is <= |z|.
  * 
- * This achieves O(log n) slices for distance n because:
- * - Slice at z=1 has size 1 (covers 1-2)
- * - Slice at z=2 has size 2 (covers 2-4)
- * - Slice at z=4 has size 4 (covers 4-8)
- * - Slice at z=8 has size 8 (covers 8-16)
- * - etc.
- * 
- * Each slice doubles in size and covers double the distance, creating a geometric series.
+ * This is CAMERA-INDEPENDENT - the same z-coordinate always produces the same size.
  * 
  * @param absoluteZ - Absolute z-coordinate in world space
- * @returns Power-of-2 size for the slice
+ * @returns Power-of-2 size for the slice (1, 2, 4, 8, 16, 32, or 64)
  */
-function getSliceSizeForAbsoluteZ(absoluteZ: number): number {
-  const minSize = 1
-  const maxSize = 64
-  
-  // Use absolute value to handle negative z coordinates
+export function getSliceSizeForAbsoluteZ(absoluteZ: number): number {
   const absZ = Math.abs(absoluteZ)
   
-  if (absZ < 1) return minSize
+  if (absZ < 1) return MIN_SIZE
   
   // Use log2 to determine the largest power of 2 <= absZ
-  // This gives geometric progression: size = 2^floor(log2(absZ))
-  // Achieving O(log n) slices for distance n
   const log2Z = Math.log2(absZ)
-  const sizeExponent = Math.min(Math.floor(log2Z), Math.log2(maxSize))
+  const sizeExponent = Math.min(Math.floor(log2Z), Math.log2(MAX_SIZE))
   
-  return Math.max(minSize, Math.pow(2, sizeExponent))
+  return Math.max(MIN_SIZE, Math.pow(2, sizeExponent))
 }
 
 /**
- * Rounds a position down to the nearest boundary aligned to the given size.
+ * Generates the canonical slice boundary for a given z-coordinate.
+ * Returns the slice that CONTAINS this z-coordinate.
  * 
- * @param z - Position to round
- * @param size - Size to align to
- * @returns Aligned position
+ * Slices are aligned to their size boundaries in world space.
+ * For example:
+ * - Size-1 slices start at ..., -2, -1, 0, 1, 2, ...
+ * - Size-2 slices start at ..., -4, -2, 0, 2, 4, ...
+ * - Size-4 slices start at ..., -8, -4, 0, 4, 8, ...
+ * - etc.
+ * 
+ * @param z - Absolute z-coordinate in world space
+ * @returns The slice boundary that contains this z-coordinate
  */
-function alignToSize(z: number, size: number): number {
-  return Math.floor(z / size) * size
+export function getSliceContainingZ(z: number): SliceBoundary {
+  const size = getSliceSizeForAbsoluteZ(z)
+  const depth = Math.floor(z / size) * size
+  return { depth, size }
 }
 
 /**
- * Selects slices that cover a z range with contiguous coverage.
+ * Generates all canonical slice boundaries for a given z range.
  * 
- * IMPORTANT: Slice boundaries are FIXED in absolute world coordinates.
- * The same z-coordinate will always be in the same slice, regardless of camera position.
- * The camera position only determines which slices are visible.
+ * This is the CAMERA-INDEPENDENT slicing mechanism. Slice boundaries are fixed
+ * in world space and do not depend on camera position. The camera only determines
+ * WHICH slices are selected for rendering.
  * 
- * The algorithm:
- * 1. Convert relative viewing depths to absolute world z-coordinates
- * 2. For each position, determine slice size based on the ABSOLUTE z-coordinate
- * 3. Align slices to their size boundaries (in absolute coordinates)
- * 4. This ensures layer boundaries don't "jump" when camera moves
+ * The algorithm ensures:
+ * 1. Contiguous coverage with no gaps
+ * 2. No overlapping slices
+ * 3. Slices aligned to their size boundaries
+ * 4. Consistent boundaries regardless of how the function is called
  * 
- * @param cameraZ - Camera z position (used to compute visible range)
+ * @param minZ - Minimum z-coordinate (absolute world space)
+ * @param maxZ - Maximum z-coordinate (absolute world space)
+ * @returns Array of slice boundaries sorted by depth
+ */
+export function generateSlicesForRange(minZ: number, maxZ: number): SliceBoundary[] {
+  if (minZ >= maxZ) {
+    return []
+  }
+
+  const slices: SliceBoundary[] = []
+  let currentZ = minZ
+  
+  while (currentZ < maxZ) {
+    // Get the canonical slice for this position
+    const size = getSliceSizeForAbsoluteZ(currentZ)
+    
+    // Align to size boundary
+    let depth = Math.floor(currentZ / size) * size
+    
+    // If alignment moved us backward, find a smaller slice that starts at or after currentZ
+    if (depth < currentZ) {
+      // Try progressively smaller sizes until we find one that aligns correctly
+      let adjustedSize = size / 2
+      let foundValidSize = false
+      
+      while (adjustedSize >= MIN_SIZE) {
+        const alignedDepth = Math.floor(currentZ / adjustedSize) * adjustedSize
+        if (alignedDepth >= currentZ) {
+          depth = alignedDepth
+          foundValidSize = true
+          break
+        }
+        adjustedSize = adjustedSize / 2
+      }
+      
+      // If no smaller size worked, use size 1 slice at current position
+      if (!foundValidSize) {
+        depth = Math.floor(currentZ)
+        adjustedSize = MIN_SIZE
+      }
+      
+      slices.push({ depth, size: adjustedSize })
+      currentZ = depth + adjustedSize
+    } else {
+      slices.push({ depth, size })
+      currentZ = depth + size
+    }
+  }
+
+  return slices.sort((a, b) => a.depth - b.depth)
+}
+
+/**
+ * Selects slices that are visible from the camera's perspective.
+ * 
+ * This is the CAMERA-DEPENDENT selection mechanism:
+ * 1. Computes the visible range in absolute world coordinates
+ * 2. Selects slices from the canonical world slicing that overlap with visible range
+ * 
+ * The slices themselves are camera-independent (fixed world positions).
+ * Only the SELECTION depends on camera position.
+ * 
+ * @param cameraZ - Camera z position in world space
  * @param minRelativeDepth - Minimum viewing depth (relative to camera)
  * @param maxRelativeDepth - Maximum viewing depth (relative to camera)
  * @returns Array of slice boundaries sorted by depth (in absolute world coordinates)
@@ -100,49 +160,6 @@ export function selectSlices(cameraZ: number, minRelativeDepth: number, maxRelat
   const visibleMinZ = cameraZ + minRelativeDepth
   const visibleMaxZ = cameraZ + maxRelativeDepth
   
-  if (visibleMinZ >= visibleMaxZ) {
-    return []
-  }
-
-  const slices: SliceBoundary[] = []
-  let currentZ = visibleMinZ
-  
-  // Use a Set to avoid duplicate slices at same depth
-  const usedDepths = new Set<number>()
-
-  while (currentZ < visibleMaxZ) {
-    // Get appropriate size based on ABSOLUTE z-coordinate
-    // This ensures consistent layer boundaries regardless of camera position
-    let size = getSliceSizeForAbsoluteZ(currentZ)
-    
-    // Align the start position to the slice size boundary in ABSOLUTE world coordinates
-    // This is the key: boundaries are fixed in world space
-    let depth = alignToSize(currentZ, size)
-    
-    // If alignment moved us backward, we need to ensure we don't create gaps
-    if (depth < currentZ) {
-      // Find a smaller size that aligns correctly
-      while (size > 1 && alignToSize(currentZ, size) < currentZ) {
-        size = size / 2
-      }
-      depth = alignToSize(currentZ, size)
-    }
-    
-    // Ensure we're making forward progress
-    if (depth < currentZ) {
-      size = 1
-      depth = Math.floor(currentZ)
-    }
-    
-    // Only add if this depth hasn't been used
-    if (!usedDepths.has(depth)) {
-      slices.push({ depth, size })
-      usedDepths.add(depth)
-    }
-    
-    // Move to the end of this slice
-    currentZ = depth + size
-  }
-
-  return slices.sort((a, b) => a.depth - b.depth)
+  // Generate camera-independent slices for the visible range
+  return generateSlicesForRange(visibleMinZ, visibleMaxZ)
 }
