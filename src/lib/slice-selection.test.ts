@@ -487,8 +487,8 @@ describe('Slice Selection', () => {
 
     it('should get denser (more slices) near z=0 than far from z=0', () => {
       // Near z=0 should have more detail (smaller slices)
-      const nearSlices = selectSlices(0, 1, 16)   // 15 units near z=0
-      const farSlices = selectSlices(99, 1, 16) // 15 units far from z=0 (100 to 115)
+      const nearSlices = selectSlices(0, 1, 16)   // 15 units near z=0 (1 to 16)
+      const farSlices = selectSlices(100, 0, 15) // 15 units far from z=0 (100 to 115)
       
       // Near slices have smaller average size
       const avgNearSize = nearSlices.reduce((s, x) => s + x.size, 0) / nearSlices.length
