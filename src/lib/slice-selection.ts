@@ -73,6 +73,55 @@ function getSliceSizeForAbsoluteZ(absoluteZ: number, depthMultiplier: number = D
 }
 
 /**
+ * Gets the canonical slice that contains a given z-coordinate.
+ * 
+ * The canonical slice for a depth is determined by the largest power-of-2 (or power
+ * of depthMultiplier) that divides the starting depth, subject to:
+ * 1. The size must be <= MAX_SIZE
+ * 2. The size must be <= the candidate size for that depth (from getSliceSizeForAbsoluteZ)
+ * 
+ * This ensures camera-independent slicing: the same z-coordinate is always in the
+ * same slice regardless of camera position.
+ * 
+ * @param z - A z-coordinate in world space (can be fractional)
+ * @param depthMultiplier - The geometric progression multiplier (default 2 for power-of-2)
+ * @returns The canonical slice boundary containing this z
+ */
+function getSliceContainingZ(z: number, depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER): SliceBoundary {
+  // Round to integer for alignment calculations
+  const intZ = Math.floor(z)
+  
+  // Special case: near origin, use size 1
+  if (Math.abs(intZ) < 1) {
+    return { depth: intZ, size: MIN_SIZE }
+  }
+  
+  // Get the candidate size based on absolute position
+  const candidateSize = getSliceSizeForAbsoluteZ(intZ, depthMultiplier)
+  
+  // Find the largest power of depthMultiplier that:
+  // 1. Evenly divides intZ
+  // 2. Is <= candidateSize
+  // 3. Is <= MAX_SIZE
+  let size = MIN_SIZE
+  let testSize = MIN_SIZE
+  
+  while (testSize <= candidateSize && testSize <= MAX_SIZE) {
+    if (intZ % testSize === 0) {
+      size = testSize
+    }
+    const nextSize = Math.round(testSize * depthMultiplier)
+    if (nextSize <= testSize) break // Prevent infinite loop
+    testSize = nextSize
+  }
+  
+  // The slice starts at the aligned boundary
+  const depth = Math.floor(intZ / size) * size
+  
+  return { depth, size }
+}
+
+/**
  * Generates all canonical slice boundaries for a given z range.
  * 
  * This is the CAMERA-INDEPENDENT slicing mechanism. Slice boundaries are fixed
@@ -81,11 +130,11 @@ function getSliceSizeForAbsoluteZ(absoluteZ: number, depthMultiplier: number = D
  * 
  * ## Alignment-Based Sizing
  * 
- * The actual slice size at each position is the largest power of the multiplier that:
- * 1. Evenly divides the starting depth (depth % size == 0)
- * 2. Does not exceed the candidate size from getSliceSizeForAbsoluteZ()
- * 
- * This ensures proper alignment while respecting the z-based upper bound.
+ * Each slice's size is determined by its starting depth's alignment - the largest
+ * power of depthMultiplier that evenly divides the depth. This ensures:
+ * 1. A given z-coordinate is ALWAYS in the same slice regardless of camera position
+ * 2. Slice boundaries are globally consistent
+ * 3. No visual jumping when camera moves
  * 
  * The algorithm ensures:
  * 1. Contiguous coverage with no gaps
@@ -104,47 +153,24 @@ function generateSlicesForRange(minZ: number, maxZ: number, depthMultiplier: num
   }
 
   const slices: SliceBoundary[] = []
-  let currentZ = minZ
   
-  while (currentZ < maxZ) {
-    // Get the canonical slice for this position
-    const size = getSliceSizeForAbsoluteZ(currentZ, depthMultiplier)
+  // Find the canonical slice containing minZ
+  let currentSlice = getSliceContainingZ(minZ, depthMultiplier)
+  
+  // Add slices until we cover maxZ
+  while (currentSlice.depth < maxZ) {
+    slices.push(currentSlice)
     
-    // Align to size boundary
-    let depth = Math.floor(currentZ / size) * size
+    // Move to the next slice starting at the end of this one
+    const nextZ = currentSlice.depth + currentSlice.size
+    if (nextZ >= maxZ) break
     
-    // If alignment moved us backward, find a smaller slice that starts at or after currentZ
-    if (depth < currentZ) {
-      // Try progressively smaller sizes until we find one that aligns correctly
-      let adjustedSize = Math.max(MIN_SIZE, Math.round(size / depthMultiplier))
-      let foundValidSize = false
-      
-      while (adjustedSize >= MIN_SIZE) {
-        const alignedDepth = Math.floor(currentZ / adjustedSize) * adjustedSize
-        if (alignedDepth >= currentZ) {
-          depth = alignedDepth
-          foundValidSize = true
-          break
-        }
-        const previousSize = adjustedSize
-        adjustedSize = Math.max(MIN_SIZE, Math.round(adjustedSize / depthMultiplier))
-        // Exit if size can't decrease further (prevents infinite loop at MIN_SIZE)
-        if (adjustedSize >= previousSize) {
-          break
-        }
-      }
-      
-      // If no smaller size worked, use size 1 slice at current position
-      if (!foundValidSize) {
-        depth = Math.floor(currentZ)
-        adjustedSize = MIN_SIZE
-      }
-      
-      slices.push({ depth, size: adjustedSize })
-      currentZ = depth + adjustedSize
-    } else {
-      slices.push({ depth, size })
-      currentZ = depth + size
+    currentSlice = getSliceContainingZ(nextZ, depthMultiplier)
+    
+    // Safety check to prevent infinite loops
+    if (currentSlice.depth < nextZ) {
+      // This shouldn't happen, but if it does, force forward progress
+      currentSlice = { depth: nextZ, size: MIN_SIZE }
     }
   }
 

@@ -596,4 +596,97 @@ describe('Slice Selection', () => {
       expect(slicesDefault).toEqual(slicesExplicit)
     })
   })
+
+  describe('Camera-independent slice size consistency (bug fix)', () => {
+    it('should produce same slice size for same depth regardless of visible range start', () => {
+      // This test verifies the fix for the bug where slices at the same depth
+      // could have different sizes depending on where the visible range starts.
+      // For example, depth=-30 should always have size=2 (since -30 % 2 == 0)
+      
+      // Camera at different positions that include depth -30 in visible range
+      const slices1 = selectSlices(-30, 1, 200)  // visible range: -29 to 170
+      const slices2 = selectSlices(-30.5, 1, 200) // visible range: -29.5 to 169.5
+      const slices3 = selectSlices(-31, 1, 200)   // visible range: -30 to 169
+      
+      // Find slice at depth -30 in each result
+      const slice1at30 = slices1.find(s => s.depth === -30)
+      const slice2at30 = slices2.find(s => s.depth === -30)
+      const slice3at30 = slices3.find(s => s.depth === -30)
+      
+      // slices1 starts at -29, so -30 should not be in the range
+      expect(slice1at30).toBeUndefined()
+      
+      // The slice at -30 should always have size 2 when it exists
+      // (because -30 % 2 == 0, but -30 % 4 != 0)
+      if (slice2at30) {
+        expect(slice2at30.size).toBe(2)
+      }
+      if (slice3at30) {
+        expect(slice3at30.size).toBe(2)
+      }
+      
+      // If both exist, they should have the same size
+      if (slice2at30 && slice3at30) {
+        expect(slice2at30.size).toBe(slice3at30.size)
+      }
+    })
+
+    it('should not produce size mismatches during camera movement', () => {
+      // Simulate camera movement and verify no size mismatches occur
+      // when the same depth appears in the visible range at different positions
+      
+      interface Layer { depth: number; size: number }
+      const layers = new Map<number, Layer>()
+      
+      // Move camera from z=-30 to z=-100
+      for (let cameraZ = -30; cameraZ >= -100; cameraZ -= 0.5) {
+        const boundaries = selectSlices(cameraZ, 1, 200)
+        const requiredKeys = boundaries.map(b => b.depth)
+        
+        // Delete old layers
+        const existingKeys = Array.from(layers.keys())
+        for (const key of existingKeys) {
+          if (!requiredKeys.includes(key)) {
+            layers.delete(key)
+          }
+        }
+        
+        // Check for size mismatches and add new layers
+        for (const item of boundaries) {
+          const existing = layers.get(item.depth)
+          if (!existing) {
+            layers.set(item.depth, { depth: item.depth, size: item.size })
+          } else {
+            // This should never happen after the fix
+            expect(existing.size).toBe(item.size)
+          }
+        }
+      }
+    })
+
+    it('should produce consistent sizes for negative z values', () => {
+      // Test specific negative z values that were problematic in the original bug
+      const slices = selectSlices(-119.5, 0.5, 200)
+      
+      // Find specific slices and verify their sizes
+      const sliceAt112 = slices.find(s => s.depth === -112)
+      const sliceAt96 = slices.find(s => s.depth === -96)
+      const sliceAt64 = slices.find(s => s.depth === -64)
+      
+      // -112 % 16 == 0, so size should be 16
+      if (sliceAt112) {
+        expect(sliceAt112.size).toBe(16)
+      }
+      
+      // -96 % 32 == 0, so size should be 32
+      if (sliceAt96) {
+        expect(sliceAt96.size).toBe(32)
+      }
+      
+      // -64 % 64 == 0, so size should be 64
+      if (sliceAt64) {
+        expect(sliceAt64.size).toBe(64)
+      }
+    })
+  })
 })
