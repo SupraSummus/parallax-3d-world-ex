@@ -8,10 +8,21 @@
  * 3. Larger slices (less detail) are used for far viewing distances
  * 4. Slice sizes are powers of 2 and aligned to their size boundaries
  * 5. Slices are defined in ABSOLUTE world coordinates (camera-independent)
+ * 6. **O(log n) slices are used to cover distance n** - geometric progression ensures
+ *    that each slice doubles in size, so covering distance n requires only ~log2(n) slices
  * 
  * The key insight is that slice boundaries are FIXED in world space,
  * not dependent on camera position. This ensures smooth movement in all directions.
  * The camera only determines WHICH slices are visible, not WHERE their boundaries are.
+ * 
+ * The geometric progression works as follows:
+ * - Slice at z=1 has size 1 (covers 1-2)
+ * - Slice at z=2 has size 2 (covers 2-4)
+ * - Slice at z=4 has size 4 (covers 4-8)
+ * - Slice at z=8 has size 8 (covers 8-16)
+ * - etc.
+ * 
+ * This is bounded by a maxSize (currently 64) to prevent extremely large slices.
  */
 
 export interface SliceBoundary {
@@ -23,7 +34,16 @@ export interface SliceBoundary {
 
 /**
  * Determines the appropriate slice size for a given absolute z-coordinate.
- * Uses a logarithmic scale to assign larger slices to larger z values.
+ * Uses a geometric scale where slice size equals the largest power of 2 that is <= absZ.
+ * 
+ * This achieves O(log n) slices for distance n because:
+ * - Slice at z=1 has size 1 (covers 1-2)
+ * - Slice at z=2 has size 2 (covers 2-4)
+ * - Slice at z=4 has size 4 (covers 4-8)
+ * - Slice at z=8 has size 8 (covers 8-16)
+ * - etc.
+ * 
+ * Each slice doubles in size and covers double the distance, creating a geometric series.
  * 
  * @param absoluteZ - Absolute z-coordinate in world space
  * @returns Power-of-2 size for the slice
@@ -37,11 +57,11 @@ function getSliceSizeForAbsoluteZ(absoluteZ: number): number {
   
   if (absZ < 1) return minSize
   
-  // Use log2 to determine the appropriate power of 2
-  // This creates a progression: 1, 2, 4, 8, 16, 32, 64
-  // Slices get larger as we move away from z=0
+  // Use log2 to determine the largest power of 2 <= absZ
+  // This gives geometric progression: size = 2^floor(log2(absZ))
+  // Achieving O(log n) slices for distance n
   const log2Z = Math.log2(absZ)
-  const sizeExponent = Math.min(Math.floor(log2Z / 2), Math.log2(maxSize))
+  const sizeExponent = Math.min(Math.floor(log2Z), Math.log2(maxSize))
   
   return Math.max(minSize, Math.pow(2, sizeExponent))
 }

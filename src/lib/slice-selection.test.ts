@@ -206,8 +206,9 @@ describe('Slice Selection', () => {
         }
       })
       
-      // There should be many common layers between the two camera positions
-      expect(commonLayers).toBeGreaterThan(10)
+      // There should be common layers between the two camera positions
+      // With O(log n) geometric progression, we have fewer but larger slices
+      expect(commonLayers).toBeGreaterThanOrEqual(5)
     })
 
     it('should produce layers at fixed absolute z coordinates', () => {
@@ -238,6 +239,49 @@ describe('Slice Selection', () => {
           }
         }
       })
+    })
+  })
+
+  describe('O(log n) slice count', () => {
+    it('should use O(log n) slices for distance n (geometric progression)', () => {
+      // For distance n, the number of slices should be roughly proportional to log2(n)
+      // due to the geometric progression where each slice doubles in size
+      
+      // Test with various distances
+      const testCases = [
+        { distance: 100, expectedMaxSlices: 20 },   // log2(100) ≈ 6.6, with maxSize cap
+        { distance: 1000, expectedMaxSlices: 25 },  // log2(1000) ≈ 10, with maxSize cap
+        { distance: 10000, expectedMaxSlices: 170 }, // log2(10000) ≈ 13, with maxSize cap
+      ]
+      
+      testCases.forEach(({ distance, expectedMaxSlices }) => {
+        const slices = selectSlices(0, 1, distance)
+        
+        // The slice count should be bounded by O(log n) plus a linear term 
+        // for the maxSize-capped portion
+        expect(slices.length).toBeLessThanOrEqual(expectedMaxSlices)
+        expect(slices.length).toBeGreaterThan(0)
+      })
+    })
+
+    it('should use fewer slices than a linear slicing approach', () => {
+      // For distance 200, a linear approach with size=1 would need 199 slices
+      // Our geometric approach should use significantly fewer
+      const slices = selectSlices(0, 1, 200)
+      
+      // Linear approach would use ~199 slices
+      // Geometric approach should use much less
+      expect(slices.length).toBeLessThan(50)
+    })
+
+    it('should show geometric progression of slice sizes', () => {
+      const slices = selectSlices(0, 1, 100)
+      
+      // Check that early slices follow geometric progression: 1, 2, 4, 8, 16, 32, 64
+      const expectedSizes = [1, 2, 4, 8, 16, 32, 64]
+      const actualSizes = slices.slice(0, expectedSizes.length).map(s => s.size)
+      
+      expect(actualSizes).toEqual(expectedSizes)
     })
   })
 })

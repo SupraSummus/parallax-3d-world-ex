@@ -41,21 +41,31 @@ Sideways movement (x/y) was already smooth because layers only needed reposition
 
 ### World Slicing (Camera-Independent)
 
-Layers are defined in **absolute world coordinates**:
+Layers are defined in **absolute world coordinates** using **geometric progression**:
 
 ```
 World Z:  0    1    2    4         8                16
           │────│────│────│─────────│─────────────────│...
           │ 1  │ 1  │ 2  │    4    │        8        │
           └────┴────┴────┴─────────┴─────────────────┘
-          Progressive layer sizes (powers of 2)
+          Geometric layer sizes (each slice size = largest power of 2 ≤ z)
 ```
 
-The slicing algorithm:
+The slicing algorithm achieves **O(log n) slices for distance n**:
 1. Starts from a fixed minimum z-value (e.g., 0 or world minimum)
-2. Uses progressive power-of-2 sizes as z increases
-3. Aligns boundaries to size multiples (e.g., size-8 layers start at z=0, 8, 16...)
-4. **Does NOT depend on camera position**
+2. Uses geometric power-of-2 sizes where slice size = largest power of 2 ≤ |z|
+3. Each slice covers a range that doubles in size:
+   - z=1 → size 1 (covers 1-2)
+   - z=2 → size 2 (covers 2-4)
+   - z=4 → size 4 (covers 4-8)
+   - z=8 → size 8 (covers 8-16)
+   - etc.
+4. Aligns boundaries to size multiples (e.g., size-8 layers start at z=0, 8, 16...)
+5. Caps at maxSize (64) to prevent extremely large slices
+6. **Does NOT depend on camera position**
+
+This geometric progression means covering distance n requires only ~log₂(n) slices,
+plus a linear term for distances beyond the maxSize cap.
 
 ### View Positioning (Camera-Dependent)
 
@@ -100,6 +110,7 @@ Layer State: INACTIVE → VISIBLE → RENDERING → CACHED → VISIBLE → INACT
 
 ## Benefits
 
+- **O(log n) efficiency**: Covering distance n requires only ~log₂(n) slices due to geometric progression
 - **Smooth z-movement**: Layers don't jump because boundaries are fixed
 - **Better caching**: Same layers reused across frames
 - **Predictable behavior**: Layer structure is deterministic
