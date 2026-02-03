@@ -1,52 +1,53 @@
 import { describe, it, expect } from 'vitest'
-import { selectSlices } from './slice-selection'
+import { selectSlices, getSliceAtDepth } from './slice-selection'
 
 describe('Slice Selection', () => {
-  describe('Mechanism 1: Camera-Independent Slicing', () => {
-    describe('slice size behavior (verified through selectSlices)', () => {
-      it('should return power-of-2 sizes based on absolute z', () => {
-        // Test that slices at different z positions have appropriate power-of-2 sizes
-        const slices = selectSlices(0, 1, 200)
-        const validSizes = [1, 2, 4, 8, 16, 32, 64]
+  describe('Mechanism 1: World Slice Availability', () => {
+    describe('getSliceAtDepth', () => {
+      it('should return smallest valid slice >= minSize at depth 0', () => {
+        // At z=0, all sizes are valid (0 % N == 0 for all N)
+        expect(getSliceAtDepth(0, 1).size).toBe(1)
+        expect(getSliceAtDepth(0, 4).size).toBe(4)
+        expect(getSliceAtDepth(0, 64).size).toBe(64)
+      })
+
+      it('should return smallest valid slice >= minSize at aligned depth', () => {
+        // At z=8: valid sizes are 1, 2, 4, 8 (since 8 % 8 == 0)
+        expect(getSliceAtDepth(8, 1).size).toBe(1)
+        expect(getSliceAtDepth(8, 4).size).toBe(4)
+        expect(getSliceAtDepth(8, 8).size).toBe(8)
+        // Request size 16, but only 8 is valid, so return 8 (largest available)
+        expect(getSliceAtDepth(8, 16).size).toBe(8)
+      })
+
+      it('should return largest valid size when minSize exceeds available', () => {
+        // At z=6: valid sizes are 1, 2 (since 6 % 2 == 0 but 6 % 4 != 0)
+        expect(getSliceAtDepth(6, 1).size).toBe(1)
+        expect(getSliceAtDepth(6, 2).size).toBe(2)
+        // Request size 4, but only 1, 2 valid, return 2
+        expect(getSliceAtDepth(6, 4).size).toBe(2)
+      })
+
+      it('should respect alignment constraints', () => {
+        // All returned slices must have depth % size == 0
+        const testDepths = [0, 1, 2, 4, 6, 8, 10, 16, 32, 64, -2, -4, -8, -16]
+        const testMinSizes = [1, 2, 4, 8, 16, 32, 64]
         
-        slices.forEach(slice => {
-          expect(validSizes).toContain(slice.size)
+        testDepths.forEach(depth => {
+          testMinSizes.forEach(minSize => {
+            const slice = getSliceAtDepth(depth, minSize)
+            // Use Math.abs to handle -0 vs +0
+            expect(Math.abs(slice.depth % slice.size)).toBe(0)
+          })
         })
-      })
-
-      it('should handle negative z-coordinates', () => {
-        // Test slices at negative z positions
-        const slices = selectSlices(-100, 1, 50)
-        const validSizes = [1, 2, 4, 8, 16, 32, 64]
-        
-        slices.forEach(slice => {
-          expect(validSizes).toContain(slice.size)
-        })
-      })
-    })
-
-    describe('slice generation (verified through selectSlices)', () => {
-      it('should produce contiguous z coverage with no gaps', () => {
-        const slices = selectSlices(0, 1, 200)
-        
-        for (let i = 0; i < slices.length - 1; i++) {
-          const currentEnd = slices[i].depth + slices[i].size
-          const nextStart = slices[i + 1].depth
-          expect(currentEnd).toBe(nextStart)
-        }
-      })
-
-      it('should produce same slices for same range (camera-independent)', () => {
-        const slices1 = selectSlices(0, 1, 100)
-        const slices2 = selectSlices(0, 1, 100)
-        expect(slices1).toEqual(slices2)
       })
 
       it('should use power-of-2 sizes', () => {
-        const slices = selectSlices(0, 1, 200)
         const validSizes = [1, 2, 4, 8, 16, 32, 64]
+        const testDepths = [0, 1, 2, 4, 8, 16, 32, 64, 100, -10, -64]
         
-        slices.forEach(slice => {
+        testDepths.forEach(depth => {
+          const slice = getSliceAtDepth(depth, 1)
           expect(validSizes).toContain(slice.size)
         })
       })
@@ -55,16 +56,20 @@ describe('Slice Selection', () => {
 
   describe('Mechanism 2: Camera-Dependent Selection', () => {
     describe('selectSlices', () => {
-      it('should select slices based on camera position', () => {
-        const slices = selectSlices(-30, 1, 100)
+      it('should produce slices that grow with viewing distance', () => {
+        const slices = selectSlices(0, 1, 200)
         
-        // First slice should cover camera + minRelativeDepth (i.e., -29)
-        expect(slices[0].depth).toBeLessThanOrEqual(-29)
-        expect(slices[0].depth + slices[0].size).toBeGreaterThan(-29)
+        // Slices should generally grow as viewing distance increases
+        // First slice should be small
+        expect(slices[0].size).toBeLessThanOrEqual(2)
+        
+        // Later slices should be larger
+        const lastSlice = slices[slices.length - 1]
+        expect(lastSlice.size).toBeGreaterThanOrEqual(32)
       })
 
-      it('should produce contiguous coverage', () => {
-        const slices = selectSlices(-30, 1, 200)
+      it('should produce contiguous coverage with no gaps', () => {
+        const slices = selectSlices(0, 1, 200)
         
         for (let i = 0; i < slices.length - 1; i++) {
           const currentEnd = slices[i].depth + slices[i].size
@@ -73,32 +78,42 @@ describe('Slice Selection', () => {
         }
       })
 
-      it('should maintain fixed world boundaries regardless of camera position', () => {
-        // The same world z-coordinate should be in the same slice regardless of camera
-        const cameraPositions = [-50, -30, 0, 20]
-        const targetZ = 10  // Check z=10
+      it('should produce same slices for same camera position', () => {
+        const slices1 = selectSlices(0, 1, 100)
+        const slices2 = selectSlices(0, 1, 100)
+        expect(slices1).toEqual(slices2)
+      })
+
+      it('should produce different slices for different camera positions', () => {
+        // Same world z can have different slice sizes depending on camera
+        const slicesFromNear = selectSlices(0, 1, 100)  // Camera at 0, z=10 is at viewDist 10
+        const slicesFromFar = selectSlices(-50, 1, 100) // Camera at -50, z=10 is at viewDist 60
         
-        const slicesContainingTarget = cameraPositions
-          .map(cameraZ => {
-            const slices = selectSlices(cameraZ, 1, 100)
-            // Only check if z=10 is in visible range
-            const minVisibleZ = cameraZ + 1
-            const maxVisibleZ = cameraZ + 100
-            if (targetZ >= minVisibleZ && targetZ < maxVisibleZ) {
-              return slices.find(s => s.depth <= targetZ && s.depth + s.size > targetZ)
-            }
-            return null
-          })
-          .filter((s): s is NonNullable<typeof s> => s !== null)
+        // Find slice containing z=10 in each
+        const sliceNear = slicesFromNear.find(s => s.depth <= 10 && s.depth + s.size > 10)
+        const sliceFar = slicesFromFar.find(s => s.depth <= 10 && s.depth + s.size > 10)
         
-        // All should have same depth and size
-        if (slicesContainingTarget.length > 1) {
-          const first = slicesContainingTarget[0]
-          slicesContainingTarget.forEach(slice => {
-            expect(slice.depth).toBe(first.depth)
-            expect(slice.size).toBe(first.size)
-          })
+        // When camera is far from z=10, the slice should be larger
+        if (sliceNear && sliceFar) {
+          expect(sliceFar.size).toBeGreaterThanOrEqual(sliceNear.size)
         }
+      })
+
+      it('should start with small slices near camera', () => {
+        const slices = selectSlices(-30, 1, 100)
+        
+        // First slice should be small (viewing distance ~1)
+        expect(slices[0].size).toBeLessThanOrEqual(2)
+      })
+
+      it('should end with large slices far from camera', () => {
+        const slices = selectSlices(0, 1, 200)
+        
+        // Far slices should be at max size
+        const farSlices = slices.filter(s => s.depth >= 100)
+        farSlices.forEach(slice => {
+          expect(slice.size).toBeGreaterThanOrEqual(32)
+        })
       })
     })
   })
@@ -148,41 +163,30 @@ describe('Slice Selection', () => {
   describe('Slice sizes', () => {
     it('should use power-of-2 sizes', () => {
       const slices = selectSlices(0, 1, 200)
-      const validSizes = [1, 2, 4, 8, 16, 32, 64, 128, 256]
+      const validSizes = [1, 2, 4, 8, 16, 32, 64]
       
       slices.forEach(slice => {
         expect(validSizes).toContain(slice.size)
       })
     })
 
-    it('should use absolute z for size calculation (camera-independent)', () => {
+    it('should respect alignment constraints (depth % size == 0)', () => {
       const slices = selectSlices(0, 1, 200)
       
-      // Each slice's size is bounded by the alignment-based upper limit
       slices.forEach(slice => {
-        const absZ = Math.abs(slice.depth)
-        // Size should be largest power of 2 that both divides depth and is <= candidate size
-        if (absZ >= 1) {
-          const expectedMaxSize = Math.min(64, Math.pow(2, Math.floor(Math.log2(absZ))))
-          expect(slice.size).toBeLessThanOrEqual(expectedMaxSize)
-        }
+        expect(slice.depth % slice.size).toBe(0)
       })
     })
 
-    it('should use smaller slices near z=0', () => {
+    it('should have non-decreasing sizes as viewing distance increases', () => {
       const slices = selectSlices(0, 1, 200)
       
-      // Find slices near z=0 and far from z=0
-      const nearSlices = slices.filter(s => Math.abs(s.depth) < 20)
-      const farSlices = slices.filter(s => Math.abs(s.depth) > 100)
-      
-      if (nearSlices.length > 0 && farSlices.length > 0) {
-        const avgNearSize = nearSlices.reduce((sum, s) => sum + s.size, 0) / nearSlices.length
-        const avgFarSize = farSlices.reduce((sum, s) => sum + s.size, 0) / farSlices.length
-        
-        // Near slices should have smaller average size than far slices
-        expect(avgNearSize).toBeLessThanOrEqual(avgFarSize)
-      }
+      // Sizes should generally not decrease as we move away from camera
+      let lastSize = 0
+      slices.forEach(slice => {
+        expect(slice.size).toBeGreaterThanOrEqual(lastSize)
+        lastSize = slice.size
+      })
     })
   })
 
@@ -199,8 +203,8 @@ describe('Slice Selection', () => {
       }
     })
 
-    it('should work with camera at position 50', () => {
-      const slices = selectSlices(50, 51, 250)
+    it('should work with camera at negative position', () => {
+      const slices = selectSlices(-50, 1, 200)
       expect(slices.length).toBeGreaterThan(0)
       
       // Verify contiguity
@@ -211,8 +215,8 @@ describe('Slice Selection', () => {
       }
     })
 
-    it('should work with negative camera position', () => {
-      const slices = selectSlices(-50, 1, 200)
+    it('should work with camera far from origin', () => {
+      const slices = selectSlices(1000, 1, 200)
       expect(slices.length).toBeGreaterThan(0)
       
       // Verify contiguity
@@ -255,133 +259,29 @@ describe('Slice Selection', () => {
     })
   })
 
-  describe('Observed bug scenario', () => {
-    it('should not have holes like in the reported bug', () => {
-      // The bug showed gaps at z: 48-63, 96-127, 160-191
-      const slices = selectSlices(0, 1, 256)
-      
-      // Verify there are no gaps in coverage
-      for (let i = 0; i < slices.length - 1; i++) {
-        const currentEnd = slices[i].depth + slices[i].size
-        const nextStart = slices[i + 1].depth
-        expect(currentEnd).toBe(nextStart)
-      }
-      
-      // Specifically check that the problematic z values are covered
-      const coversZ = (z: number): boolean => {
-        return slices.some(s => s.depth <= z && s.depth + s.size > z)
-      }
-      
-      // Check z values that were in gaps
-      for (let z = 1; z < 256; z++) {
-        const covered = coversZ(z)
-        if (!covered) {
-          // Debug output if we find a gap
-          console.error(`Gap found at z=${String(z)}`)
-        }
-        expect(covered).toBe(true)
-      }
-    })
-  })
-
-  describe('Camera-independent slicing (fixed world boundaries)', () => {
-    it('should maintain fixed world boundaries when camera moves', () => {
-      // When camera moves, slices at same world z should have same boundaries
-      const camera1 = -30
-      const camera2 = -28  // Camera moved forward by 2 units
-      
-      const slices1 = selectSlices(camera1, 1, 100)
-      const slices2 = selectSlices(camera2, 1, 100)
-      
-      // Find slices that overlap in world z-coordinates
-      const sliceMap1 = new Map(slices1.map(s => [s.depth, s]))
-      const sliceMap2 = new Map(slices2.map(s => [s.depth, s]))
-      
-      // Common world z-coordinates should have same slice boundaries
-      let commonCount = 0
-      sliceMap1.forEach((slice1, depth) => {
-        const slice2 = sliceMap2.get(depth)
-        if (slice2) {
-          expect(slice1.size).toBe(slice2.size)
-          commonCount++
-        }
-      })
-      
-      // There should be many common slices (overlapping visible ranges)
-      expect(commonCount).toBeGreaterThan(5)
-    })
-
-    it('should produce same slices for same world z range', () => {
-      // Same world z range should produce identical slices regardless of camera
-      const slices1 = selectSlices(0, 0, 100)
-      const slices2 = selectSlices(0, 0, 100)
-      
-      expect(slices1).toEqual(slices2)
-    })
-    
-    it('should have consistent slice for any given world z-coordinate', () => {
-      // Any world z-coordinate should be in the same slice regardless of camera position
-      const targetZ = 32  // A specific world z-coordinate
-      
-      const cameraPositions = [-50, -30, 0, 20, 40]
-      const containingSlices = cameraPositions
-        .map(cameraZ => {
-          const slices = selectSlices(cameraZ, 1, 100)
-          const minVisible = cameraZ + 1
-          const maxVisible = cameraZ + 100
-          
-          // Only check if targetZ is visible
-          if (targetZ >= minVisible && targetZ < maxVisible) {
-            return slices.find(s => s.depth <= targetZ && s.depth + s.size > targetZ)
-          }
-          return null
-        })
-        .filter((s): s is NonNullable<typeof s> => s !== null)
-      
-      // All cameras that can see z=32 should have same slice boundaries
-      if (containingSlices.length > 1) {
-        const first = containingSlices[0]
-        containingSlices.forEach(slice => {
-          expect(slice.depth).toBe(first.depth)
-          expect(slice.size).toBe(first.size)
-        })
-      }
-    })
-  })
-
   describe('O(log n) slice count', () => {
-    it('should use O(log n) slices for distance n (alignment-based doubling)', () => {
-      // For distance n, the number of slices should be roughly proportional to log2(n)
-      // due to the alignment-based sizing where each successive slice doubles in size
-      
-      // Test with various distances
+    it('should use O(log n) slices for distance n', () => {
+      // Due to geometric progression, number of slices should be logarithmic
       const testCases = [
-        { distance: 100, expectedMaxSlices: 20 },   // log2(100) ≈ 6.6, with maxSize cap
-        { distance: 1000, expectedMaxSlices: 25 },  // log2(1000) ≈ 10, with maxSize cap
-        { distance: 10000, expectedMaxSlices: 170 }, // log2(10000) ≈ 13, with maxSize cap
+        { distance: 100, expectedMaxSlices: 20 },
+        { distance: 1000, expectedMaxSlices: 25 },
+        { distance: 10000, expectedMaxSlices: 170 },
       ]
       
       testCases.forEach(({ distance, expectedMaxSlices }) => {
         const slices = selectSlices(0, 1, distance)
-        
-        // The slice count should be bounded by O(log n) plus a linear term 
-        // for the maxSize-capped portion
         expect(slices.length).toBeLessThanOrEqual(expectedMaxSlices)
         expect(slices.length).toBeGreaterThan(0)
       })
     })
 
     it('should use fewer slices than a linear slicing approach', () => {
-      // For distance 200, a linear approach with size=1 would need 199 slices
-      // Our alignment-based approach should use significantly fewer
+      // For distance 200, linear approach would need ~199 slices
       const slices = selectSlices(0, 1, 200)
-      
-      // Linear approach would use ~199 slices
-      // Alignment-based approach should use much less
       expect(slices.length).toBeLessThan(50)
     })
 
-    it('should show power-of-2 progression of slice sizes from z=1', () => {
+    it('should show power-of-2 progression of slice sizes', () => {
       const slices = selectSlices(0, 1, 100)
       
       // Check that early slices follow power-of-2 progression: 1, 2, 4, 8, 16, 32, 64
@@ -394,14 +294,11 @@ describe('Slice Selection', () => {
 
   describe('Slice stability during camera movement', () => {
     it('should not have missing slices when camera moves forward', () => {
-      // Test that slices remain stable as camera moves forward
-      // This tests the bug: "missing slices that appear randomly when moving in/out"
       const cameraPositions = [-50, -40, -30, -20, -10, 0, 10, 20, 30]
       
       cameraPositions.forEach(cameraZ => {
         const slices = selectSlices(cameraZ, 1, 100)
         
-        // There should always be slices
         expect(slices.length).toBeGreaterThan(0)
         
         // No gaps between slices
@@ -418,35 +315,7 @@ describe('Slice Selection', () => {
       })
     })
 
-    it('should maintain same world slice boundaries during camera movement', () => {
-      // When camera moves, the same world z should be in the same slice
-      const cameraPositions = [-100, -50, 0, 50, 100]
-      
-      // Check that world z=80 is always in the same slice (when visible)
-      const targetZ = 80
-      const containingSlices = cameraPositions
-        .map(cameraZ => {
-          const minVisible = cameraZ + 1
-          const maxVisible = cameraZ + 100
-          if (targetZ >= minVisible && targetZ < maxVisible) {
-            const slices = selectSlices(cameraZ, 1, 100)
-            return slices.find(s => s.depth <= targetZ && s.depth + s.size > targetZ)
-          }
-          return null
-        })
-        .filter((s): s is NonNullable<typeof s> => s !== null)
-      
-      // All should have same boundaries
-      if (containingSlices.length > 1) {
-        containingSlices.forEach(slice => {
-          expect(slice.depth).toBe(containingSlices[0].depth)
-          expect(slice.size).toBe(containingSlices[0].size)
-        })
-      }
-    })
-
     it('should always produce contiguous coverage during smooth movement', () => {
-      // Simulate smooth camera movement and verify contiguity
       const steps = 20
       const startZ = -30
       const endZ = 10
@@ -465,57 +334,34 @@ describe('Slice Selection', () => {
     })
   })
 
-  describe('Slice density based on absolute z', () => {
-    it('should have smaller slices near z=0 and larger slices far away', () => {
-      // Slice sizes are based on absolute z-coordinate
+  describe('Slice density based on viewing distance', () => {
+    it('should have smaller slices near camera and larger slices far away', () => {
       const slices = selectSlices(0, 1, 200)
       
-      // First slice (at z=1) should have small size
-      expect(slices[0].size).toBeLessThanOrEqual(2)
+      // Near camera (viewing distance 1-10): small slices
+      const nearSlices = slices.filter(s => s.depth >= 1 && s.depth < 10)
+      const avgNearSize = nearSlices.reduce((sum, s) => sum + s.size, 0) / nearSlices.length
       
-      // Slices generally increase in size as z increases
-      // (though may not be monotonic due to alignment)
-      const nearSlices = slices.filter(s => Math.abs(s.depth) < 10)
-      const farSlices = slices.filter(s => Math.abs(s.depth) >= 64)
-      
-      if (nearSlices.length > 0 && farSlices.length > 0) {
-        const avgNearSize = nearSlices.reduce((sum, s) => sum + s.size, 0) / nearSlices.length
-        const avgFarSize = farSlices.reduce((sum, s) => sum + s.size, 0) / farSlices.length
-        expect(avgNearSize).toBeLessThanOrEqual(avgFarSize)
-      }
-    })
-
-    it('should get denser (more slices) near z=0 than far from z=0', () => {
-      // Near z=0 should have more detail (smaller slices)
-      const nearSlices = selectSlices(0, 1, 16)   // 15 units near z=0 (1 to 16)
-      const farSlices = selectSlices(100, 0, 15) // 15 units far from z=0 (100 to 115)
-      
-      // Near slices have smaller average size
-      const avgNearSize = nearSlices.reduce((s, x) => s + x.size, 0) / nearSlices.length
-      const avgFarSize = farSlices.reduce((s, x) => s + x.size, 0) / farSlices.length
+      // Far from camera (viewing distance 100+): large slices
+      const farSlices = slices.filter(s => s.depth >= 100)
+      const avgFarSize = farSlices.reduce((sum, s) => sum + s.size, 0) / farSlices.length
       
       expect(avgNearSize).toBeLessThan(avgFarSize)
     })
 
-    it('should follow alignment-based sizing rules', () => {
-      const slices = selectSlices(0, 1, 200)
+    it('should get denser near camera than far from camera', () => {
+      // Near camera: 15 units of range should have more slices
+      const nearSlices = selectSlices(0, 1, 16)
+      // Far from camera: 15 units of range should have fewer slices
+      const farSlices = selectSlices(0, 100, 115)
       
-      // Check that slices follow alignment rules: depth % size == 0
-      slices.forEach(slice => {
-        expect(slice.depth % slice.size).toBe(0)
-        const absZ = Math.abs(slice.depth)
-        if (absZ >= 1) {
-          const expectedMaxSize = Math.min(64, Math.pow(2, Math.floor(Math.log2(absZ))))
-          expect(slice.size).toBeLessThanOrEqual(expectedMaxSize)
-        }
-      })
+      // Near camera should have more slices (more detail)
+      expect(nearSlices.length).toBeGreaterThan(farSlices.length)
     })
 
     it('should have increasing depths for consecutive slices', () => {
-      const cameraZ = -30
-      const slices = selectSlices(cameraZ, 1, 100)
+      const slices = selectSlices(-30, 1, 100)
       
-      // Check that each slice depth is greater than the previous
       slices.forEach((slice, index) => {
         if (index > 0) {
           expect(slice.depth).toBeGreaterThan(slices[index - 1].depth)
@@ -524,39 +370,8 @@ describe('Slice Selection', () => {
     })
   })
 
-  describe('Slice size calculation (via selectSlices)', () => {
-    // Tests verify slice size behavior indirectly through selectSlices
-    it('should return appropriate size based on absolute z', () => {
-      // Slices at z=1 should have size 1
-      const slices = selectSlices(0, 1, 2)
-      expect(slices[0].size).toBe(1)
-    })
-
-    it('should return power of 2 sizes at different z values', () => {
-      // Test that slices at various z positions have appropriate power-of-2 sizes
-      const slices = selectSlices(0, 0, 150)
-      const validSizes = [1, 2, 4, 8, 16, 32, 64]
-      
-      slices.forEach(slice => {
-        expect(validSizes).toContain(slice.size)
-      })
-      
-      // Verify that slices near z=0 have smaller sizes
-      const smallSlices = slices.filter(s => s.depth >= 1 && s.depth < 4)
-      smallSlices.forEach(slice => {
-        expect(slice.size).toBeLessThanOrEqual(4)
-      })
-      
-      // Verify that slices at z >= 64 can have max size
-      const largeSlices = slices.filter(s => s.depth >= 64)
-      const hasMaxSize = largeSlices.some(slice => slice.size === 64)
-      expect(hasMaxSize).toBe(true)
-    })
-  })
-
   describe('Configurable depth multiplier', () => {
     it('should support non-power-of-2 multipliers', () => {
-      // With multiplier 3, sizes should be: 1, 3, 9, 27, 64 (capped)
       const slices = selectSlices(0, 1, 100, 3)
       expect(slices.length).toBeGreaterThan(0)
       
@@ -584,7 +399,6 @@ describe('Slice Selection', () => {
       const slicesMultiplier2 = selectSlices(0, 1, 200, 2)
       const slicesMultiplier3 = selectSlices(0, 1, 200, 3)
       
-      // Different multipliers should produce different slice counts
       // Higher multiplier = faster growth = fewer slices needed
       expect(slicesMultiplier2.length).not.toBe(slicesMultiplier3.length)
     })
@@ -597,96 +411,41 @@ describe('Slice Selection', () => {
     })
   })
 
-  describe('Camera-independent slice size consistency (bug fix)', () => {
-    it('should produce same slice size for same depth regardless of visible range start', () => {
-      // This test verifies the fix for the bug where slices at the same depth
-      // could have different sizes depending on where the visible range starts.
-      // For example, depth=-30 should always have size=2 (since -30 % 2 == 0)
+  describe('Original bug fix: efficient slicing when camera is far from origin', () => {
+    it('should use large slices for world z=0 when camera is far away', () => {
+      // Camera at z=-67, so z=0 is at viewing distance 67
+      const slices = selectSlices(-67, 1, 200)
       
-      // Camera at different positions that include depth -30 in visible range
-      const slices1 = selectSlices(-30, 1, 200)  // visible range: -29 to 170
-      const slices2 = selectSlices(-30.5, 1, 200) // visible range: -29.5 to 169.5
-      const slices3 = selectSlices(-31, 1, 200)   // visible range: -30 to 169
+      // Find slice containing z=0
+      const sliceAt0 = slices.find(s => s.depth <= 0 && s.depth + s.size > 0)
       
-      // Find slice at depth -30 in each result
-      const slice1at30 = slices1.find(s => s.depth === -30)
-      const slice2at30 = slices2.find(s => s.depth === -30)
-      const slice3at30 = slices3.find(s => s.depth === -30)
-      
-      // slices1 starts at -29, so -30 should not be in the range
-      expect(slice1at30).toBeUndefined()
-      
-      // The slice at -30 should always have size 2 when it exists
-      // (because -30 % 2 == 0, but -30 % 4 != 0)
-      if (slice2at30) {
-        expect(slice2at30.size).toBe(2)
-      }
-      if (slice3at30) {
-        expect(slice3at30.size).toBe(2)
-      }
-      
-      // If both exist, they should have the same size
-      if (slice2at30 && slice3at30) {
-        expect(slice2at30.size).toBe(slice3at30.size)
+      // Should be a large slice (not size 1 as in the original bug)
+      if (sliceAt0) {
+        expect(sliceAt0.size).toBeGreaterThanOrEqual(32)
       }
     })
 
-    it('should not produce size mismatches during camera movement', () => {
-      // Simulate camera movement and verify no size mismatches occur
-      // when the same depth appears in the visible range at different positions
+    it('should not have size-1 slices far from camera', () => {
+      // Camera at z=-100
+      const slices = selectSlices(-100, 1, 200)
       
-      interface Layer { depth: number; size: number }
-      const layers = new Map<number, Layer>()
-      
-      // Move camera from z=-30 to z=-100
-      for (let cameraZ = -30; cameraZ >= -100; cameraZ -= 0.5) {
-        const boundaries = selectSlices(cameraZ, 1, 200)
-        const requiredKeys = boundaries.map(b => b.depth)
-        
-        // Delete old layers
-        const existingKeys = Array.from(layers.keys())
-        for (const key of existingKeys) {
-          if (!requiredKeys.includes(key)) {
-            layers.delete(key)
-          }
+      // Slices at viewing distance > 50 should not be size 1
+      slices.forEach(slice => {
+        const viewingDistance = slice.depth - (-100)
+        if (viewingDistance > 50) {
+          expect(slice.size).toBeGreaterThan(1)
         }
-        
-        // Check for size mismatches and add new layers
-        for (const item of boundaries) {
-          const existing = layers.get(item.depth)
-          if (!existing) {
-            layers.set(item.depth, { depth: item.depth, size: item.size })
-          } else {
-            // This should never happen after the fix
-            expect(existing.size).toBe(item.size)
-          }
-        }
-      }
+      })
     })
 
-    it('should produce consistent sizes for negative z values', () => {
-      // Test specific negative z values that were problematic in the original bug
-      const slices = selectSlices(-119.5, 0.5, 200)
+    it('should have non-decreasing slice sizes as viewing distance increases', () => {
+      const slices = selectSlices(-67, 1, 200)
       
-      // Find specific slices and verify their sizes
-      const sliceAt112 = slices.find(s => s.depth === -112)
-      const sliceAt96 = slices.find(s => s.depth === -96)
-      const sliceAt64 = slices.find(s => s.depth === -64)
-      
-      // -112 % 16 == 0, so size should be 16
-      if (sliceAt112) {
-        expect(sliceAt112.size).toBe(16)
-      }
-      
-      // -96 % 32 == 0, so size should be 32
-      if (sliceAt96) {
-        expect(sliceAt96.size).toBe(32)
-      }
-      
-      // -64 % 64 == 0, so size should be 64
-      if (sliceAt64) {
-        expect(sliceAt64.size).toBe(64)
-      }
+      let lastSize = 0
+      slices.forEach(slice => {
+        expect(slice.size).toBeGreaterThanOrEqual(lastSize)
+        lastSize = slice.size
+      })
     })
   })
 })

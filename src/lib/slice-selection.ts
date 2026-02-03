@@ -3,27 +3,31 @@
  * 
  * This module implements a two-mechanism rendering system:
  * 
- * ## Mechanism 1: Camera-Independent World Slicing
+ * ## Mechanism 1: World Slice Availability (Camera-Independent)
  * 
- * The world is divided into fixed slices whose boundaries never change.
- * Each slice's size is determined by its STARTING DEPTH's alignment:
- * - A depth that is divisible by N (but not 2N) starts a slice of size N
- * - Slices are contiguous: one slice ends where the next begins
- * - The same z-coordinate is ALWAYS in the same slice, regardless of camera
+ * At any given z-coordinate, multiple slices of different sizes are AVAILABLE:
+ * - A slice of size N can start at z if z % N == 0
+ * - For z=0: slices of ALL sizes are available (1, 2, 4, 8, 16, 32, 64)
+ * - For z=8: slices of size 1, 2, 4, 8 are available (since 8 % 8 == 0)
+ * - For z=6: slices of size 1, 2 are available (since 6 % 2 == 0 but 6 % 4 != 0)
  * 
- * Example world slices (fixed, camera-independent):
- * - [0, 64)  size 64 - because 0 % 64 == 0 and 0 is the "everything divides" case
- * - [64, 128) size 64 - because 64 % 64 == 0
- * - [-64, 0) size 64 - because -64 % 64 == 0
- * - [-66, -64) size 2 - because -66 % 2 == 0 but -66 % 4 != 0
+ * The world provides slices on request: "Give me a slice starting at Z with size >= N"
+ * The world returns the SMALLEST valid slice that satisfies the constraint.
  * 
- * ## Mechanism 2: Camera-Dependent Selection
+ * ## Mechanism 2: Camera Slice Selection (Camera-Dependent)
  * 
- * The camera determines WHICH of these fixed slices are visible:
- * 1. Camera computes visible range: [cameraZ + minDepth, cameraZ + maxDepth]
- * 2. All world slices overlapping this range are selected for rendering
+ * The camera requests slices based on viewing distance:
+ * 1. Start at nearZ (camera + minRelativeDepth)
+ * 2. Request a slice with minSize based on viewing distance (geometric progression)
+ * 3. World provides a slice (possibly larger if alignment requires)
+ * 4. Camera uses the ACTUAL slice size to compute next Z
+ * 5. Camera uses geometric progression to compute next minSize
+ * 6. Repeat until farZ is reached
  * 
- * The slices themselves don't change - only which ones are visible.
+ * This achieves:
+ * - Thin slices near camera (more detail)
+ * - Thick slices far from camera (efficiency)
+ * - Slices always respect world alignment constraints
  */
 
 export interface SliceBoundary {
@@ -38,184 +42,147 @@ const MAX_SIZE = 64
 export const DEFAULT_DEPTH_MULTIPLIER = 2
 
 // ============================================================================
-// MECHANISM 1: Camera-Independent World Slicing
+// MECHANISM 1: World Slice Availability (Camera-Independent)
 // ============================================================================
 
 /**
- * Gets the largest valid size for the given depth multiplier.
+ * Builds the list of valid sizes for the given depth multiplier.
  * Valid sizes are powers of the multiplier (1, m, m^2, ...) up to MAX_SIZE.
  */
-function getMaxValidSize(depthMultiplier: number): number {
-  let maxValid = MIN_SIZE
+function getValidSizes(depthMultiplier: number): number[] {
+  const sizes: number[] = []
   let testSize = MIN_SIZE
   while (testSize <= MAX_SIZE) {
-    maxValid = testSize
+    sizes.push(testSize)
     const nextSize = Math.round(testSize * depthMultiplier)
     if (nextSize <= testSize) break
     testSize = nextSize
   }
-  return maxValid
+  return sizes
 }
 
 /**
- * Gets the canonical size for a slice starting at a given depth.
+ * Gets a slice starting at exactly the given depth with size >= minSize.
  * 
- * The size is the largest power of depthMultiplier that evenly divides the depth,
- * capped at the largest valid size. For depth=0, returns the largest valid size
- * since 0 is divisible by all.
+ * The world provides the SMALLEST valid slice that:
+ * 1. Starts at exactly the given depth
+ * 2. Has size >= minSize
+ * 3. Respects alignment (depth % size == 0)
  * 
- * This is a WORLD SLICING function - the result depends only on the depth,
- * not on any camera position.
+ * If no valid slice >= minSize exists at this depth, returns the largest
+ * valid slice available at this depth.
  * 
- * @param depth - The starting z-coordinate of a slice
+ * @param depth - The exact starting z-coordinate (must be an integer)
+ * @param minSize - Minimum requested slice size
  * @param depthMultiplier - The geometric progression multiplier (default 2)
- * @returns The size of the slice starting at this depth
+ * @returns A slice starting at depth with the smallest valid size >= minSize
  */
-function getSliceSizeForDepth(depth: number, depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER): number {
-  const maxValidSize = getMaxValidSize(depthMultiplier)
+export function getSliceAtDepth(depth: number, minSize: number, depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER): SliceBoundary {
+  const intDepth = Math.floor(depth)
+  const validSizes = getValidSizes(depthMultiplier)
   
-  // For depth 0, any power divides it, so use max valid size
-  if (depth === 0) {
-    return maxValidSize
+  // Find all sizes that are valid at this depth (depth % size == 0)
+  // For depth 0, all sizes are valid
+  const validAtDepth = validSizes.filter(size => intDepth === 0 || intDepth % size === 0)
+  
+  if (validAtDepth.length === 0) {
+    // Fallback: size 1 is always valid
+    return { depth: intDepth, size: MIN_SIZE }
   }
   
-  // Find the largest power of depthMultiplier that divides depth
-  let size = MIN_SIZE
-  let testSize = MIN_SIZE
+  // Find the smallest size >= minSize
+  const satisfying = validAtDepth.filter(size => size >= minSize)
   
-  while (testSize <= MAX_SIZE) {
-    if (depth % testSize === 0) {
-      size = testSize
-    }
-    const nextSize = Math.round(testSize * depthMultiplier)
-    if (nextSize <= testSize) break
-    testSize = nextSize
+  if (satisfying.length > 0) {
+    // Return the smallest size that satisfies the constraint
+    return { depth: intDepth, size: Math.min(...satisfying) }
+  } else {
+    // No size >= minSize is valid at this depth
+    // Return the largest valid size available
+    return { depth: intDepth, size: Math.max(...validAtDepth) }
   }
-  
-  return size
-}
-
-/**
- * Gets the canonical slice that contains a given z-coordinate.
- * 
- * This finds the unique world slice that contains z. The slice is determined
- * by finding which aligned slice boundary contains z, based on the sizes
- * that getSliceSizeForDepth would produce.
- * 
- * This is a WORLD SLICING function - the result is always the same for a given z,
- * regardless of camera position.
- * 
- * @param z - A z-coordinate in world space (can be fractional)
- * @param depthMultiplier - The geometric progression multiplier (default 2)
- * @returns The canonical slice boundary containing this z
- */
-function getSliceContainingZ(z: number, depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER): SliceBoundary {
-  const intZ = Math.floor(z)
-  const maxValidSize = getMaxValidSize(depthMultiplier)
-  
-  // Special case: z in [0, maxValidSize) is in the slice starting at 0
-  if (intZ >= 0 && intZ < maxValidSize) {
-    return { depth: 0, size: maxValidSize }
-  }
-  
-  // For negative z or z >= maxValidSize, we need to find the containing slice
-  // Strategy: Try each valid size (generated by depthMultiplier) from largest to smallest,
-  // compute the aligned depth, and check if it would produce this size and contain intZ
-  
-  // Build list of valid sizes
-  const validSizes: number[] = []
-  let testSize = MIN_SIZE
-  while (testSize <= MAX_SIZE) {
-    validSizes.push(testSize)
-    const nextSize = Math.round(testSize * depthMultiplier)
-    if (nextSize <= testSize) break
-    testSize = nextSize
-  }
-  
-  // Try sizes from largest to smallest
-  for (let i = validSizes.length - 1; i >= 0; i--) {
-    const size = validSizes[i]
-    const alignedDepth = Math.floor(intZ / size) * size
-    
-    // Check if alignedDepth would have exactly this size
-    const actualSize = getSliceSizeForDepth(alignedDepth, depthMultiplier)
-    if (actualSize === size) {
-      // Check if this slice contains intZ
-      if (alignedDepth <= intZ && intZ < alignedDepth + size) {
-        return { depth: alignedDepth, size }
-      }
-    }
-  }
-  
-  // Fallback: size 1 slice (should not reach here)
-  return { depth: intZ, size: MIN_SIZE }
 }
 
 // ============================================================================
-// MECHANISM 2: Camera-Dependent Selection
+// MECHANISM 2: Camera Slice Selection (Camera-Dependent)
 // ============================================================================
 
 /**
- * Generates all world slices that overlap with a given z range.
+ * Computes the minimum slice size requested by camera based on viewing distance.
  * 
- * This iterates through the camera-independent world slices and returns
- * those that overlap with [minZ, maxZ).
+ * Uses geometric progression: minSize = depthMultiplier ^ floor(log_m(viewingDistance))
+ * This means:
+ * - viewingDistance 1-2: minSize 1
+ * - viewingDistance 2-4: minSize 2
+ * - viewingDistance 4-8: minSize 4
+ * - etc.
  * 
- * @param minZ - Minimum z-coordinate (absolute world space)
- * @param maxZ - Maximum z-coordinate (absolute world space)
+ * @param viewingDistance - Distance from camera to slice start
  * @param depthMultiplier - The geometric progression multiplier (default 2)
- * @returns Array of slice boundaries sorted by depth
+ * @returns Minimum slice size to request from the world
  */
-function generateSlicesForRange(minZ: number, maxZ: number, depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER): SliceBoundary[] {
-  if (minZ >= maxZ) {
-    return []
-  }
-
-  const slices: SliceBoundary[] = []
+function getMinSizeForViewingDistance(viewingDistance: number, depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER): number {
+  if (viewingDistance < 1) return MIN_SIZE
   
-  // Find the canonical slice containing minZ
-  let currentSlice = getSliceContainingZ(minZ, depthMultiplier)
+  // minSize = largest power of depthMultiplier <= viewingDistance
+  const logDist = Math.log(viewingDistance) / Math.log(depthMultiplier)
+  const exponent = Math.floor(logDist)
+  const size = Math.round(Math.pow(depthMultiplier, exponent))
   
-  // Add slices until we cover maxZ
-  while (currentSlice.depth < maxZ) {
-    slices.push(currentSlice)
-    
-    // Move to the next slice starting at the end of this one
-    const nextZ = currentSlice.depth + currentSlice.size
-    if (nextZ >= maxZ) break
-    
-    currentSlice = getSliceContainingZ(nextZ, depthMultiplier)
-    
-    // Safety check to prevent infinite loops
-    if (currentSlice.depth < nextZ) {
-      currentSlice = { depth: nextZ, size: MIN_SIZE }
-    }
-  }
-
-  return slices.sort((a, b) => a.depth - b.depth)
+  return Math.min(Math.max(size, MIN_SIZE), MAX_SIZE)
 }
 
 /**
- * Selects world slices that are visible from the camera's perspective.
+ * Selects slices visible from the camera's perspective.
  * 
  * This is the main CAMERA SELECTION function:
- * 1. Computes the visible range in absolute world coordinates
- * 2. Returns all world slices that overlap with the visible range
- * 
- * The world slices are camera-independent - this function only SELECTS
- * which ones are visible, it doesn't change their boundaries.
+ * 1. Start at nearZ (camera + minRelativeDepth)
+ * 2. Compute minSize based on viewing distance
+ * 3. Request slice from world: "give me slice at Z with size >= minSize"
+ * 4. World provides slice (possibly larger due to alignment)
+ * 5. Use ACTUAL slice size to compute next Z
+ * 6. Repeat until farZ is reached
  * 
  * @param cameraZ - Camera z position in world space
- * @param minRelativeDepth - Minimum viewing depth (relative to camera)
+ * @param minRelativeDepth - Minimum viewing depth (relative to camera, typically 1)
  * @param maxRelativeDepth - Maximum viewing depth (relative to camera)
  * @param depthMultiplier - The geometric progression multiplier (default 2)
  * @returns Array of slice boundaries sorted by depth (in absolute world coordinates)
  */
 export function selectSlices(cameraZ: number, minRelativeDepth: number, maxRelativeDepth: number, depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER): SliceBoundary[] {
   // Convert relative depths to absolute world z-coordinates
-  const visibleMinZ = cameraZ + minRelativeDepth
-  const visibleMaxZ = cameraZ + maxRelativeDepth
+  const nearZ = cameraZ + minRelativeDepth
+  const farZ = cameraZ + maxRelativeDepth
   
-  // Select world slices that overlap with the visible range
-  return generateSlicesForRange(visibleMinZ, visibleMaxZ, depthMultiplier)
+  if (nearZ >= farZ) {
+    return []
+  }
+
+  const slices: SliceBoundary[] = []
+  let currentZ = Math.floor(nearZ)
+  
+  while (currentZ < farZ) {
+    // Compute viewing distance from camera
+    const viewingDistance = currentZ - cameraZ
+    
+    // Camera requests: "give me slice with size >= minSize"
+    const minSize = getMinSizeForViewingDistance(viewingDistance, depthMultiplier)
+    
+    // World provides: smallest valid slice >= minSize at this depth
+    const slice = getSliceAtDepth(currentZ, minSize, depthMultiplier)
+    
+    slices.push(slice)
+    
+    // Move to next slice using ACTUAL slice size
+    const nextZ = slice.depth + slice.size
+    
+    // Safety check to prevent infinite loops
+    if (nextZ <= currentZ) {
+      currentZ = currentZ + 1
+    } else {
+      currentZ = nextZ
+    }
+  }
+
+  return slices.sort((a, b) => a.depth - b.depth)
 }
