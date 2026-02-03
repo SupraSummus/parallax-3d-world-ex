@@ -12,6 +12,7 @@ const isTest = process.env.NODE_ENV === 'test' || process.env.VITEST === 'true' 
 
 // https://vite.dev/config/
 export default defineConfig({
+  base: '/parallax-3d-world-ex/',
   plugins: [
     // Use regular React plugin for tests without Fast Refresh
     isTest 
