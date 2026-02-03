@@ -748,7 +748,7 @@ export class ParallaxRenderer {
   }
 
   setDepthMultiplier(multiplier: number) {
-    if (multiplier >= 1.1 && multiplier <= 4) {
+    if (multiplier >= 1.2 && multiplier <= 4) {
       this.depthMultiplier = multiplier
       // Clear all layers to force regeneration with new slice boundaries
       this.layers.clear()

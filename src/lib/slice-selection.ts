@@ -146,9 +146,10 @@ export function generateSlicesForRange(minZ: number, maxZ: number, depthMultipli
           foundValidSize = true
           break
         }
+        const previousSize = adjustedSize
         adjustedSize = Math.max(MIN_SIZE, Math.round(adjustedSize / depthMultiplier))
-        // Prevent infinite loop if rounding keeps returning the same value
-        if (adjustedSize <= MIN_SIZE) {
+        // Exit if size can't decrease further (prevents infinite loop at MIN_SIZE)
+        if (adjustedSize >= previousSize) {
           break
         }
       }
