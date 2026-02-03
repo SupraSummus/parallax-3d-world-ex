@@ -104,14 +104,14 @@ describe('Slice Selection', () => {
             }
             return null
           })
-          .filter(s => s !== null)
+          .filter((s): s is NonNullable<typeof s> => s !== null)
         
         // All should have same depth and size
         if (slicesContainingTarget.length > 1) {
           const first = slicesContainingTarget[0]
           slicesContainingTarget.forEach(slice => {
-            expect(slice!.depth).toBe(first!.depth)
-            expect(slice!.size).toBe(first!.size)
+            expect(slice.depth).toBe(first.depth)
+            expect(slice.size).toBe(first.size)
           })
         }
       })
@@ -173,10 +173,10 @@ describe('Slice Selection', () => {
     it('should use absolute z for size calculation (camera-independent)', () => {
       const slices = selectSlices(0, 1, 200)
       
-      // Each slice's size should match the geometric progression based on ABSOLUTE z
+      // Each slice's size is bounded by the alignment-based upper limit
       slices.forEach(slice => {
         const absZ = Math.abs(slice.depth)
-        // Size should be largest power of 2 <= abs(z), capped at 64
+        // Size should be largest power of 2 that both divides depth and is <= candidate size
         if (absZ >= 1) {
           const expectedMaxSize = Math.min(64, Math.pow(2, Math.floor(Math.log2(absZ))))
           expect(slice.size).toBeLessThanOrEqual(expectedMaxSize)
@@ -365,9 +365,9 @@ describe('Slice Selection', () => {
   })
 
   describe('O(log n) slice count', () => {
-    it('should use O(log n) slices for distance n (geometric progression)', () => {
+    it('should use O(log n) slices for distance n (alignment-based doubling)', () => {
       // For distance n, the number of slices should be roughly proportional to log2(n)
-      // due to the geometric progression where each slice doubles in size
+      // due to the alignment-based sizing where each successive slice doubles in size
       
       // Test with various distances
       const testCases = [
@@ -388,18 +388,18 @@ describe('Slice Selection', () => {
 
     it('should use fewer slices than a linear slicing approach', () => {
       // For distance 200, a linear approach with size=1 would need 199 slices
-      // Our geometric approach should use significantly fewer
+      // Our alignment-based approach should use significantly fewer
       const slices = selectSlices(0, 1, 200)
       
       // Linear approach would use ~199 slices
-      // Geometric approach should use much less
+      // Alignment-based approach should use much less
       expect(slices.length).toBeLessThan(50)
     })
 
-    it('should show geometric progression of slice sizes', () => {
+    it('should show power-of-2 progression of slice sizes from z=1', () => {
       const slices = selectSlices(0, 1, 100)
       
-      // Check that early slices follow geometric progression: 1, 2, 4, 8, 16, 32, 64
+      // Check that early slices follow power-of-2 progression: 1, 2, 4, 8, 16, 32, 64
       const expectedSizes = [1, 2, 4, 8, 16, 32, 64]
       const actualSizes = slices.slice(0, expectedSizes.length).map(s => s.size)
       
@@ -512,11 +512,12 @@ describe('Slice Selection', () => {
       expect(avgNearSize).toBeLessThan(avgFarSize)
     })
 
-    it('should follow geometric progression based on absolute z', () => {
+    it('should follow alignment-based sizing rules', () => {
       const slices = selectSlices(0, 1, 200)
       
-      // Check that slices follow power-of-2 progression
+      // Check that slices follow alignment rules: depth % size == 0
       slices.forEach(slice => {
+        expect(slice.depth % slice.size).toBe(0)
         const absZ = Math.abs(slice.depth)
         if (absZ >= 1) {
           const expectedMaxSize = Math.min(64, Math.pow(2, Math.floor(Math.log2(absZ))))

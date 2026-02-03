@@ -149,7 +149,7 @@ describe('ParallaxRenderer', () => {
       const camera = renderer.getCamera()
       
       // Layers should be at increasing depths from camera
-      // with geometric progression of sizes
+      // with alignment-based power-of-2 sizes
       layers.forEach((layer, index) => {
         // Layer depth should be ahead of camera
         const viewingDistance = layer.depth - camera.z
