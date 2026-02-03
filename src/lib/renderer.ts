@@ -1,4 +1,4 @@
-import { selectSlices } from './slice-selection'
+import { selectSlices, DEFAULT_DEPTH_MULTIPLIER } from './slice-selection'
 
 // Projection scale factor: determines the size of voxels relative to their distance
 // Higher values = larger voxels at the same depth
@@ -422,6 +422,7 @@ export class ParallaxRenderer {
   private lastCachePosition: Camera
   private sessionStats: SessionStats
   private updateStartTime: number = 0
+  private depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER
 
   constructor(canvas: HTMLCanvasElement, world: World) {
     this.canvas = canvas
@@ -576,7 +577,7 @@ export class ParallaxRenderer {
     // Use selectSlices to ensure contiguous z coverage without gaps
     const minZ = 1
     const maxZ = 200
-    return selectSlices(this.camera.z, minZ, maxZ)
+    return selectSlices(this.camera.z, minZ, maxZ, this.depthMultiplier)
   }
 
   private updateLayers() {
@@ -739,6 +740,19 @@ export class ParallaxRenderer {
     const layer = this.layers.get(depth)
     if (layer) {
       layer.visible = visible
+    }
+  }
+
+  getDepthMultiplier(): number {
+    return this.depthMultiplier
+  }
+
+  setDepthMultiplier(multiplier: number) {
+    if (multiplier >= 1.1 && multiplier <= 4) {
+      this.depthMultiplier = multiplier
+      // Clear all layers to force regeneration with new slice boundaries
+      this.layers.clear()
+      this.invalidateCacheWithMiss()
     }
   }
 }
