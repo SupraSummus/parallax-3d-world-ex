@@ -4,13 +4,15 @@ import App from './App'
 
 describe('App Component', () => {
   beforeEach(() => {
-    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({
-      fillStyle: '',
-      fillRect: vi.fn(),
-      clearRect: vi.fn(),
-      drawImage: vi.fn(),
-      globalAlpha: 1,
-    })) as unknown as typeof HTMLCanvasElement.prototype.getContext
+    HTMLCanvasElement.prototype.getContext = vi.fn(function() {
+      return {
+        fillStyle: '',
+        fillRect: vi.fn(),
+        clearRect: vi.fn(),
+        drawImage: vi.fn(),
+        globalAlpha: 1,
+      }
+    }) as unknown as typeof HTMLCanvasElement.prototype.getContext
   })
 
   it('should render the main title', () => {
