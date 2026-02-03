@@ -107,23 +107,24 @@ export function generateSlicesForRange(minZ: number, maxZ: number): SliceBoundar
     // Align to size boundary
     let depth = Math.floor(currentZ / size) * size
     
-    // If alignment moved us backward, use the next aligned position
+    // If alignment moved us backward, find a smaller slice that starts at or after currentZ
     if (depth < currentZ) {
-      // Check if we can fit a smaller slice that starts at currentZ
-      let adjustedSize = size
-      while (adjustedSize > MIN_SIZE) {
-        const nextSize = adjustedSize / 2
-        const nextDepth = Math.floor(currentZ / nextSize) * nextSize
-        if (nextDepth >= currentZ) {
-          adjustedSize = nextSize
-          depth = nextDepth
+      // Try progressively smaller sizes until we find one that aligns correctly
+      let adjustedSize = size / 2
+      let foundValidSize = false
+      
+      while (adjustedSize >= MIN_SIZE) {
+        const alignedDepth = Math.floor(currentZ / adjustedSize) * adjustedSize
+        if (alignedDepth >= currentZ) {
+          depth = alignedDepth
+          foundValidSize = true
           break
         }
-        adjustedSize = nextSize
+        adjustedSize = adjustedSize / 2
       }
       
-      // If still behind, use size 1 slice at current position
-      if (depth < currentZ) {
+      // If no smaller size worked, use size 1 slice at current position
+      if (!foundValidSize) {
         depth = Math.floor(currentZ)
         adjustedSize = MIN_SIZE
       }

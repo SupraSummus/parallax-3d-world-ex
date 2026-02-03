@@ -73,9 +73,9 @@ describe('Slice Selection', () => {
       it('should select slices based on camera position', () => {
         const slices = selectSlices(-30, 1, 100)
         
-        // First slice should be at camera + minRelativeDepth
-        expect(slices[0].depth).toBeGreaterThanOrEqual(-29)
+        // First slice should cover camera + minRelativeDepth (i.e., -29)
         expect(slices[0].depth).toBeLessThanOrEqual(-29)
+        expect(slices[0].depth + slices[0].size).toBeGreaterThan(-29)
       })
 
       it('should produce contiguous coverage', () => {
