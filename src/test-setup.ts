@@ -7,11 +7,9 @@ afterEach(() => {
 })
 
 globalThis.ResizeObserver = vi.fn(function(this: ResizeObserver) {
-  return {
-    observe: vi.fn(),
-    unobserve: vi.fn(),
-    disconnect: vi.fn(),
-  }
+  this.observe = vi.fn()
+  this.unobserve = vi.fn()
+  this.disconnect = vi.fn()
 }) as unknown as typeof ResizeObserver
 
 HTMLCanvasElement.prototype.getContext = vi.fn(function() {
