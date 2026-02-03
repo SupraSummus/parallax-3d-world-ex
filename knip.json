@@ -8,7 +8,8 @@
     "src/**/*.{ts,tsx}!"
   ],
   "ignore": [
-    "src/vite-end.d.ts"
+    "src/vite-end.d.ts",
+    "src/test-setup.ts"
   ],
   "ignoreBinaries": [
     "fuser"
@@ -16,6 +17,7 @@
   "ignoreDependencies": [
     "@vitest/coverage-v8",
     "tw-animate-css",
-    "@radix-ui/colors"
+    "@radix-ui/colors",
+    "@tailwindcss/vite"
   ]
 }

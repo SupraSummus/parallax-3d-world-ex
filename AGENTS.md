@@ -63,6 +63,9 @@ npm run dev
 # Lint code (fix errors before committing)
 npm run lint
 
+# Check for unused code, exports, and dependencies
+npm run knip
+
 # Run all tests
 npx vitest run
 
@@ -115,7 +118,8 @@ npm run build
 
 1. **Run tests** → `npx vitest run` to verify no regressions
 2. **Run lint** → `npm run lint` and fix errors
-3. **Update docs if needed** → Keep docs in sync with code
+3. **Run knip** → `npm run knip` to check for unused code
+4. **Update docs if needed** → Keep docs in sync with code
 
 ### Documentation Changes
 
