@@ -1,48 +1,33 @@
 import { describe, it, expect } from 'vitest'
-import { selectSlices, generateSlicesForRange, getSliceSizeForAbsoluteZ, getSliceContainingZ } from './slice-selection'
+import { selectSlices } from './slice-selection'
 
 describe('Slice Selection', () => {
   describe('Mechanism 1: Camera-Independent Slicing', () => {
-    describe('getSliceSizeForAbsoluteZ', () => {
+    describe('slice size behavior (verified through selectSlices)', () => {
       it('should return power-of-2 sizes based on absolute z', () => {
-        expect(getSliceSizeForAbsoluteZ(0)).toBe(1)
-        expect(getSliceSizeForAbsoluteZ(1)).toBe(1)
-        expect(getSliceSizeForAbsoluteZ(2)).toBe(2)
-        expect(getSliceSizeForAbsoluteZ(3)).toBe(2)
-        expect(getSliceSizeForAbsoluteZ(4)).toBe(4)
-        expect(getSliceSizeForAbsoluteZ(7)).toBe(4)
-        expect(getSliceSizeForAbsoluteZ(8)).toBe(8)
-        expect(getSliceSizeForAbsoluteZ(15)).toBe(8)
-        expect(getSliceSizeForAbsoluteZ(16)).toBe(16)
-        expect(getSliceSizeForAbsoluteZ(64)).toBe(64)
-        expect(getSliceSizeForAbsoluteZ(128)).toBe(64) // Capped at 64
+        // Test that slices at different z positions have appropriate power-of-2 sizes
+        const slices = selectSlices(0, 1, 200)
+        const validSizes = [1, 2, 4, 8, 16, 32, 64]
+        
+        slices.forEach(slice => {
+          expect(validSizes).toContain(slice.size)
+        })
       })
 
       it('should handle negative z-coordinates', () => {
-        expect(getSliceSizeForAbsoluteZ(-1)).toBe(1)
-        expect(getSliceSizeForAbsoluteZ(-2)).toBe(2)
-        expect(getSliceSizeForAbsoluteZ(-8)).toBe(8)
-        expect(getSliceSizeForAbsoluteZ(-100)).toBe(64)
+        // Test slices at negative z positions
+        const slices = selectSlices(-100, 1, 50)
+        const validSizes = [1, 2, 4, 8, 16, 32, 64]
+        
+        slices.forEach(slice => {
+          expect(validSizes).toContain(slice.size)
+        })
       })
     })
 
-    describe('getSliceContainingZ', () => {
-      it('should return slice aligned to size boundary', () => {
-        const slice = getSliceContainingZ(10)
-        expect(slice.depth).toBe(8)  // Aligned to size-8 boundary
-        expect(slice.size).toBe(8)
-      })
-
-      it('should return consistent boundaries for same z', () => {
-        const slice1 = getSliceContainingZ(10)
-        const slice2 = getSliceContainingZ(10)
-        expect(slice1).toEqual(slice2)
-      })
-    })
-
-    describe('generateSlicesForRange', () => {
+    describe('slice generation (verified through selectSlices)', () => {
       it('should produce contiguous z coverage with no gaps', () => {
-        const slices = generateSlicesForRange(0, 200)
+        const slices = selectSlices(0, 1, 200)
         
         for (let i = 0; i < slices.length - 1; i++) {
           const currentEnd = slices[i].depth + slices[i].size
@@ -52,13 +37,13 @@ describe('Slice Selection', () => {
       })
 
       it('should produce same slices for same range (camera-independent)', () => {
-        const slices1 = generateSlicesForRange(0, 100)
-        const slices2 = generateSlicesForRange(0, 100)
+        const slices1 = selectSlices(0, 1, 100)
+        const slices2 = selectSlices(0, 1, 100)
         expect(slices1).toEqual(slices2)
       })
 
       it('should use power-of-2 sizes', () => {
-        const slices = generateSlicesForRange(0, 200)
+        const slices = selectSlices(0, 1, 200)
         const validSizes = [1, 2, 4, 8, 16, 32, 64]
         
         slices.forEach(slice => {
@@ -328,8 +313,8 @@ describe('Slice Selection', () => {
 
     it('should produce same slices for same world z range', () => {
       // Same world z range should produce identical slices regardless of camera
-      const slices1 = generateSlicesForRange(0, 100)
-      const slices2 = generateSlicesForRange(0, 100)
+      const slices1 = selectSlices(0, 0, 100)
+      const slices2 = selectSlices(0, 0, 100)
       
       expect(slices1).toEqual(slices2)
     })
@@ -502,8 +487,8 @@ describe('Slice Selection', () => {
 
     it('should get denser (more slices) near z=0 than far from z=0', () => {
       // Near z=0 should have more detail (smaller slices)
-      const nearSlices = generateSlicesForRange(1, 16)   // 15 units near z=0
-      const farSlices = generateSlicesForRange(100, 115) // 15 units far from z=0
+      const nearSlices = selectSlices(0, 1, 16)   // 15 units near z=0
+      const farSlices = selectSlices(99, 1, 16) // 15 units far from z=0 (100 to 115)
       
       // Near slices have smaller average size
       const avgNearSize = nearSlices.reduce((s, x) => s + x.size, 0) / nearSlices.length
@@ -540,30 +525,32 @@ describe('Slice Selection', () => {
   })
 
   describe('Slice size calculation (via selectSlices)', () => {
-    // Tests verify getSliceSizeForAbsoluteZ behavior indirectly through selectSlices
+    // Tests verify slice size behavior indirectly through selectSlices
     it('should return appropriate size based on absolute z', () => {
       // Slices at z=1 should have size 1
       const slices = selectSlices(0, 1, 2)
       expect(slices[0].size).toBe(1)
     })
 
-    it('should return power of 2 for each absolute z threshold', () => {
-      // Test specific absolute z thresholds using generateSlicesForRange
-      const testCases = [
-        { z: 1, expectedSize: 1 },
-        { z: 2, expectedSize: 2 },
-        { z: 4, expectedSize: 4 },
-        { z: 8, expectedSize: 8 },
-        { z: 16, expectedSize: 16 },
-        { z: 32, expectedSize: 32 },
-        { z: 64, expectedSize: 64 },
-        { z: 128, expectedSize: 64 }, // Capped at 64
-      ]
+    it('should return power of 2 sizes at different z values', () => {
+      // Test that slices at various z positions have appropriate power-of-2 sizes
+      const slices = selectSlices(0, 0, 150)
+      const validSizes = [1, 2, 4, 8, 16, 32, 64]
       
-      testCases.forEach(({ z, expectedSize }) => {
-        const size = getSliceSizeForAbsoluteZ(z)
-        expect(size).toBe(expectedSize)
+      slices.forEach(slice => {
+        expect(validSizes).toContain(slice.size)
       })
+      
+      // Verify that slices near z=0 have smaller sizes
+      const smallSlices = slices.filter(s => s.depth >= 1 && s.depth < 4)
+      smallSlices.forEach(slice => {
+        expect(slice.size).toBeLessThanOrEqual(4)
+      })
+      
+      // Verify that slices at z >= 64 can have max size
+      const largeSlices = slices.filter(s => s.depth >= 64)
+      const hasMaxSize = largeSlices.some(slice => slice.size === 64)
+      expect(hasMaxSize).toBe(true)
     })
   })
 

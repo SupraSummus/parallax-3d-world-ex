@@ -58,7 +58,7 @@ export const DEFAULT_DEPTH_MULTIPLIER = 2
  * @param depthMultiplier - The geometric progression multiplier (default 2 for power-of-2)
  * @returns Maximum size for a slice at this z, based on the multiplier progression (rounded to integer)
  */
-export function getSliceSizeForAbsoluteZ(absoluteZ: number, depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER): number {
+function getSliceSizeForAbsoluteZ(absoluteZ: number, depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER): number {
   const absZ = Math.abs(absoluteZ)
   
   if (absZ < 1) return MIN_SIZE
@@ -70,26 +70,6 @@ export function getSliceSizeForAbsoluteZ(absoluteZ: number, depthMultiplier: num
   // Round to nearest integer for proper alignment with integer z-coordinates
   const rawSize = Math.pow(depthMultiplier, sizeExponent)
   return Math.max(MIN_SIZE, Math.round(rawSize))
-}
-
-/**
- * Generates the canonical slice boundary for a given z-coordinate.
- * Returns the slice that CONTAINS this z-coordinate.
- * 
- * Note: This uses getSliceSizeForAbsoluteZ which may return a size that doesn't
- * align properly with z. The returned slice boundary always aligns the depth
- * to the size (depth % size == 0), which means the slice may start before z.
- * 
- * For generating contiguous slices, use generateSlicesForRange() instead.
- * 
- * @param z - Absolute z-coordinate in world space
- * @param depthMultiplier - The geometric progression multiplier (default 2)
- * @returns The slice boundary that contains this z-coordinate
- */
-export function getSliceContainingZ(z: number, depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER): SliceBoundary {
-  const size = getSliceSizeForAbsoluteZ(z, depthMultiplier)
-  const depth = Math.floor(z / size) * size
-  return { depth, size }
 }
 
 /**
@@ -118,7 +98,7 @@ export function getSliceContainingZ(z: number, depthMultiplier: number = DEFAULT
  * @param depthMultiplier - The geometric progression multiplier (default 2 for power-of-2)
  * @returns Array of slice boundaries sorted by depth
  */
-export function generateSlicesForRange(minZ: number, maxZ: number, depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER): SliceBoundary[] {
+function generateSlicesForRange(minZ: number, maxZ: number, depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER): SliceBoundary[] {
   if (minZ >= maxZ) {
     return []
   }

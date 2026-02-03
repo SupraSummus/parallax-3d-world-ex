@@ -32,6 +32,9 @@ jobs:
       - name: Run knip (check for unused code)
         run: npm run knip
 
+      - name: Run knip production mode (check for test-only code)
+        run: npm run knip:production
+
       - name: Run TypeScript type check
         run: npx tsc --noEmit
 
