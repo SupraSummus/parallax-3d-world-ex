@@ -5,7 +5,7 @@
  * 
  * ## Mechanism 1: Camera-Independent World Slicing
  * - Slices have FIXED positions in absolute world coordinates
- * - Slice sizes are determined by absolute z-coordinate (geometric progression)
+ * - Slice sizes are determined by ALIGNMENT constraints (power-of-2 divisibility)
  * - Slices are rendered FLAT (orthographic) without any camera/perspective info
  * - Slice boundaries are globally consistent and never change
  * 
@@ -14,14 +14,25 @@
  * - Selected slices are rendered lazily when requested
  * - Compositing applies parallax effect using camera position
  * 
- * The geometric progression for ABSOLUTE z-coordinates:
- * - z ∈ [1, 2): size 1
- * - z ∈ [2, 4): size 2
- * - z ∈ [4, 8): size 4
- * - z ∈ [8, 16): size 8
- * - etc.
+ * ## Slice Size Rules (Alignment-Based)
  * 
- * This achieves O(log n) slices for distance n while maintaining camera-independence.
+ * Slice size is determined by the starting depth's alignment:
+ * - Size-1 slices can start at any integer z
+ * - Size-2 slices can only start at z where z % 2 == 0
+ * - Size-4 slices can only start at z where z % 4 == 0
+ * - Size-N slices can only start at z where z % N == 0
+ * 
+ * The algorithm picks the largest valid size (up to MAX_SIZE) for each position.
+ * This achieves O(log n) slices when starting from z=0, while ensuring
+ * camera-independence and proper boundary alignment.
+ * 
+ * Example slice progression from z=0:
+ * - z=0: size 1 (special case near origin)
+ * - z=1: size 1 (1 % 1 == 0)
+ * - z=2: size 2 (2 % 2 == 0)
+ * - z=4: size 4 (4 % 4 == 0)
+ * - z=8: size 8 (8 % 8 == 0)
+ * - etc.
  */
 
 export interface SliceBoundary {
@@ -35,13 +46,15 @@ const MIN_SIZE = 1
 const MAX_SIZE = 64
 
 /**
- * Determines the appropriate slice size for a given absolute z-coordinate.
- * Uses a geometric scale where slice size equals the largest power of 2 that is <= |z|.
+ * Gets the maximum candidate size for a given z-coordinate.
+ * This is a starting point - the actual size may be smaller due to alignment constraints.
+ * Uses a geometric scale where max size equals the largest power of 2 that is <= |z|.
  * 
- * This is CAMERA-INDEPENDENT - the same z-coordinate always produces the same size.
+ * Note: The actual slice size is determined by alignment in generateSlicesForRange().
+ * This function only provides the upper bound.
  * 
  * @param absoluteZ - Absolute z-coordinate in world space
- * @returns Power-of-2 size for the slice (1, 2, 4, 8, 16, 32, or 64)
+ * @returns Maximum power-of-2 size for a slice at this z (1, 2, 4, 8, 16, 32, or 64)
  */
 export function getSliceSizeForAbsoluteZ(absoluteZ: number): number {
   const absZ = Math.abs(absoluteZ)
@@ -59,12 +72,11 @@ export function getSliceSizeForAbsoluteZ(absoluteZ: number): number {
  * Generates the canonical slice boundary for a given z-coordinate.
  * Returns the slice that CONTAINS this z-coordinate.
  * 
- * Slices are aligned to their size boundaries in world space.
- * For example:
- * - Size-1 slices start at ..., -2, -1, 0, 1, 2, ...
- * - Size-2 slices start at ..., -4, -2, 0, 2, 4, ...
- * - Size-4 slices start at ..., -8, -4, 0, 4, 8, ...
- * - etc.
+ * Note: This uses getSliceSizeForAbsoluteZ which may return a size that doesn't
+ * align properly with z. The returned slice boundary always aligns the depth
+ * to the size (depth % size == 0), which means the slice may start before z.
+ * 
+ * For generating contiguous slices, use generateSlicesForRange() instead.
  * 
  * @param z - Absolute z-coordinate in world space
  * @returns The slice boundary that contains this z-coordinate
@@ -82,10 +94,18 @@ export function getSliceContainingZ(z: number): SliceBoundary {
  * in world space and do not depend on camera position. The camera only determines
  * WHICH slices are selected for rendering.
  * 
+ * ## Alignment-Based Sizing
+ * 
+ * The actual slice size at each position is the largest power-of-2 that:
+ * 1. Evenly divides the starting depth (depth % size == 0)
+ * 2. Does not exceed the candidate size from getSliceSizeForAbsoluteZ()
+ * 
+ * This ensures proper alignment while respecting the z-based upper bound.
+ * 
  * The algorithm ensures:
  * 1. Contiguous coverage with no gaps
  * 2. No overlapping slices
- * 3. Slices aligned to their size boundaries
+ * 3. Slices aligned to their size boundaries (depth % size == 0)
  * 4. Consistent boundaries regardless of how the function is called
  * 
  * @param minZ - Minimum z-coordinate (absolute world space)

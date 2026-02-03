@@ -6,7 +6,7 @@ The parallax rendering engine uses **two distinct mechanisms** that work togethe
 
 ### Mechanism 1: Camera-Independent World Slicing
 - Slices have **FIXED positions in absolute world coordinates**
-- Slice sizes are determined by **absolute z-coordinate** (geometric progression)
+- Slice sizes are determined by **alignment constraints** (power-of-2 divisibility)
 - Slices are rendered **FLAT (orthographic)** without any camera/perspective info
 - Slice boundaries are globally consistent and never change
 - Slices exist lazily - only rendered when requested by the camera
@@ -21,19 +21,26 @@ The parallax rendering engine uses **two distinct mechanisms** that work togethe
 
 ### World Slicing (Mechanism 1 - Camera-Independent)
 
-Slices are defined based on **absolute z-coordinate** using geometric progression:
+Slices are defined based on **alignment constraints**: a slice of size N can only start at a depth where `depth % N == 0`:
 
 ```
+Alignment Rule:
+- Size-1 slices can start at any integer z
+- Size-2 slices can only start at z % 2 == 0  (0, 2, 4, 6, ...)
+- Size-4 slices can only start at z % 4 == 0  (0, 4, 8, 12, ...)
+- Size-8 slices can only start at z % 8 == 0  (0, 8, 16, 24, ...)
+- etc.
+
 World Z:  0    1    2    4         8                16               32
           │────│────│────│─────────│─────────────────│─────────────────│...
           │ 1  │ 1  │ 2  │    4    │        8        │       16        │
           └────┴────┴────┴─────────┴─────────────────┴─────────────────┘
-          Geometric slice sizes (size = largest power of 2 ≤ |z|)
+          Alignment-based slice sizes (size = largest power of 2 dividing depth)
 ```
 
 Key properties:
-- Slice size = largest power of 2 ≤ |absolute z|
-- Slices are aligned to their size boundaries (z=8 has size-8 slice starting at 8)
+- Slice size at depth d = largest power of 2 that divides d evenly
+- Slices are aligned to their size boundaries (depth % size == 0)
 - Capped at maxSize (64) to prevent extremely large slices
 - **Same z-coordinate always belongs to same slice regardless of camera position**
 - Slices are rendered flat/orthographic (no perspective)
@@ -48,19 +55,20 @@ Given fixed world slices:
 
 ### Slice Progression Example
 
-For any camera position, world z-coordinates map to consistent slices:
+For any camera position, world z-coordinates map to consistent slices.
+The slice size is determined by the alignment of the starting depth:
 
-| World Z Range | Size | Slice Start |
-|--------------|------|-------------|
-| [0, 1)       | 1    | 0           |
-| [1, 2)       | 1    | 1           |
-| [2, 4)       | 2    | 2           |
-| [4, 8)       | 4    | 4           |
-| [8, 16)      | 8    | 8           |
-| [16, 32)     | 16   | 16          |
-| [32, 64)     | 32   | 32          |
-| [64, 128)    | 64   | 64          |
-| [128, 192)   | 64   | 128 (capped)|
+| Slice Start | Size | End | Alignment Reason |
+|-------------|------|-----|------------------|
+| 0           | 1    | 1   | 0 can use any size, but z=0 special case |
+| 1           | 1    | 2   | 1 % 1 == 0, 1 % 2 != 0 |
+| 2           | 2    | 4   | 2 % 2 == 0, 2 % 4 != 0 |
+| 4           | 4    | 8   | 4 % 4 == 0, 4 % 8 != 0 |
+| 8           | 8    | 16  | 8 % 8 == 0, 8 % 16 != 0 |
+| 16          | 16   | 32  | 16 % 16 == 0, 16 % 32 != 0 |
+| 32          | 32   | 64  | 32 % 32 == 0, 32 % 64 != 0 |
+| 64          | 64   | 128 | 64 % 64 == 0 (capped at 64) |
+| 128         | 64   | 192 | Capped at maxSize (64) |
 
 ### Layer Lifecycle
 
@@ -94,9 +102,9 @@ If slices moved with camera (viewing-distance-based), objects would "jump" betwe
 
 ### Implementation Functions
 
-1. `getSliceSizeForAbsoluteZ(z)` - Returns power-of-2 size based on absolute z
-2. `getSliceContainingZ(z)` - Returns the canonical slice for a z-coordinate
-3. `generateSlicesForRange(minZ, maxZ)` - Generates camera-independent slices
+1. `getSliceSizeForAbsoluteZ(z)` - Returns maximum candidate size (upper bound based on |z|)
+2. `getSliceContainingZ(z)` - Returns the slice containing a z-coordinate
+3. `generateSlicesForRange(minZ, maxZ)` - Generates alignment-based slices for a range
 4. `selectSlices(cameraZ, minRelativeDepth, maxRelativeDepth)` - Camera selects visible slices
 
 ## Benefits
