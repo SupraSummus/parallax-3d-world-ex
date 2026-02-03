@@ -2,116 +2,94 @@
 
 ## Overview
 
-The parallax rendering engine uses two distinct mechanisms that must be **decoupled** for smooth movement:
+The parallax rendering engine uses a geometric progression of slice sizes based on **viewing distance** (distance from camera to slice). This creates the proper parallax effect where:
 
-1. **World Slicing** - Partitions the 3D world into layers at fixed z-boundaries
-2. **View Positioning** - Positions layers on screen based on camera position
-
-## Problem Statement
-
-Previously, these mechanisms were coupled: layer boundaries were calculated relative to the camera z-position. This caused layers to "jump" when moving forward/backward because:
-- Layer boundaries shifted with camera movement
-- Layers would split, merge, or suddenly appear at different z-positions
-- The result was jerky/stepwise motion in the z-direction
-
-Sideways movement (x/y) was already smooth because layers only needed repositioning, not recalculation.
+1. **Near slices** have more detail (smaller sizes, more slices per unit distance)
+2. **Far slices** have less detail (larger sizes, fewer slices per unit distance)
+3. **Slices follow the camera**, maintaining consistent viewing distance relationships
 
 ## Design Principles
 
-### Separation of Concerns
+### Viewing Distance Based Slicing
+
+Slices are defined based on **viewing distance** (distance from camera), not absolute world coordinates:
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                     World Slicing                                │
-│  - Fixed absolute z-boundaries in world space                    │
-│  - Power-of-2 sizes aligned to world coordinates                 │
-│  - Independent of camera position                                │
-│  - Cached and reused across frames                               │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     View Positioning                             │
-│  - Camera determines which layers are visible                    │
-│  - Parallax offset calculated per layer                          │
-│  - Smooth interpolation for all movement directions              │
-│  - Only regenerates when layers enter/exit view                  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### World Slicing (Camera-Independent)
-
-Layers are defined in **absolute world coordinates** using **geometric progression**:
-
-```
-World Z:  0    1    2    4         8                16
-          │────│────│────│─────────│─────────────────│...
-          │ 1  │ 1  │ 2  │    4    │        8        │
-          └────┴────┴────┴─────────┴─────────────────┘
-          Geometric layer sizes (each slice size = largest power of 2 ≤ z)
+Viewing Distance:  1    2    4         8                16
+                   │────│────│─────────│─────────────────│...
+                   │ 1  │ 2  │    4    │        8        │
+                   └────┴────┴─────────┴─────────────────┘
+                   Geometric slice sizes (size = largest power of 2 ≤ viewing distance)
 ```
 
 The slicing algorithm achieves **O(log n) slices for distance n**:
-1. Starts from a fixed minimum z-value (e.g., 0 or world minimum)
-2. Uses geometric power-of-2 sizes where slice size = largest power of 2 ≤ |z|
-3. Each slice covers a range that doubles in size:
-   - z=1 → size 1 (covers 1-2)
-   - z=2 → size 2 (covers 2-4)
-   - z=4 → size 4 (covers 4-8)
-   - z=8 → size 8 (covers 8-16)
+1. Slice size = largest power of 2 ≤ viewing distance
+2. Each slice covers a range that doubles in size:
+   - Viewing distance 1 → size 1 (covers 1-2)
+   - Viewing distance 2 → size 2 (covers 2-4)
+   - Viewing distance 4 → size 4 (covers 4-8)
+   - Viewing distance 8 → size 8 (covers 8-16)
    - etc.
-4. Aligns boundaries to size multiples (e.g., size-8 layers start at z=0, 8, 16...)
-5. Caps at maxSize (64) to prevent extremely large slices
-6. **Does NOT depend on camera position**
+3. Caps at maxSize (64) to prevent extremely large slices
+4. **Slices follow the camera** - viewing distance progression is constant
 
 This geometric progression means covering distance n requires only ~log₂(n) slices,
 plus a linear term for distances beyond the maxSize cap.
 
-### View Positioning (Camera-Dependent)
+### Why Viewing Distance Based?
 
-Given fixed world layers, the view positioning:
-1. Determines visible range: `[camera.z + minDepth, camera.z + maxDepth]`
-2. Selects layers that overlap with visible range
-3. Calculates parallax offset for each layer based on camera position
-4. Layers smoothly slide as camera moves in any direction
+The previous design used absolute world coordinates for slice sizes, which had problems:
+- A world position far from origin would always have large slices, even when close to camera
+- Moving toward objects didn't increase their detail (slice density)
+- Missing slices appeared randomly during camera movement
 
-### Layer Lifecycle
+With viewing distance based slicing:
+- Nearby objects always have small slices (more detail)
+- Moving toward objects increases their slice density (more detail)
+- Consistent slice structure regardless of camera position
+- Smooth, predictable behavior during movement
 
-```
-Layer State: INACTIVE → VISIBLE → RENDERING → CACHED → VISIBLE → INACTIVE
-                 │          │          │          │          │
-                 └──────────┼──────────┼──────────┼──────────┘
-                         (enters view)       (exits view)
-```
+### Parallax Effect
 
-- **INACTIVE**: Layer exists in world but not needed for current view
-- **VISIBLE**: Layer enters visible range, needs to be rendered
-- **RENDERING**: Voxels are projected and cached to off-screen canvas
-- **CACHED**: Layer content is reused, only position updates
-- **On z-movement**: Different layers become visible, but visible ones stay cached
+The parallax effect comes from:
+1. **Near slices** move more relative to camera movement
+2. **Far slices** move less relative to camera movement
+3. All slices follow the camera, maintaining proper depth perception
+
+### Slice Progression Example
+
+For camera at z=-30 with viewing range 1-200:
+
+| Viewing Distance | World Z | Size | Coverage |
+|-----------------|---------|------|----------|
+| 1               | -29     | 1    | -29 to -28 |
+| 2               | -28     | 2    | -28 to -26 |
+| 4               | -26     | 4    | -26 to -22 |
+| 8               | -22     | 8    | -22 to -14 |
+| 16              | -14     | 16   | -14 to 2 |
+| 32              | 2       | 32   | 2 to 34 |
+| 64              | 34      | 64   | 34 to 98 |
+| 128             | 98      | 64   | 98 to 162 (capped) |
 
 ### Cache Strategy
 
 | Movement Type | Cache Behavior |
 |---------------|----------------|
 | X/Y movement  | All layers cached, only parallax offset changes |
-| Z movement (small) | Most layers cached, edge layers may enter/exit |
-| Z movement (large) | More layers invalidated, but core layers reused |
+| Z movement (small) | Layers shift with camera, content invalidated |
+| Z movement (large) | Layers shift with camera, content invalidated |
 
 ### Implementation Notes
 
-1. `selectSlices(cameraZ, minRelativeDepth, maxRelativeDepth)` - Uses cameraZ to compute visible range, but layer boundaries are aligned to absolute world coordinates
-2. Layer boundaries are globally consistent across frames
-3. `updateLayers()` determines visibility based on camera.z
-4. Cache invalidation only when:
-   - World regenerates
-   - Canvas resizes
-   - Layer enters view for first time
+1. `selectSlices(cameraZ, minRelativeDepth, maxRelativeDepth)` - Creates slices based on viewing distance
+2. `getSliceSizeForViewingDistance(viewingDistance)` - Returns power-of-2 size for given distance
+3. Slices are contiguous with no gaps
+4. Slice count is consistent for same viewing distance range
 
 ## Benefits
 
 - **O(log n) efficiency**: Covering distance n requires only ~log₂(n) slices due to geometric progression
-- **Smooth z-movement**: Layers don't jump because boundaries are fixed
-- **Better caching**: Same layers reused across frames
-- **Predictable behavior**: Layer structure is deterministic
-- **Performance**: Less layer regeneration overall
+- **Proper parallax**: Near objects have more detail, far objects have less
+- **Consistent behavior**: Same slice structure regardless of camera world position
+- **No missing slices**: Slices are guaranteed contiguous
+- **Proper density**: Moving toward objects increases slice density (more detail)
