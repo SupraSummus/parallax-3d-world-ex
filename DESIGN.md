@@ -60,7 +60,7 @@ The slice size is determined by the alignment of the starting depth:
 
 | Slice Start | Size | End | Alignment Reason |
 |-------------|------|-----|------------------|
-| 0           | 1    | 1   | 0 can use any size, but z=0 special case |
+| 0           | 1    | 1   | |z| < 1 defaults to size 1 for proper origin coverage |
 | 1           | 1    | 2   | 1 % 1 == 0, 1 % 2 != 0 |
 | 2           | 2    | 4   | 2 % 2 == 0, 2 % 4 != 0 |
 | 4           | 4    | 8   | 4 % 4 == 0, 4 % 8 != 0 |
