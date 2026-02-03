@@ -163,6 +163,9 @@ export function selectSlices(cameraZ: number, minRelativeDepth: number, maxRelat
   
   while (currentZ < farZ) {
     // Compute viewing distance from camera
+    // Note: currentZ starts at Math.floor(nearZ) where nearZ = cameraZ + minRelativeDepth
+    // So viewingDistance is always approximately >= minRelativeDepth
+    // When nearZ is fractional, the first viewingDistance may be slightly less
     const viewingDistance = currentZ - cameraZ
     
     // Camera requests: "give me slice with size >= minSize"

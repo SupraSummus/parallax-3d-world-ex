@@ -36,7 +36,9 @@ describe('Slice Selection', () => {
         testDepths.forEach(depth => {
           testMinSizes.forEach(minSize => {
             const slice = getSliceAtDepth(depth, minSize)
-            // Use Math.abs to handle -0 vs +0
+            // Use Math.abs because JavaScript modulo returns -0 for negative numbers
+            // (e.g., -4 % 2 === -0) and vitest's .toBe() uses Object.is which
+            // distinguishes -0 from +0
             expect(Math.abs(slice.depth % slice.size)).toBe(0)
           })
         })
