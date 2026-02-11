@@ -655,13 +655,13 @@ export class ParallaxRenderer {
         const scale = this.getProjectionScale(viewingDistance)
         const offsetX = -this.camera.x * scale
         const offsetY = this.camera.y * scale
-        elements.canvas.style.transform = `translate3d(${String(offsetX)}px, ${String(offsetY)}px, 0)`
+        elements.canvas.style.transform = `translate3d(${offsetX}px, ${offsetY}px, 0)`
         elements.canvas.style.display = ''
 
         // Semi-transparent fog overlay for depth perception
         const fogIntensity = Math.min(0.15, viewingDistance / 500)
         if (fogIntensity > 0.01) {
-          elements.fog.style.backgroundColor = `rgba(10, 10, 21, ${String(fogIntensity)})`
+          elements.fog.style.backgroundColor = `rgba(10, 10, 21, ${fogIntensity})`
           elements.fog.style.display = ''
         } else {
           elements.fog.style.display = 'none'

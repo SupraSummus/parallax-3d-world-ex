@@ -96,13 +96,21 @@ Camera at z=-67, visible range 1-200:
 ```
 Layer State: REQUESTED → FLAT_RENDER → CACHED → COMPOSITED
                  │            │           │          │
-      (Camera requests) (Orthographic) (Reused)  (Parallax applied)
+      (Camera requests) (Orthographic) (Reused)  (CSS transform applied)
 ```
 
 - **REQUESTED**: Camera requests slice based on viewing distance
-- **FLAT_RENDER**: Slice voxels rendered orthographically
+- **FLAT_RENDER**: Slice voxels rendered orthographically to a layer canvas
 - **CACHED**: Rendered slice content reused across frames
-- **COMPOSITED**: Slice drawn to screen with parallax offset based on camera
+- **COMPOSITED**: Layer canvas positioned via CSS `transform: translate3d()` for GPU-accelerated parallax
+
+### Browser-Based Compositing
+
+Each layer is a separate `<canvas>` DOM element positioned with CSS transforms:
+- Layer canvases use `will-change: transform` to promote to compositor layers
+- Parallax offset applied via `transform: translate3d(offsetX, offsetY, 0)` (GPU-accelerated)
+- Fog depth effect uses overlay `<div>` elements between layers
+- When only X/Y camera movement occurs, only CSS transforms update—no canvas re-rendering needed
 
 ### Cache Strategy
 
