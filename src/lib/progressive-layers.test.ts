@@ -3,12 +3,11 @@ import { World, ParallaxRenderer } from './renderer'
 
 describe('Progressive Layer Slicing', () => {
   it('should create layers with power-of-2 boundaries', () => {
-    const canvas = document.createElement('canvas')
-    canvas.width = 800
-    canvas.height = 600
+    const container = document.createElement('div')
     
     const world = new World(12345)
-    const renderer = new ParallaxRenderer(canvas, world)
+    const renderer = new ParallaxRenderer(container, world)
+    renderer.resize(800, 600)
     
     renderer.setCamera({ x: 0, y: 0, z: 0 })
     renderer.render()
@@ -18,12 +17,11 @@ describe('Progressive Layer Slicing', () => {
   })
 
   it('should maintain far layers when moving by one unit', () => {
-    const canvas = document.createElement('canvas')
-    canvas.width = 800
-    canvas.height = 600
+    const container = document.createElement('div')
     
     const world = new World(12345)
-    const renderer = new ParallaxRenderer(canvas, world)
+    const renderer = new ParallaxRenderer(container, world)
+    renderer.resize(800, 600)
     
     renderer.setCamera({ x: 0, y: 0, z: 0 })
     renderer.render()
@@ -37,12 +35,11 @@ describe('Progressive Layer Slicing', () => {
   })
 
   it('should handle camera at different depths', () => {
-    const canvas = document.createElement('canvas')
-    canvas.width = 800
-    canvas.height = 600
+    const container = document.createElement('div')
     
     const world = new World(12345)
-    const renderer = new ParallaxRenderer(canvas, world)
+    const renderer = new ParallaxRenderer(container, world)
+    renderer.resize(800, 600)
     
     const depths = [0, 10, 20, -10, -20]
     
@@ -57,12 +54,11 @@ describe('Progressive Layer Slicing', () => {
   })
 
   it('should create more near layers than far layers', () => {
-    const canvas = document.createElement('canvas')
-    canvas.width = 800
-    canvas.height = 600
+    const container = document.createElement('div')
     
     const world = new World(12345)
-    const renderer = new ParallaxRenderer(canvas, world)
+    const renderer = new ParallaxRenderer(container, world)
+    renderer.resize(800, 600)
     
     renderer.setCamera({ x: 0, y: 0, z: 0 })
     renderer.render()
