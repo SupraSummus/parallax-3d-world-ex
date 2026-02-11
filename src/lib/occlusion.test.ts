@@ -45,16 +45,15 @@ describe('Occlusion and Depth Handling', () => {
   })
   
   describe('Layer depth coordination', () => {
-    let canvas: HTMLCanvasElement
+    let container: HTMLDivElement
     let world: World
     let renderer: ParallaxRenderer
     
     beforeEach(() => {
-      canvas = document.createElement('canvas')
-      canvas.width = 800
-      canvas.height = 600
+      container = document.createElement('div')
       world = new World(12345)
-      renderer = new ParallaxRenderer(canvas, world)
+      renderer = new ParallaxRenderer(container, world)
+      renderer.resize(800, 600)
     })
     
     it('should create layers at correct depths relative to camera', () => {
@@ -105,16 +104,15 @@ describe('Occlusion and Depth Handling', () => {
   })
   
   describe('Voxel projection for occlusion', () => {
-    let canvas: HTMLCanvasElement
+    let container: HTMLDivElement
     let world: World
     let renderer: ParallaxRenderer
     
     beforeEach(() => {
-      canvas = document.createElement('canvas')
-      canvas.width = 800
-      canvas.height = 600
+      container = document.createElement('div')
       world = new World(12345)
-      renderer = new ParallaxRenderer(canvas, world)
+      renderer = new ParallaxRenderer(container, world)
+      renderer.resize(800, 600)
     })
     
     it('should project voxels in front of camera correctly', () => {
@@ -146,16 +144,15 @@ describe('Occlusion and Depth Handling', () => {
   })
   
   describe('Back-to-front rendering order', () => {
-    let canvas: HTMLCanvasElement
+    let container: HTMLDivElement
     let world: World
     let renderer: ParallaxRenderer
     
     beforeEach(() => {
-      canvas = document.createElement('canvas')
-      canvas.width = 800
-      canvas.height = 600
+      container = document.createElement('div')
       world = new World(12345)
-      renderer = new ParallaxRenderer(canvas, world)
+      renderer = new ParallaxRenderer(container, world)
+      renderer.resize(800, 600)
     })
     
     it('should render layers from back to front', () => {
@@ -186,16 +183,15 @@ describe('Occlusion and Depth Handling', () => {
 })
 
 describe('Occlusion Edge Cases', () => {
-  let canvas: HTMLCanvasElement
+  let container: HTMLDivElement
   let world: World
   let renderer: ParallaxRenderer
   
   beforeEach(() => {
-    canvas = document.createElement('canvas')
-    canvas.width = 800
-    canvas.height = 600
+    container = document.createElement('div')
     world = new World(12345)
-    renderer = new ParallaxRenderer(canvas, world)
+    renderer = new ParallaxRenderer(container, world)
+    renderer.resize(800, 600)
   })
   
   it('should handle camera at world boundary', () => {

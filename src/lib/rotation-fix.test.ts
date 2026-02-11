@@ -3,12 +3,11 @@ import { World, ParallaxRenderer } from './renderer'
 
 describe('Fixed View Direction', () => {
   it('should render without rotation', () => {
-    const canvas = document.createElement('canvas')
-    canvas.width = 800
-    canvas.height = 600
+    const container = document.createElement('div')
     
     const world = new World(12345)
-    const renderer = new ParallaxRenderer(canvas, world)
+    const renderer = new ParallaxRenderer(container, world)
+    renderer.resize(800, 600)
     
     renderer.render()
     const stats = renderer.getStats()
@@ -17,12 +16,11 @@ describe('Fixed View Direction', () => {
   })
 
   it('should update view when camera moves', () => {
-    const canvas = document.createElement('canvas')
-    canvas.width = 800
-    canvas.height = 600
+    const container = document.createElement('div')
     
     const world = new World(12345)
-    const renderer = new ParallaxRenderer(canvas, world)
+    const renderer = new ParallaxRenderer(container, world)
+    renderer.resize(800, 600)
     
     renderer.render()
     
@@ -35,12 +33,11 @@ describe('Fixed View Direction', () => {
   })
 
   it('should maintain fixed viewing direction', () => {
-    const canvas = document.createElement('canvas')
-    canvas.width = 800
-    canvas.height = 600
+    const container = document.createElement('div')
     
     const world = new World(12345)
-    const renderer = new ParallaxRenderer(canvas, world)
+    const renderer = new ParallaxRenderer(container, world)
+    renderer.resize(800, 600)
     
     const camera1 = renderer.getCamera()
     expect(camera1.x).toBeDefined()

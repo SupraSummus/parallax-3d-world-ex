@@ -17,7 +17,7 @@
   "ignoreDependencies": [
     "@vitest/coverage-v8",
     "tw-animate-css",
-    "@radix-ui/colors",
-    "@tailwindcss/vite"
-  ]
+    "@radix-ui/colors"
+  ],
+  "ignoreExportsUsedInFile": true
 }

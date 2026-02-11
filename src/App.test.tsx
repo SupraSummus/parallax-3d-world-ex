@@ -25,10 +25,10 @@ describe('App Component', () => {
     expect(screen.getByText('Event-Driven 2.5D Rendering')).toBeInTheDocument()
   })
 
-  it('should render canvas element', () => {
+  it('should render layer container', () => {
     const { container } = render(<App />)
-    const canvas = container.querySelector('canvas')
-    expect(canvas).toBeInTheDocument()
+    const layerContainer = container.querySelector('.overflow-hidden')
+    expect(layerContainer).toBeInTheDocument()
   })
 
   describe('Performance Stats', () => {
@@ -174,11 +174,11 @@ describe('App Component', () => {
   describe('Mouse Controls', () => {
     it('should handle mouse down event', () => {
       const { container } = render(<App />)
-      const canvas = container.querySelector('canvas')
+      const layerContainer = container.querySelector('.overflow-hidden')
       
-      if (canvas) {
-        fireEvent.mouseDown(canvas, { button: 0, clientX: 100, clientY: 100 })
-        fireEvent.mouseUp(canvas)
+      if (layerContainer) {
+        fireEvent.mouseDown(layerContainer, { button: 0, clientX: 100, clientY: 100 })
+        fireEvent.mouseUp(layerContainer)
       }
       
       expect(true).toBe(true)
@@ -186,9 +186,9 @@ describe('App Component', () => {
 
     it('should handle mouse move for camera rotation', () => {
       const { container } = render(<App />)
-      const canvas = container.querySelector('canvas')
+      const layerContainer = container.querySelector('.overflow-hidden')
       
-      if (canvas) {
+      if (layerContainer) {
         fireEvent.mouseDown(window, { button: 0, clientX: 100, clientY: 100 })
         fireEvent.mouseMove(window, { clientX: 150, clientY: 120 })
         fireEvent.mouseUp(window)

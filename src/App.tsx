@@ -23,7 +23,7 @@ import {
 } from '@phosphor-icons/react'
 
 function App() {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<ParallaxRenderer | null>(null)
   const keysPressed = useRef<Set<string>>(new Set())
   const movementInterval = useRef<number | undefined>(undefined)
@@ -59,26 +59,24 @@ function App() {
   }, [])
 
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
+    const container = containerRef.current
+    if (!container) return
 
     const resizeCanvas = () => {
-      canvas.width = window.innerWidth
-      canvas.height = window.innerHeight
       if (rendererRef.current) {
         rendererRef.current.resize(window.innerWidth, window.innerHeight)
         requestRender()
       }
     }
 
-    resizeCanvas()
-    window.addEventListener('resize', resizeCanvas)
-
     const world = new World()
-    const renderer = new ParallaxRenderer(canvas, world)
+    const renderer = new ParallaxRenderer(container, world)
     rendererRef.current = renderer
+    renderer.resize(window.innerWidth, window.innerHeight)
 
     requestRender()
+
+    window.addEventListener('resize', resizeCanvas)
 
     return () => {
       window.removeEventListener('resize', resizeCanvas)
@@ -246,9 +244,9 @@ function App() {
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-background">
-      <canvas
-        ref={canvasRef}
-        className="absolute inset-0"
+      <div
+        ref={containerRef}
+        className="absolute inset-0 overflow-hidden"
       />
 
       <div className="absolute top-6 left-6 pointer-events-none">

@@ -414,23 +414,23 @@ export class World {
 }
 
 export class ParallaxRenderer {
-  private canvas: HTMLCanvasElement
-  private ctx: CanvasRenderingContext2D
+  private container: HTMLElement
   private world: World
   private camera: Camera
   private layers: Map<number, Layer> = new Map()
+  private layerElements: Map<number, { canvas: HTMLCanvasElement; fog: HTMLDivElement }> = new Map()
   private lastCachePosition: Camera
   private sessionStats: SessionStats
   private updateStartTime: number = 0
   private depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER
+  private width: number = 0
+  private height: number = 0
 
-  constructor(canvas: HTMLCanvasElement, world: World) {
-    this.canvas = canvas
-    const ctx = canvas.getContext('2d')
-    if (!ctx) {
-      throw new Error('Failed to get 2d context')
-    }
-    this.ctx = ctx
+  constructor(container: HTMLElement, world: World) {
+    this.container = container
+    this.container.style.backgroundColor = '#0a0a15'
+    this.width = container.clientWidth || 0
+    this.height = container.clientHeight || 0
     this.world = world
     this.camera = { x: 0, y: 15, z: -30 }
     this.lastCachePosition = { ...this.camera }
@@ -469,8 +469,8 @@ export class ParallaxRenderer {
 
   private createLayer(depth: number, size: number = 1): Layer {
     const layerCanvas = document.createElement('canvas')
-    layerCanvas.width = this.canvas.width
-    layerCanvas.height = this.canvas.height
+    layerCanvas.width = this.width
+    layerCanvas.height = this.height
     
     return {
       depth,
@@ -488,44 +488,6 @@ export class ParallaxRenderer {
    */
   private getProjectionScale(depth: number): number {
     return PROJECTION_SCALE_FACTOR / depth
-  }
-
-  private projectVoxel(voxel: Voxel, camera: Camera): { x: number; y: number; size: number; depth: number } | null {
-    const dx = voxel.x - camera.x
-    const dy = voxel.y - camera.y
-    const dz = voxel.z - camera.z
-
-    if (dz <= 0.1) return null
-
-    const scale = this.getProjectionScale(dz)
-    const screenX = this.canvas.width / 2 + dx * scale
-    const screenY = this.canvas.height / 2 - dy * scale
-    const size = Math.max(1, scale * 0.8)
-
-    return { x: screenX, y: screenY, size, depth: dz }
-  }
-
-  /**
-   * Projects a voxel using orthographic (flat) projection.
-   * This is camera-independent and used for rendering layers that can be cached.
-   * The scale is fixed based on a reference depth (the layer's depth).
-   */
-  private projectVoxelFlat(voxel: Voxel, referenceDepth: number): { x: number; y: number; size: number; zInLayer: number } | null {
-    if (referenceDepth <= 0.1) return null
-
-    // Use a fixed orthographic scale based on the layer's reference depth
-    const scale = this.getProjectionScale(referenceDepth)
-    
-    // Position voxels relative to world origin (camera-independent)
-    const screenX = this.canvas.width / 2 + voxel.x * scale
-    const screenY = this.canvas.height / 2 - voxel.y * scale
-    // Use scale * 1.1 to ensure no gaps between voxels (slight overlap)
-    const size = Math.max(1, scale * 1.1)
-
-    // Track z position within layer for sorting
-    const zInLayer = voxel.z
-
-    return { x: screenX, y: screenY, size, zInLayer }
   }
 
   private renderLayerToCanvas(layer: Layer, cameraForRendering: Camera) {
@@ -555,8 +517,8 @@ export class ParallaxRenderer {
     const projected = layer.voxels
       .map(voxel => {
         // Position voxels relative to world origin (camera-independent)
-        const screenX = this.canvas.width / 2 + voxel.x * scale
-        const screenY = this.canvas.height / 2 - voxel.y * scale
+        const screenX = this.width / 2 + voxel.x * scale
+        const screenY = this.height / 2 - voxel.y * scale
         // Use scale * 1.1 to ensure no gaps between voxels (slight overlap)
         const size = Math.max(1, scale * 1.1)
         
@@ -580,6 +542,42 @@ export class ParallaxRenderer {
     return selectSlices(this.camera.z, minZ, maxZ, this.depthMultiplier)
   }
 
+  /**
+   * Creates DOM elements (canvas + fog overlay) for a layer and appends them to the container.
+   */
+  private createLayerElements(layer: Layer, zIndex: number): { canvas: HTMLCanvasElement; fog: HTMLDivElement } {
+    const canvas = layer.canvas
+    canvas.style.position = 'absolute'
+    canvas.style.left = '0'
+    canvas.style.top = '0'
+    canvas.style.willChange = 'transform'
+    canvas.style.pointerEvents = 'none'
+    canvas.style.zIndex = String(zIndex * 2)
+
+    const fog = document.createElement('div')
+    fog.style.position = 'absolute'
+    fog.style.inset = '0'
+    fog.style.pointerEvents = 'none'
+    fog.style.zIndex = String(zIndex * 2 + 1)
+
+    this.container.appendChild(canvas)
+    this.container.appendChild(fog)
+
+    return { canvas, fog }
+  }
+
+  /**
+   * Removes DOM elements for a layer from the container.
+   */
+  private removeLayerElements(depth: number) {
+    const elements = this.layerElements.get(depth)
+    if (elements) {
+      elements.canvas.remove()
+      elements.fog.remove()
+      this.layerElements.delete(depth)
+    }
+  }
+
   private updateLayers() {
     const boundaries = this.getLayerBoundaries()
     const requiredKeys = boundaries.map(b => b.depth)
@@ -587,6 +585,7 @@ export class ParallaxRenderer {
     const existingKeys = Array.from(this.layers.keys())
     existingKeys.forEach(key => {
       if (!requiredKeys.includes(key)) {
+        this.removeLayerElements(key)
         this.layers.delete(key)
       }
     })
@@ -614,9 +613,6 @@ export class ParallaxRenderer {
     this.updateStartTime = performance.now()
     
     this.updateLayers()
-    
-    this.ctx.fillStyle = '#0a0a15'
-    this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height)
 
     // Sort layers by depth (farther layers first, so closer layers render on top)
     const sortedLayers = Array.from(this.layers.values()).sort((a, b) => b.depth - a.depth)
@@ -625,7 +621,7 @@ export class ParallaxRenderer {
     let layersReused = 0
     let totalVoxels = 0
 
-    sortedLayers.forEach(layer => {
+    sortedLayers.forEach((layer, index) => {
       // Calculate viewing distance from current camera position
       const layerCenterZ = layer.depth + layer.size / 2
       const viewingDistance = layerCenterZ - this.camera.z
@@ -643,25 +639,36 @@ export class ParallaxRenderer {
         layersReused++
       }
 
+      // Get or create DOM elements for this layer
+      let elements = this.layerElements.get(layer.depth)
+      if (!elements) {
+        elements = this.createLayerElements(layer, index)
+        this.layerElements.set(layer.depth, elements)
+      }
+
+      // Update z-index to maintain correct stacking order
+      elements.canvas.style.zIndex = String(index * 2)
+      elements.fog.style.zIndex = String(index * 2 + 1)
+
       if (layer.visible) {
-        // Calculate parallax offset based on viewing distance
-        // Closer layers (smaller viewing distance) move more with camera
+        // Calculate parallax offset via CSS transform (GPU-accelerated)
         const scale = this.getProjectionScale(viewingDistance)
-        
-        // Offset is negative for X because moving camera right should shift view left
-        // Offset is positive for Y because screen Y is inverted (positive Y = up in world, down in screen)
         const offsetX = -this.camera.x * scale
         const offsetY = this.camera.y * scale
+        elements.canvas.style.transform = `translate3d(${String(offsetX)}px, ${String(offsetY)}px, 0)`
+        elements.canvas.style.display = ''
 
-        this.ctx.drawImage(layer.canvas, offsetX, offsetY)
-        
-        // Add a semi-transparent fog layer after each voxel layer
-        // The fog intensity increases with viewing distance to create depth perception
+        // Semi-transparent fog overlay for depth perception
         const fogIntensity = Math.min(0.15, viewingDistance / 500)
         if (fogIntensity > 0.01) {
-          this.ctx.fillStyle = `rgba(10, 10, 21, ${String(fogIntensity)})`
-          this.ctx.fillRect(0, 0, this.canvas.width, this.canvas.height)
+          elements.fog.style.backgroundColor = `rgba(10, 10, 21, ${String(fogIntensity)})`
+          elements.fog.style.display = ''
+        } else {
+          elements.fog.style.display = 'none'
         }
+      } else {
+        elements.canvas.style.display = 'none'
+        elements.fog.style.display = 'none'
       }
     })
 
@@ -711,8 +718,13 @@ export class ParallaxRenderer {
   }
 
   resize(width: number, height: number) {
-    this.canvas.width = width
-    this.canvas.height = height
+    this.width = width
+    this.height = height
+    // Resize all existing layer canvases
+    this.layers.forEach(layer => {
+      layer.canvas.width = width
+      layer.canvas.height = height
+    })
     this.invalidateCacheWithMiss()
   }
 
@@ -750,7 +762,10 @@ export class ParallaxRenderer {
   setDepthMultiplier(multiplier: number) {
     if (multiplier >= 1.2 && multiplier <= 4) {
       this.depthMultiplier = multiplier
-      // Clear all layers to force regeneration with new slice boundaries
+      // Clear all layers and DOM elements to force regeneration with new slice boundaries
+      this.layers.forEach((_layer, depth) => {
+        this.removeLayerElements(depth)
+      })
       this.layers.clear()
       this.invalidateCacheWithMiss()
     }
