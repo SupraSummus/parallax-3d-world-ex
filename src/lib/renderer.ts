@@ -421,9 +421,11 @@ const RENDER_SCALE = 10
 
 // Maximum number of layers retained in the cache. Slices outside the
 // currently-visible range are kept around (without DOM elements) so that
-// reversing direction reuses their canvases instead of re-rendering. Oldest
-// entries are evicted when the cache exceeds this size.
-const MAX_CACHED_LAYERS = 128
+// reversing direction reuses their canvases instead of re-rendering. Each
+// retained canvas holds a viewport-sized bitmap, so this bounds memory use
+// (~30 MB at a 1080p viewport, which is ample for direction-reversal reuse
+// given the slice algorithm only emits ~10 visible layers per frame).
+const MAX_CACHED_LAYERS = 32
 
 function layerKey(depth: number, size: number): string {
   return `${String(depth)}:${String(size)}`
@@ -518,7 +520,6 @@ export class ParallaxRenderer {
     if (!ctx) return 0
     ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height)
 
-    // Layer depth and size are in ABSOLUTE world coordinates.
     const absoluteMinZ = layer.depth
     const absoluteMaxZ = layer.depth + layer.size
     layer.voxels = this.world.getVoxelsInAbsoluteZRange(absoluteMinZ, absoluteMaxZ)
@@ -785,14 +786,14 @@ export class ParallaxRenderer {
     return undefined
   }
 
-  toggleLayerVisibility(depth: number) {
-    const layer = this.findVisibleLayerByDepth(depth)
-    if (layer) layer.visible = !layer.visible
-  }
-
   setLayerVisibility(depth: number, visible: boolean) {
     const layer = this.findVisibleLayerByDepth(depth)
     if (layer) layer.visible = visible
+  }
+
+  toggleLayerVisibility(depth: number) {
+    const layer = this.findVisibleLayerByDepth(depth)
+    if (layer) this.setLayerVisibility(depth, !layer.visible)
   }
 
   getDepthMultiplier(): number {
