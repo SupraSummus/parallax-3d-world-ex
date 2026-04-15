@@ -413,13 +413,32 @@ export class World {
   }
 }
 
+// Pixels per world unit used when rasterising a slice canvas. The canvas is
+// rendered camera-independently at this fixed scale so its content can be
+// cached and reused as the camera moves; perspective scaling is then applied
+// via a CSS transform at composite time.
+const RENDER_SCALE = 10
+
+// Maximum number of layers retained in the cache. Slices outside the
+// currently-visible range are kept around (without DOM elements) so that
+// reversing direction reuses their canvases instead of re-rendering. Oldest
+// entries are evicted when the cache exceeds this size.
+const MAX_CACHED_LAYERS = 128
+
+function layerKey(depth: number, size: number): string {
+  return `${String(depth)}:${String(size)}`
+}
+
 export class ParallaxRenderer {
   private container: HTMLElement
   private world: World
   private camera: Camera
-  private layers: Map<number, Layer> = new Map()
-  private layerElements: Map<number, { canvas: HTMLCanvasElement; fog: HTMLDivElement }> = new Map()
-  private lastCachePosition: Camera
+  // Layers are keyed by (depth, size) so that slices of different sizes at the
+  // same depth (which can happen across camera positions) are cached
+  // separately. Insertion order is used as a recency hint for LRU eviction.
+  private layers: Map<string, Layer> = new Map()
+  private layerElements: Map<string, { canvas: HTMLCanvasElement; fog: HTMLDivElement }> = new Map()
+  private visibleLayerKeys: Set<string> = new Set()
   private sessionStats: SessionStats
   private updateStartTime: number = 0
   private depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER
@@ -433,7 +452,6 @@ export class ParallaxRenderer {
     this.height = container.clientHeight || 0
     this.world = world
     this.camera = { x: 0, y: 15, z: -30 }
-    this.lastCachePosition = { ...this.camera }
     this.sessionStats = {
       totalUpdates: 0,
       totalRenderTime: 0,
@@ -450,28 +468,26 @@ export class ParallaxRenderer {
     }
   }
 
-  private invalidateCache() {
-    this.layers.forEach(layer => {
-      layer.dirty = true
+  /**
+   * Discards every cached layer and its DOM elements. Used when the
+   * underlying world content or canvas geometry actually changes (world
+   * regeneration, viewport resize, or a new depth multiplier). Camera
+   * movement does NOT call this — slice canvases are camera-independent.
+   */
+  private clearAllLayers() {
+    Array.from(this.layerElements.keys()).forEach(key => {
+      this.removeLayerElements(key)
     })
-  }
-
-  private invalidateCacheWithMiss() {
-    this.invalidateCache()
+    this.layers.clear()
+    this.visibleLayerKeys.clear()
     this.sessionStats.cacheMisses++
-  }
-
-  private needsCacheRefresh(): boolean {
-    const threshold = 0.5
-    const positionChanged = Math.abs(this.camera.z - this.lastCachePosition.z) > threshold
-    return positionChanged
   }
 
   private createLayer(depth: number, size: number = 1): Layer {
     const layerCanvas = document.createElement('canvas')
     layerCanvas.width = this.width
     layerCanvas.height = this.height
-    
+
     return {
       depth,
       size,
@@ -483,52 +499,46 @@ export class ParallaxRenderer {
   }
 
   /**
-   * Computes the projection scale for a given depth.
-   * Used for both perspective and orthographic projection.
+   * Perspective scale (pixels per world unit) for a slice at the given
+   * viewing distance. This is applied at composite time as a CSS scale on
+   * top of the canvas's fixed RENDER_SCALE.
    */
-  private getProjectionScale(depth: number): number {
-    return PROJECTION_SCALE_FACTOR / depth
+  private getProjectionScale(viewingDistance: number): number {
+    return PROJECTION_SCALE_FACTOR / viewingDistance
   }
 
-  private renderLayerToCanvas(layer: Layer, cameraForRendering: Camera) {
+  /**
+   * Renders the slice's voxels onto its canvas using a fixed world-to-pixel
+   * scale (RENDER_SCALE). The output is camera-independent: the canvas
+   * shows the same image whatever the camera does, so any subsequent camera
+   * movement only updates CSS transforms and never invalidates the canvas.
+   */
+  private renderLayerToCanvas(layer: Layer): number {
     const ctx = layer.canvas.getContext('2d')
     if (!ctx) return 0
     ctx.clearRect(0, 0, layer.canvas.width, layer.canvas.height)
 
-    // Layer depth and size are now in ABSOLUTE world coordinates
+    // Layer depth and size are in ABSOLUTE world coordinates.
     const absoluteMinZ = layer.depth
     const absoluteMaxZ = layer.depth + layer.size
     layer.voxels = this.world.getVoxelsInAbsoluteZRange(absoluteMinZ, absoluteMaxZ)
 
-    // Calculate viewing distance from camera to layer center
-    // This determines the scale - farther layers appear smaller
-    const layerCenterZ = layer.depth + layer.size / 2
-    const viewingDistance = layerCenterZ - cameraForRendering.z
-    
-    // Skip layers behind the camera
-    if (viewingDistance <= 0.1) {
-      layer.dirty = false
-      return 0
-    }
-    
-    // Use viewing distance for scale calculation
-    const scale = this.getProjectionScale(viewingDistance)
-    
+    const cx = layer.canvas.width / 2
+    const cy = layer.canvas.height / 2
+    const voxelPixelSize = Math.max(1, RENDER_SCALE * 1.1)
+
     const projected = layer.voxels
-      .map(voxel => {
-        // Position voxels relative to world origin (camera-independent)
-        const screenX = this.width / 2 + voxel.x * scale
-        const screenY = this.height / 2 - voxel.y * scale
-        // Use scale * 1.1 to ensure no gaps between voxels (slight overlap)
-        const size = Math.max(1, scale * 1.1)
-        
-        return { x: screenX, y: screenY, size, zInLayer: voxel.z, color: voxel.color }
-      })
+      .map(voxel => ({
+        x: cx + voxel.x * RENDER_SCALE,
+        y: cy - voxel.y * RENDER_SCALE,
+        zInLayer: voxel.z,
+        color: voxel.color
+      }))
       .sort((a, b) => b.zInLayer - a.zInLayer)
 
     projected.forEach(p => {
       ctx.fillStyle = p.color
-      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size)
+      ctx.fillRect(p.x - voxelPixelSize / 2, p.y - voxelPixelSize / 2, voxelPixelSize, voxelPixelSize)
     })
 
     layer.dirty = false
@@ -536,20 +546,22 @@ export class ParallaxRenderer {
   }
 
   private getLayerBoundaries(): { depth: number; size: number }[] {
-    // Use selectSlices to ensure contiguous z coverage without gaps
+    // selectSlices ensures contiguous z coverage with no gaps.
     const minZ = 1
     const maxZ = 200
     return selectSlices(this.camera.z, minZ, maxZ, this.depthMultiplier)
   }
 
   /**
-   * Creates DOM elements (canvas + fog overlay) for a layer and appends them to the container.
+   * Creates DOM elements (canvas + fog overlay) for a layer and appends them
+   * to the container.
    */
   private createLayerElements(layer: Layer, zIndex: number): { canvas: HTMLCanvasElement; fog: HTMLDivElement } {
     const canvas = layer.canvas
     canvas.style.position = 'absolute'
     canvas.style.left = '0'
     canvas.style.top = '0'
+    canvas.style.transformOrigin = '50% 50%'
     canvas.style.willChange = 'transform'
     canvas.style.pointerEvents = 'none'
     canvas.style.zIndex = String(zIndex * 2)
@@ -566,102 +578,110 @@ export class ParallaxRenderer {
     return { canvas, fog }
   }
 
-  /**
-   * Removes DOM elements for a layer from the container.
-   */
-  private removeLayerElements(depth: number) {
-    const elements = this.layerElements.get(depth)
+  private removeLayerElements(key: string) {
+    const elements = this.layerElements.get(key)
     if (elements) {
       elements.canvas.remove()
       elements.fog.remove()
-      this.layerElements.delete(depth)
+      this.layerElements.delete(key)
     }
   }
 
-  private updateLayers() {
-    const boundaries = this.getLayerBoundaries()
-    const requiredKeys = boundaries.map(b => b.depth)
-
-    const existingKeys = Array.from(this.layers.keys())
-    existingKeys.forEach(key => {
-      if (!requiredKeys.includes(key)) {
-        this.removeLayerElements(key)
-        this.layers.delete(key)
-      }
-    })
-
-    boundaries.forEach(({ depth, size }) => {
-      if (!this.layers.has(depth)) {
-        const layer = this.createLayer(depth, size)
-        layer.dirty = true
-        this.layers.set(depth, layer)
-      }
-    })
-
-    if (this.needsCacheRefresh()) {
-      this.lastCachePosition = { ...this.camera }
-      this.invalidateCache()
-      this.sessionStats.cacheMisses++
-      return { cacheRefreshed: true }
+  /**
+   * Marks the given key as most-recently-used by re-inserting it at the end
+   * of the Map's iteration order.
+   */
+  private touchLayer(key: string) {
+    const layer = this.layers.get(key)
+    if (layer) {
+      this.layers.delete(key)
+      this.layers.set(key, layer)
     }
-    
-    this.sessionStats.cacheHits++
-    return { cacheRefreshed: false }
+  }
+
+  /**
+   * Drops least-recently-used cached layers (and their DOM elements) until
+   * the cache fits within MAX_CACHED_LAYERS. Currently-visible layers are
+   * never evicted, so the cap only bounds the retained-but-hidden tail.
+   */
+  private enforceLruCap() {
+    if (this.layers.size <= MAX_CACHED_LAYERS) return
+    for (const key of Array.from(this.layers.keys())) {
+      if (this.layers.size <= MAX_CACHED_LAYERS) break
+      if (this.visibleLayerKeys.has(key)) continue
+      this.removeLayerElements(key)
+      this.layers.delete(key)
+    }
   }
 
   render() {
     this.updateStartTime = performance.now()
-    
-    this.updateLayers()
 
-    // Sort layers by depth (farther layers first, so closer layers render on top)
-    const sortedLayers = Array.from(this.layers.values()).sort((a, b) => b.depth - a.depth)
-    
+    const boundaries = this.getLayerBoundaries()
+    const requiredKeys = boundaries.map(b => layerKey(b.depth, b.size))
+    const requiredKeySet = new Set(requiredKeys)
+
     let layersRegenerated = 0
     let layersReused = 0
     let totalVoxels = 0
 
-    sortedLayers.forEach((layer, index) => {
-      // Calculate viewing distance from current camera position
+    // Hide DOM elements for layers no longer in view; their canvases stay in
+    // the cache so reversing direction will reuse them.
+    Array.from(this.layerElements.keys()).forEach(key => {
+      if (!requiredKeySet.has(key)) {
+        this.removeLayerElements(key)
+      }
+    })
+
+    // Look up or create the layer for each required slice, render dirty
+    // ones, and composite. Iterate from far to near so closer layers paint
+    // on top.
+    const sortedBoundaries = boundaries.slice().sort((a, b) => b.depth - a.depth)
+    sortedBoundaries.forEach((boundary, index) => {
+      const key = layerKey(boundary.depth, boundary.size)
+      let layer = this.layers.get(key)
+      if (!layer) {
+        layer = this.createLayer(boundary.depth, boundary.size)
+        this.layers.set(key, layer)
+      } else {
+        this.touchLayer(key)
+      }
+
       const layerCenterZ = layer.depth + layer.size / 2
       const viewingDistance = layerCenterZ - this.camera.z
-      
-      // Skip layers behind the camera
-      if (viewingDistance <= 0.1) {
-        return
-      }
-      
+      if (viewingDistance <= 0.1) return
+
       if (layer.dirty) {
-        const voxelCount = this.renderLayerToCanvas(layer, this.camera)
-        totalVoxels += voxelCount
+        totalVoxels += this.renderLayerToCanvas(layer)
         layersRegenerated++
       } else {
         layersReused++
       }
 
-      // Get or create DOM elements for this layer
-      let elements = this.layerElements.get(layer.depth)
+      let elements = this.layerElements.get(key)
       if (!elements) {
         elements = this.createLayerElements(layer, index)
-        this.layerElements.set(layer.depth, elements)
+        this.layerElements.set(key, elements)
       }
 
-      // Update z-index to maintain correct stacking order
       elements.canvas.style.zIndex = String(index * 2)
       elements.fog.style.zIndex = String(index * 2 + 1)
 
       if (layer.visible) {
-        // Calculate parallax offset via CSS transform (GPU-accelerated)
-        const scale = this.getProjectionScale(viewingDistance)
-        const offsetX = -this.camera.x * scale
-        const offsetY = this.camera.y * scale
-        elements.canvas.style.transform = `translate3d(${offsetX}px, ${offsetY}px, 0)`
+        // Composite: translate the canvas for parallax, scale for
+        // perspective. Origin is canvas centre (which coincides with
+        // viewport centre when canvas == viewport size).
+        const perspectiveScale = this.getProjectionScale(viewingDistance)
+        const cssScale = perspectiveScale / RENDER_SCALE
+        const offsetX = -this.camera.x * perspectiveScale
+        const offsetY = this.camera.y * perspectiveScale
+        elements.canvas.style.transform =
+          `translate3d(${String(offsetX)}px, ${String(offsetY)}px, 0) scale(${String(cssScale)})`
         elements.canvas.style.display = ''
 
-        // Semi-transparent fog overlay for depth perception
         const fogIntensity = Math.min(0.15, viewingDistance / 500)
         if (fogIntensity > 0.01) {
-          elements.fog.style.backgroundColor = `rgba(10, 10, 21, ${fogIntensity})`
+          elements.fog.style.backgroundColor = `rgba(10, 10, 21, ${String(fogIntensity)})`
           elements.fog.style.display = ''
         } else {
           elements.fog.style.display = 'none'
@@ -672,10 +692,19 @@ export class ParallaxRenderer {
       }
     })
 
+    this.visibleLayerKeys = requiredKeySet
+    this.enforceLruCap()
+
     const renderTime = performance.now() - this.updateStartTime
-    const totalLayers = sortedLayers.length
+    const totalLayers = sortedBoundaries.length
     const cacheEfficiency = totalLayers > 0 ? (layersReused / totalLayers) * 100 : 0
-    
+
+    // Hits and misses can both happen in the same frame: e.g. when the
+    // camera moves slightly along Z, far slices stay cached (hit) but a few
+    // near slices get re-tiled at different sizes and regenerate (miss).
+    if (layersReused > 0) this.sessionStats.cacheHits++
+    if (layersRegenerated > 0) this.sessionStats.cacheMisses++
+
     const updateStats: UpdateStats = {
       renderTime,
       layerCount: totalLayers,
@@ -685,16 +714,16 @@ export class ParallaxRenderer {
       cacheEfficiency,
       timestamp: Date.now()
     }
-    
+
     this.sessionStats.totalUpdates++
     this.sessionStats.totalRenderTime += renderTime
     this.sessionStats.totalLayersRegenerated += layersRegenerated
     this.sessionStats.totalVoxelsRendered += totalVoxels
-    this.sessionStats.averageCacheEfficiency = 
-      (this.sessionStats.averageCacheEfficiency * (this.sessionStats.totalUpdates - 1) + cacheEfficiency) / 
+    this.sessionStats.averageCacheEfficiency =
+      (this.sessionStats.averageCacheEfficiency * (this.sessionStats.totalUpdates - 1) + cacheEfficiency) /
       this.sessionStats.totalUpdates
     this.sessionStats.lastUpdate = updateStats
-    
+
     this.sessionStats.layerCount = totalLayers
     this.sessionStats.voxelsRendered = totalVoxels
     this.sessionStats.frameTime = renderTime
@@ -720,39 +749,50 @@ export class ParallaxRenderer {
   resize(width: number, height: number) {
     this.width = width
     this.height = height
-    // Resize all existing layer canvases
-    this.layers.forEach(layer => {
-      layer.canvas.width = width
-      layer.canvas.height = height
-    })
-    this.invalidateCacheWithMiss()
+    // Canvas dimensions are baked into each layer at create time, so a
+    // viewport resize forces a full rebuild.
+    this.clearAllLayers()
   }
 
   regenerateWorld(seed?: number, worldType?: WorldType) {
     this.world = new World(seed, worldType)
-    this.invalidateCacheWithMiss()
+    this.clearAllLayers()
   }
 
   getWorldType(): WorldType {
     return this.world.worldType
   }
 
+  /**
+   * Returns the layers visible in the most recent render, sorted by depth.
+   * Cached-but-hidden layers are intentionally excluded so callers (UI
+   * panels, tests) only see what's currently on screen.
+   */
   getLayers(): Layer[] {
-    return Array.from(this.layers.values()).sort((a, b) => a.depth - b.depth)
+    const result: Layer[] = []
+    this.visibleLayerKeys.forEach(key => {
+      const layer = this.layers.get(key)
+      if (layer) result.push(layer)
+    })
+    return result.sort((a, b) => a.depth - b.depth)
+  }
+
+  private findVisibleLayerByDepth(depth: number): Layer | undefined {
+    for (const key of this.visibleLayerKeys) {
+      const layer = this.layers.get(key)
+      if (layer && layer.depth === depth) return layer
+    }
+    return undefined
   }
 
   toggleLayerVisibility(depth: number) {
-    const layer = this.layers.get(depth)
-    if (layer) {
-      layer.visible = !layer.visible
-    }
+    const layer = this.findVisibleLayerByDepth(depth)
+    if (layer) layer.visible = !layer.visible
   }
 
   setLayerVisibility(depth: number, visible: boolean) {
-    const layer = this.layers.get(depth)
-    if (layer) {
-      layer.visible = visible
-    }
+    const layer = this.findVisibleLayerByDepth(depth)
+    if (layer) layer.visible = visible
   }
 
   getDepthMultiplier(): number {
@@ -762,12 +802,9 @@ export class ParallaxRenderer {
   setDepthMultiplier(multiplier: number) {
     if (multiplier >= 1.2 && multiplier <= 4) {
       this.depthMultiplier = multiplier
-      // Clear all layers and DOM elements to force regeneration with new slice boundaries
-      this.layers.forEach((_layer, depth) => {
-        this.removeLayerElements(depth)
-      })
-      this.layers.clear()
-      this.invalidateCacheWithMiss()
+      // Slice boundaries change with the multiplier, so previous (depth,
+      // size) keys are no longer meaningful.
+      this.clearAllLayers()
     }
   }
 }
