@@ -18,10 +18,10 @@ import { World, ParallaxRenderer } from './renderer'
 // well enough for our purposes).
 type Draw = { x: number; y: number; w: number; h: number }
 const drawsByCanvas = new WeakMap<HTMLCanvasElement, Draw[]>()
-let originalGetContext: typeof HTMLCanvasElement.prototype.getContext
+// eslint-disable-next-line @typescript-eslint/unbound-method
+const originalGetContext = HTMLCanvasElement.prototype.getContext
 
 function installDrawCapture() {
-  originalGetContext = HTMLCanvasElement.prototype.getContext
   HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement) {
     let cached = (this as unknown as { __mockCtx?: object }).__mockCtx
     if (!cached) {
@@ -151,23 +151,35 @@ describe('Rendering bugs (behavioral)', () => {
       renderer.render()
 
       // A draw is visible if it lands inside the canvas bitmap *and*, after
-      // the canvas's translate3d offset, falls inside the viewport.
+      // the canvas's CSS transform (translate + optional scale around the
+      // canvas centre), falls inside the viewport. We apply the same
+      // transform the browser would.
       let visibleCount = 0
       for (const layer of renderer.getLayers()) {
         const canvas = layer.canvas
-        const match = canvas.style.transform.match(
+        const t = canvas.style.transform
+        const translateMatch = t.match(
           /translate3d\(([-\d.]+)px,\s*([-\d.]+)px/,
         )
-        const tx = match ? parseFloat(match[1]) : 0
-        const ty = match ? parseFloat(match[2]) : 0
+        const scaleMatch = t.match(/scale\(([-\d.]+)\)/)
+        const tx = translateMatch ? parseFloat(translateMatch[1]) : 0
+        const ty = translateMatch ? parseFloat(translateMatch[2]) : 0
+        const s = scaleMatch ? parseFloat(scaleMatch[1]) : 1
+        const cx = canvas.width / 2
+        const cy = canvas.height / 2
         for (const draw of getDraws(canvas)) {
           if (!drawIsInsideCanvas(draw, canvas)) continue
-          const vx = draw.x + tx
-          const vy = draw.y + ty
+          // Scale around canvas centre, then translate.
+          const scaledW = draw.w * s
+          const scaledH = draw.h * s
+          const scaledX = cx + (draw.x - cx) * s
+          const scaledY = cy + (draw.y - cy) * s
+          const vx = scaledX + tx
+          const vy = scaledY + ty
           if (
-            vx + draw.w > 0 &&
+            vx + scaledW > 0 &&
             vx < viewportW &&
-            vy + draw.h > 0 &&
+            vy + scaledH > 0 &&
             vy < viewportH
           ) {
             visibleCount++
@@ -199,12 +211,13 @@ describe('Rendering bugs (behavioral)', () => {
       renderer.setCamera({ x: 0, y: 15, z: -29 })
       renderer.render()
 
-      const stats = renderer.getStats().lastUpdate!
+      const stats = renderer.getStats().lastUpdate
+      expect(stats).toBeDefined()
       // Very near layers (size 1 at viewingDistance ~1) legitimately need to
       // redraw because their scale changes noticeably. Distant layers that
       // cover 64 z-units shouldn't. So "reused" should meaningfully beat
       // "regenerated".
-      expect(stats.layersReused).toBeGreaterThan(stats.layersRegenerated)
+      expect(stats?.layersReused ?? 0).toBeGreaterThan(stats?.layersRegenerated ?? 0)
     })
 
     it('does not re-render every layer on every keypress when moving along Z', () => {
@@ -256,12 +269,13 @@ describe('Rendering bugs (behavioral)', () => {
       renderer.setCamera({ x: 0, y: 15, z: -30 })
       renderer.render()
 
-      const returnStats = renderer.getStats().lastUpdate!
+      const returnStats = renderer.getStats().lastUpdate
+      expect(returnStats).toBeDefined()
       // The camera is in exactly the same state as the first render. Every
       // slice was visible moments ago. A retaining cache would reuse nearly
       // all of them. Currently, layers that left the visible window were
       // deleted from the Map and must be rebuilt, so regenerations dominate.
-      expect(returnStats.layersReused).toBeGreaterThan(returnStats.layersRegenerated)
+      expect(returnStats?.layersReused ?? 0).toBeGreaterThan(returnStats?.layersRegenerated ?? 0)
     })
   })
 })
