@@ -439,8 +439,9 @@ export class ParallaxRenderer {
   // same depth (which can happen across camera positions) are cached
   // separately. Insertion order is used as a recency hint for LRU eviction.
   private layers: Map<string, Layer> = new Map()
+  // The keys of layerElements double as the set of currently-visible layers:
+  // any layer with DOM elements is being painted this frame.
   private layerElements: Map<string, { canvas: HTMLCanvasElement; fog: HTMLDivElement }> = new Map()
-  private visibleLayerKeys: Set<string> = new Set()
   private sessionStats: SessionStats
   private updateStartTime: number = 0
   private depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER
@@ -481,7 +482,6 @@ export class ParallaxRenderer {
       this.removeLayerElements(key)
     })
     this.layers.clear()
-    this.visibleLayerKeys.clear()
     this.sessionStats.cacheMisses++
   }
 
@@ -609,8 +609,7 @@ export class ParallaxRenderer {
     if (this.layers.size <= MAX_CACHED_LAYERS) return
     for (const key of Array.from(this.layers.keys())) {
       if (this.layers.size <= MAX_CACHED_LAYERS) break
-      if (this.visibleLayerKeys.has(key)) continue
-      this.removeLayerElements(key)
+      if (this.layerElements.has(key)) continue
       this.layers.delete(key)
     }
   }
@@ -619,8 +618,7 @@ export class ParallaxRenderer {
     this.updateStartTime = performance.now()
 
     const boundaries = this.getLayerBoundaries()
-    const requiredKeys = boundaries.map(b => layerKey(b.depth, b.size))
-    const requiredKeySet = new Set(requiredKeys)
+    const requiredKeys = new Set(boundaries.map(b => layerKey(b.depth, b.size)))
 
     let layersRegenerated = 0
     let layersReused = 0
@@ -629,7 +627,7 @@ export class ParallaxRenderer {
     // Hide DOM elements for layers no longer in view; their canvases stay in
     // the cache so reversing direction will reuse them.
     Array.from(this.layerElements.keys()).forEach(key => {
-      if (!requiredKeySet.has(key)) {
+      if (!requiredKeys.has(key)) {
         this.removeLayerElements(key)
       }
     })
@@ -693,7 +691,6 @@ export class ParallaxRenderer {
       }
     })
 
-    this.visibleLayerKeys = requiredKeySet
     this.enforceLruCap()
 
     const renderTime = performance.now() - this.updateStartTime
@@ -771,7 +768,7 @@ export class ParallaxRenderer {
    */
   getLayers(): Layer[] {
     const result: Layer[] = []
-    this.visibleLayerKeys.forEach(key => {
+    this.layerElements.forEach((_, key) => {
       const layer = this.layers.get(key)
       if (layer) result.push(layer)
     })
@@ -779,7 +776,7 @@ export class ParallaxRenderer {
   }
 
   private findVisibleLayerByDepth(depth: number): Layer | undefined {
-    for (const key of this.visibleLayerKeys) {
+    for (const key of this.layerElements.keys()) {
       const layer = this.layers.get(key)
       if (layer && layer.depth === depth) return layer
     }
