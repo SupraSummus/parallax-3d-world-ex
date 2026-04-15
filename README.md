@@ -6,16 +6,16 @@ A parallax-based 2.5D rendering engine that renders a 3D voxel world using progr
 
 ```bash
 # Install dependencies
-npm install
+pnpm install
 
 # Start development server
-npm run dev
+pnpm dev
 
 # Run tests
-npx vitest run
+pnpm exec vitest run
 
 # Lint code
-npm run lint
+pnpm lint
 ```
 
 ## Documentation

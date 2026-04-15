@@ -55,31 +55,31 @@ Each concept should have **one authoritative location**:
 
 ```bash
 # Install dependencies
-npm install
+pnpm install
 
 # Development server
-npm run dev
+pnpm dev
 
 # Lint code (fix errors before committing)
-npm run lint
+pnpm lint
 
 # Check for unused code, exports, and dependencies
-npm run knip
+pnpm knip
 
 # Run all tests
-npx vitest run
+pnpm exec vitest run
 
 # Run tests in watch mode
-npx vitest --watch
+pnpm exec vitest --watch
 
 # Build for production
-npm run build
+pnpm build
 ```
 
 ## Code Style
 
 - **TypeScript strict mode** is enabled
-- **ESLint** enforces code quality - run `npm run lint` before committing
+- **ESLint** enforces code quality - run `pnpm lint` before committing
 - Fix lint **errors** (required), **warnings** are advisory
 - Use existing patterns - check similar files for conventions
 
@@ -111,14 +111,14 @@ npm run build
 ### Before Changing Code
 
 1. **Understand the context** → Read [DESIGN.md](DESIGN.md) for architecture
-2. **Run tests first** → `npx vitest run` to see baseline state
-3. **Check lint** → `npm run lint` to see existing issues
+2. **Run tests first** → `pnpm exec vitest run` to see baseline state
+3. **Check lint** → `pnpm lint` to see existing issues
 
 ### After Changing Code
 
-1. **Run tests** → `npx vitest run` to verify no regressions
-2. **Run lint** → `npm run lint` and fix errors
-3. **Run knip** → `npm run knip` to check for unused code
+1. **Run tests** → `pnpm exec vitest run` to verify no regressions
+2. **Run lint** → `pnpm lint` and fix errors
+3. **Run knip** → `pnpm knip` to check for unused code
 4. **Update docs if needed** → Keep docs in sync with code
 
 ### Documentation Changes

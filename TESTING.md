@@ -8,16 +8,16 @@ This project includes comprehensive automated tests for the rendering engine and
 
 ```bash
 # Run all tests
-npx vitest
+pnpm exec vitest
 
 # Run tests in watch mode (recommended for development)
-npx vitest --watch
+pnpm exec vitest --watch
 
 # Run tests with coverage report
-npx vitest --coverage
+pnpm exec vitest --coverage
 
 # Run tests once (CI mode)
-npx vitest run
+pnpm exec vitest run
 ```
 
 ### Test Structure
@@ -73,7 +73,7 @@ Run `npx vitest --coverage` to see test coverage. The current tests cover:
 For best developer experience:
 1. Run `npx vitest --watch` in a terminal
 2. Tests will automatically re-run when you modify code
-3. Focus on failing tests with patterns: `npx vitest --watch --testNamePattern="rotation"`
+3. Focus on failing tests with patterns: `pnpm exec vitest --watch --testNamePattern="rotation"`
 
 ## Bug Fix: Rotation Not Refreshing View
 
@@ -99,13 +99,13 @@ private needsCacheRefresh(): boolean {
 2. Drag the mouse to rotate the camera
 3. The view should now update smoothly showing different voxels
 4. Check the debug panel - cache misses should increase when rotating
-5. Run `npx vitest --testNamePattern="rotation"` to verify automated tests pass
+5. Run `pnpm exec vitest --testNamePattern="rotation"` to verify automated tests pass
 
 ## Development Workflow
 
 ### Recommended Process
-1. **Start dev server**: `npm run dev`
-2. **Start tests in watch mode**: `npx vitest --watch`
+1. **Start dev server**: `pnpm dev`
+2. **Start tests in watch mode**: `pnpm exec vitest --watch`
 3. Make code changes
 4. Tests automatically re-run
 5. Check both test results and visual output in browser
@@ -167,8 +167,8 @@ While automated tests verify correctness, manual performance testing is recommen
 To add tests to CI pipeline:
 ```yaml
 - name: Run tests
-  run: npx vitest run
+  run: pnpm exec vitest run
 
 - name: Run tests with coverage
-  run: npx vitest run --coverage
+  run: pnpm exec vitest run --coverage
 ```
