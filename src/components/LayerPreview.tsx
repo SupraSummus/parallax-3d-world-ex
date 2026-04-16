@@ -8,7 +8,7 @@ import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import { Stack, Eye, EyeSlash } from '@phosphor-icons/react'
+import { Stack } from '@phosphor-icons/react'
 
 interface LayerPreviewProps {
   layers: Layer[]
@@ -29,7 +29,7 @@ function LayerItem({ layer, onToggleVisibility }: LayerItemProps) {
 
     const ctx = canvas.getContext('2d')
     if (!ctx) return
-    const scale = 0.15
+    const scale = 0.1
 
     canvas.width = layer.canvas.width * scale
     canvas.height = layer.canvas.height * scale
@@ -37,52 +37,42 @@ function LayerItem({ layer, onToggleVisibility }: LayerItemProps) {
     ctx.drawImage(layer.canvas, 0, 0, canvas.width, canvas.height)
   }, [layer.canvas, layer.dirty])
 
-  const voxelCount = layer.voxels.length
-  const depthRange = layer.size === 1 
-    ? String(layer.depth) 
-    : `${String(layer.depth)} to ${String(layer.depth + layer.size - 1)}`
+  const depthRange = layer.size === 1
+    ? String(layer.depth)
+    : `${String(layer.depth)}–${String(layer.depth + layer.size - 1)}`
 
   return (
-    <div className="flex items-start gap-3 p-3 rounded-lg bg-muted/30 hover:bg-muted/50 transition-colors">
-      <div className="relative flex-shrink-0">
-        <canvas
-          ref={canvasRef}
-          className="rounded border border-border w-[120px] h-[80px] bg-background/50"
-          style={{
-            imageRendering: 'pixelated',
-            opacity: layer.visible ? 1 : 0.3
-          }}
-        />
-        {!layer.visible && (
-          <div className="absolute inset-0 flex items-center justify-center bg-background/50 rounded">
-            <EyeSlash size={24} className="text-muted-foreground" />
-          </div>
-        )}
-      </div>
+    <div className="flex items-center gap-2 p-1.5 rounded-md bg-muted/30 hover:bg-muted/50 transition-colors">
+      <canvas
+        ref={canvasRef}
+        className="rounded border border-border w-[72px] h-12 bg-background/50 flex-shrink-0"
+        style={{
+          imageRendering: 'pixelated',
+          opacity: layer.visible ? 1 : 0.3
+        }}
+      />
 
-      <div className="flex-1 min-w-0 space-y-2">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <h3 className="font-mono text-sm font-bold text-foreground">
-              Layer {layer.depth}
-            </h3>
-            <Badge variant="outline" className="text-xs font-mono">
-              z: {depthRange}
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5">
+          <h3 className="font-mono text-xs font-bold text-foreground truncate">
+            z {depthRange}
+          </h3>
+          {layer.size > 1 && (
+            <Badge variant="outline" className="text-xs font-mono px-1 py-0 h-4 leading-none">
+              ×{layer.size}
             </Badge>
-          </div>
-          <Switch
-            checked={layer.visible}
-            onCheckedChange={() => { onToggleVisibility(layer.depth) }}
-            className="data-[state=checked]:bg-primary"
-          />
+          )}
         </div>
-
-        <div className="flex items-center gap-4 text-xs text-muted-foreground font-mono">
-          <span>Size: {layer.size}</span>
-          <span>•</span>
-          <span>{voxelCount} voxels</span>
+        <div className="text-xs text-muted-foreground font-mono truncate">
+          {layer.voxels.length} voxels
         </div>
       </div>
+
+      <Switch
+        checked={layer.visible}
+        onCheckedChange={() => { onToggleVisibility(layer.depth) }}
+        className="data-[state=checked]:bg-primary flex-shrink-0"
+      />
     </div>
   )
 }
@@ -92,26 +82,21 @@ export function LayerPreview({ layers, onToggleVisibility }: LayerPreviewProps) 
   const totalCount = layers.length
 
   return (
-    <Card className="bg-card/90 backdrop-blur-sm w-80 flex flex-col max-h-[calc(100vh-48px)]">
-      <div className="p-4 pb-3">
-        <div className="flex items-center justify-between mb-2">
-          <div className="flex items-center gap-2">
-            <Stack className="text-primary" size={20} />
-            <h2 className="font-bold text-lg">Layers</h2>
-          </div>
-          <Badge variant="secondary" className="font-mono text-xs">
-            {visibleCount}/{totalCount}
-          </Badge>
+    <Card className="bg-card/90 backdrop-blur-sm w-72 flex flex-col max-h-[calc(100vh-48px)] gap-0 py-0 overflow-hidden">
+      <div className="px-3 py-2 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <Stack className="text-primary flex-shrink-0" size={18} />
+          <h2 className="font-bold text-base">Layers</h2>
         </div>
-        <p className="text-xs text-muted-foreground">
-          Progressive depth slices
-        </p>
+        <Badge variant="secondary" className="font-mono text-xs flex-shrink-0">
+          {visibleCount}/{totalCount}
+        </Badge>
       </div>
 
       <Separator />
 
-      <ScrollArea className="flex-1">
-        <div className="p-4 space-y-2">
+      <ScrollArea className="flex-1 min-h-0">
+        <div className="p-2 space-y-1">
           {layers.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground text-sm">
               No layers rendered yet
@@ -127,15 +112,6 @@ export function LayerPreview({ layers, onToggleVisibility }: LayerPreviewProps) 
           )}
         </div>
       </ScrollArea>
-
-      <Separator />
-
-      <div className="p-3 space-y-1 text-xs text-muted-foreground">
-        <div className="flex items-center gap-2">
-          <Eye size={14} />
-          <span>Toggle visibility to inspect layers</span>
-        </div>
-      </div>
     </Card>
   )
 }
