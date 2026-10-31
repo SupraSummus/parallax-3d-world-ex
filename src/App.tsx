@@ -1,6 +1,7 @@
 import { useEffect, useEffectEvent, useRef, useState, useCallback, type ReactNode } from 'react'
 import { ParallaxRenderer, DEFAULT_FOV, MAX_FOV, MIN_FOV, DEFAULT_RENDER_DISTANCE, MAX_RENDER_DISTANCE, MIN_RENDER_DISTANCE, DEFAULT_MAX_LEAK, MAX_MAX_LEAK, MIN_MAX_LEAK, type Camera, type Layer, type SessionStats } from '@/lib/renderer'
 import { World, WORLD_TYPES, type WorldType } from '@/lib/world'
+import { Compositor } from '@/lib/compositor'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -20,8 +21,11 @@ const MOVEMENT_KEYS: Record<string, [number, number, number]> = {
 }
 
 function App() {
-  const containerRef = useRef<HTMLDivElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
   const rendererRef = useRef<ParallaxRenderer | null>(null)
+  const compositorRef = useRef<Compositor | null>(null)
+  // Without it (e.g. jsdom) the panels still work, but the scene isn't drawn.
+  const [hasWebGL2] = useState(() => document.createElement('canvas').getContext('webgl2') !== null)
 
   const [sessionStats, setSessionStats] = useState<SessionStats | null>(null)
   // Replaced by the world's spawn point on the first render.
@@ -41,7 +45,8 @@ function App() {
   const requestRender = useCallback(() => {
     const renderer = rendererRef.current
     if (!renderer) return
-    renderer.render()
+    const frame = renderer.render()
+    compositorRef.current?.draw(frame)
     setSessionStats(renderer.getStats())
     setLayers(renderer.getLayers())
     setCamera(renderer.getCamera())
@@ -49,10 +54,11 @@ function App() {
 
   // Renderer lifecycle.
   useEffect(() => {
-    const container = containerRef.current
-    if (!container) return
+    const canvas = canvasRef.current
+    if (!canvas) return
 
-    const renderer = new ParallaxRenderer(container, new World(Date.now(), 'forest'))
+    if (hasWebGL2) compositorRef.current = new Compositor(canvas)
+    const renderer = new ParallaxRenderer(new World(Date.now(), 'forest'))
     rendererRef.current = renderer
 
     const handleResize = () => {
@@ -65,8 +71,9 @@ function App() {
     return () => {
       window.removeEventListener('resize', handleResize)
       rendererRef.current = null
+      compositorRef.current = null
     }
-  }, [requestRender])
+  }, [requestRender, hasWebGL2])
 
   // Keyboard movement: one animation-frame loop runs while any movement key is held.
   useEffect(() => {
@@ -181,8 +188,12 @@ function App() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-background text-foreground">
-      {/* `isolate` keeps the layer canvases' z-indices below the UI panels. */}
-      <div ref={containerRef} className="absolute inset-0 isolate overflow-hidden" />
+      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+      {!hasWebGL2 && (
+        <div className="absolute inset-0 flex items-center justify-center p-4 text-center text-sm text-white">
+          Can't draw the scene: this browser has no WebGL 2.
+        </div>
+      )}
 
       <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
         <Crosshair size={20} className="text-white/60" />
@@ -315,7 +326,7 @@ function App() {
                     </StatRow>
                     <StatRow label="Cache Efficiency">{lastUpdate.cacheEfficiency.toFixed(1)}%</StatRow>
                     <StatRow label="Voxels Rendered">{lastUpdate.voxelsRendered.toLocaleString()}</StatRow>
-                    <StatRow label="Cached Canvases">{(lastUpdate.cachedPixels / 1e6).toFixed(1)} Mpx</StatRow>
+                    <StatRow label="Cached Pixels">{(lastUpdate.cachedPixels / 1e6).toFixed(1)} Mpx</StatRow>
                   </div>
                 </>
               )}

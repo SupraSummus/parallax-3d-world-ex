@@ -1,10 +1,10 @@
 # Parallax Voxel Engine
 
 A proof of concept that renders a 3D voxel world as a stack of cached 2D
-depth slices composited with CSS transforms. Slices get thicker with
+depth slices composited with WebGL. Slices get thicker with
 distance, but never so thick that they show more than a few pixels of what
 true perspective would hide; camera movement mostly just moves cached
-canvases.
+images.
 
 Live demo: <https://suprasummus.github.io/parallax-world/> (deployed from `main`).
 
