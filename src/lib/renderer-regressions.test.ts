@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { World, ParallaxRenderer } from './renderer'
+import { ParallaxRenderer } from './renderer'
+import { World } from './world'
 
 /**
- * Behavioral tests that demonstrate two suspected bugs without asserting on
- * implementation details. Each test sets up a scenario, renders, and checks
- * observable output (either the drawings that landed on a layer's canvas, or
- * the per-render stats exposed by the renderer).
+ * Behavioral regression tests for previously fixed rendering bugs. They check
+ * observable output only: what landed on a layer's canvas (via a recording
+ * 2D context) and the per-render stats.
  */
 
 // ---------------------------------------------------------------------------
@@ -85,7 +85,7 @@ function makeWorldWithVoxels(voxels: World['voxels']): World {
   return world
 }
 
-describe('Rendering bugs (behavioral)', () => {
+describe('Renderer regressions', () => {
   let container: HTMLDivElement
 
   beforeEach(() => {
@@ -97,14 +97,10 @@ describe('Rendering bugs (behavioral)', () => {
     restoreDrawCapture()
   })
 
-  // -------------------------------------------------------------------------
-  // Bug 1: near-layer cropping
-  // -------------------------------------------------------------------------
-  // Claim: a voxel that the user should plainly see (directly in front of the
-  // camera, at eye level, 1 unit away) currently never lands on any layer's
-  // canvas bitmap, because near-layer rendering uses world-origin coordinates
-  // with a huge projection scale and the canvas is only viewport-sized.
-  describe('Bug 1: near-layer cropping', () => {
+  // Near layers used to be rasterised at their full perspective scale, so a
+  // voxel right in front of the camera landed far outside the viewport-sized
+  // canvas. Layers are now rasterised at a fixed scale and scaled by CSS.
+  describe('near-layer cropping', () => {
     it('draws a voxel at eye level 1 unit in front of the camera somewhere on a layer canvas', () => {
       const world = makeWorldWithVoxels([
         { x: 0, y: 15, z: -29, color: '#ff0000', type: 1 },
@@ -125,11 +121,6 @@ describe('Rendering bugs (behavioral)', () => {
         }
       }
 
-      // The voxel is directly in front of the camera at eye level. It should
-      // produce at least one draw that lands inside a layer canvas (so that
-      // compositing can actually show it). Currently this fails because the
-      // single voxel is projected to canvas y ~= -5700 and never drawn onto
-      // the 600px-tall canvas bitmap.
       expect(drawsOnCanvas.length).toBeGreaterThan(0)
     })
 
@@ -193,14 +184,9 @@ describe('Rendering bugs (behavioral)', () => {
     })
   })
 
-  // -------------------------------------------------------------------------
-  // Bug 2a: small Z movements invalidate every layer
-  // -------------------------------------------------------------------------
-  // Claim: the cache threshold is small and uniform across all layers, so
-  // moving the camera by 1 z-unit (two default-speed keypresses) forces even
-  // very distant layers to be re-rendered, although their projected output is
-  // virtually unchanged.
-  describe('Bug 2a: Z-movement cache churn', () => {
+  // Small z moves used to invalidate every layer, including distant ones
+  // whose content had not changed.
+  describe('z-movement cache churn', () => {
     it('reuses most layers after a 1-unit Z move from the initial camera position', () => {
       const world = new World(12345)
       const renderer = new ParallaxRenderer(container, world)
@@ -239,22 +225,15 @@ describe('Rendering bugs (behavioral)', () => {
       const regensDuringMovement =
         renderer.getStats().totalLayersRegenerated - initialRegens
 
-      // A healthy cache should re-render only the slices that actually need
-      // it (the near few, plus any newly-entering slice). In the worst case
-      // that's comfortably less than one full re-render per frame. The bug
-      // currently blows this far past layerCount * (frames / 2).
+      // Only near slices that get re-tiled, plus newly entering ones, should
+      // re-render: well under one full re-render per frame.
       expect(regensDuringMovement).toBeLessThan(layerCount * 2)
     })
   })
 
-  // -------------------------------------------------------------------------
-  // Bug 2b: layers are evicted on move and regenerated on return
-  // -------------------------------------------------------------------------
-  // Claim: the renderer only retains layers whose depths appear in the
-  // current requested set. Layers that go out of range are deleted outright,
-  // so moving in and then back to the original Z re-renders them from
-  // scratch instead of reusing the previously-cached canvases.
-  describe('Bug 2b: cache thrown away when layers leave and re-enter view', () => {
+  // Layers leaving the view used to be deleted, so moving forward and back
+  // re-rendered them. They are now kept in an LRU cache.
+  describe('layers leaving and re-entering view', () => {
     it('reuses layers when the camera returns to an already-visited Z position', () => {
       const world = new World(12345)
       const renderer = new ParallaxRenderer(container, world)
@@ -271,10 +250,6 @@ describe('Rendering bugs (behavioral)', () => {
 
       const returnStats = renderer.getStats().lastUpdate
       expect(returnStats).toBeDefined()
-      // The camera is in exactly the same state as the first render. Every
-      // slice was visible moments ago. A retaining cache would reuse nearly
-      // all of them. Currently, layers that left the visible window were
-      // deleted from the Map and must be rebuilt, so regenerations dominate.
       expect(returnStats?.layersReused ?? 0).toBeGreaterThan(returnStats?.layersRegenerated ?? 0)
     })
   })

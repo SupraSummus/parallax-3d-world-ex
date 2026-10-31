@@ -38,9 +38,6 @@ HTMLCanvasElement.prototype.getContext = vi.fn(function() {
   }
 }) as unknown as typeof HTMLCanvasElement.prototype.getContext
 
-globalThis.requestAnimationFrame = vi.fn(function(cb: FrameRequestCallback) {
-  setTimeout(() => { cb(performance.now()) }, 16)
-  return 1
-}) as unknown as typeof requestAnimationFrame
-
-globalThis.cancelAnimationFrame = vi.fn() as unknown as typeof cancelAnimationFrame
+globalThis.requestAnimationFrame = (cb: FrameRequestCallback) =>
+  window.setTimeout(() => { cb(performance.now()) }, 16)
+globalThis.cancelAnimationFrame = (id: number) => { window.clearTimeout(id) }

@@ -1,218 +1,74 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import App from './App'
 
-describe('App Component', () => {
-  beforeEach(() => {
-    HTMLCanvasElement.prototype.getContext = vi.fn(function() {
-      return {
-        fillStyle: '',
-        fillRect: vi.fn(),
-        clearRect: vi.fn(),
-        drawImage: vi.fn(),
-        globalAlpha: 1,
-      }
-    }) as unknown as typeof HTMLCanvasElement.prototype.getContext
-  })
+const cameraPosition = () => screen.getByText('Position').nextElementSibling?.textContent
 
-  it('should render the main title', () => {
+describe('App', () => {
+  it('renders the title and control panels', () => {
     render(<App />)
     expect(screen.getByText('PARALLAX ENGINE')).toBeInTheDocument()
+    expect(screen.getByText('Render Statistics')).toBeInTheDocument()
+    expect(screen.getByText('Camera')).toBeInTheDocument()
+    expect(screen.getByText('World')).toBeInTheDocument()
+    expect(screen.getByText('Layers')).toBeInTheDocument()
   })
 
-  it('should render the subtitle', () => {
-    render(<App />)
-    expect(screen.getByText('Event-Driven 2.5D Rendering')).toBeInTheDocument()
-  })
-
-  it('should render layer container', () => {
+  it('renders the scene on mount', () => {
     const { container } = render(<App />)
-    const layerContainer = container.querySelector('.overflow-hidden')
-    expect(layerContainer).toBeInTheDocument()
+    expect(container.querySelectorAll('canvas').length).toBeGreaterThan(0)
+    expect(screen.getByText('Total Updates').nextElementSibling).not.toHaveTextContent(/^0$/)
   })
 
-  describe('Performance Stats', () => {
-    it('should show performance card by default', () => {
-      render(<App />)
-      expect(screen.getByText('Render Statistics')).toBeInTheDocument()
-    })
+  it('hides and re-shows the statistics panel', () => {
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: 'Hide statistics' }))
+    expect(screen.queryByText('Render Statistics')).not.toBeInTheDocument()
 
-    it('should display FPS stat', () => {
-      render(<App />)
-      // The stats are shown under "Session Total" section
-      expect(screen.getByText('Total Updates')).toBeInTheDocument()
-    })
-
-    it('should display frame time stat', () => {
-      render(<App />)
-      expect(screen.getByText('Avg Render Time')).toBeInTheDocument()
-    })
-
-    it('should display cache stats', () => {
-      render(<App />)
-      expect(screen.getByText('Avg Cache Efficiency')).toBeInTheDocument()
-    })
-
-    it('should display layer stats', () => {
-      render(<App />)
-      // Active Layers appears in both Render Statistics and Camera cards
-      expect(screen.getAllByText('Active Layers').length).toBeGreaterThan(0)
-      expect(screen.getByText('Total Voxels')).toBeInTheDocument()
-    })
-
-    it('should hide performance stats when clicking eye slash', async () => {
-      render(<App />)
-      
-      // Find the hide button using its aria-label
-      const hideButton = screen.getByRole('button', { name: 'Hide statistics' })
-      fireEvent.click(hideButton)
-      
-      await waitFor(() => {
-        // The "Render Statistics" heading should be gone from the stats card
-        expect(screen.queryByText('Render Statistics')).not.toBeInTheDocument()
-      })
-    })
-
-    it('should show performance stats again when clicking show button', async () => {
-      render(<App />)
-      
-      // Find and click the hide button to hide performance stats first
-      const hideButton = screen.getByRole('button', { name: 'Hide statistics' })
-      fireEvent.click(hideButton)
-      
-      await waitFor(() => {
-        // The "Stats" button should appear when stats are hidden
-        const showButton = screen.getByRole('button', { name: /Stats/ })
-        fireEvent.click(showButton)
-      })
-      
-      await waitFor(() => {
-        // Render Statistics heading should be back
-        expect(screen.getByText('Render Statistics')).toBeInTheDocument()
-      })
-    })
+    fireEvent.click(screen.getByRole('button', { name: /Stats/ }))
+    expect(screen.getByText('Render Statistics')).toBeInTheDocument()
   })
 
-  describe('Camera Controls', () => {
-    it('should display camera card', () => {
-      render(<App />)
-      expect(screen.getByText('Camera')).toBeInTheDocument()
-    })
-
-    it('should show camera position', () => {
-      render(<App />)
-      expect(screen.getByText('Position')).toBeInTheDocument()
-    })
-
-    it('should show active layers in camera card', () => {
-      render(<App />)
-      // Active Layers is shown in the Camera card
-      expect(screen.getAllByText('Active Layers').length).toBeGreaterThan(0)
-    })
-
-
-
-    it('should have move speed slider', () => {
-      render(<App />)
-      expect(screen.getByText(/Move Speed:/)).toBeInTheDocument()
-    })
+  it('toggles the layers panel', () => {
+    render(<App />)
+    fireEvent.click(screen.getByRole('button', { name: /Hide Layers/ }))
+    expect(screen.queryByText('Layers')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Show Layers/ }))
+    expect(screen.getByText('Layers')).toBeInTheDocument()
   })
 
-  describe('World Controls', () => {
-    it('should display world card', () => {
-      render(<App />)
-      expect(screen.getByText('World')).toBeInTheDocument()
-    })
+  it.each([
+    ['w', '0.0, 15.0, -30.0', /^0\.0, 15\.0, -2\d\.\d$/],
+    ['d', '0.0, 15.0, -30.0', /^[1-9]\d*\.\d, 15\.0, -30\.0$/],
+    [' ', '0.0, 15.0, -30.0', /^0\.0, (1[6-9]|[2-9]\d)\.\d, -30\.0$/],
+  ])('moves the camera while %j is held', async (key, before, after) => {
+    render(<App />)
+    expect(cameraPosition()).toBe(before)
 
-    it('should have regenerate world button', () => {
-      render(<App />)
-      expect(screen.getByText('Regenerate World')).toBeInTheDocument()
-    })
+    fireEvent.keyDown(window, { key })
+    await waitFor(() => { expect(cameraPosition()).toMatch(after) })
+    fireEvent.keyUp(window, { key })
 
-    it('should show control instructions', () => {
-      render(<App />)
-      expect(screen.getByText('WASD - Move Horizontally')).toBeInTheDocument()
-      expect(screen.getByText('Space/Shift - Up/Down')).toBeInTheDocument()
-      expect(screen.getByText('W/S also moves In/Out')).toBeInTheDocument()
-    })
+    // Let React flush the state from the last frame, then check movement stopped.
+    const settle = () => new Promise(resolve => setTimeout(resolve, 50))
+    await settle()
+    const stopped = cameraPosition()
+    await settle()
+    expect(cameraPosition()).toBe(stopped)
   })
 
-  describe('Keyboard Controls', () => {
-    it('should handle W key press', () => {
-      render(<App />)
-      
-      fireEvent.keyDown(window, { key: 'w' })
-      fireEvent.keyUp(window, { key: 'w' })
-      
-      expect(true).toBe(true)
-    })
-
-    it('should handle WASD keys', () => {
-      render(<App />)
-      
-      const keys = ['w', 'a', 's', 'd']
-      keys.forEach(key => {
-        fireEvent.keyDown(window, { key })
-        fireEvent.keyUp(window, { key })
-      })
-      
-      expect(true).toBe(true)
-    })
-
-    it('should handle space and shift keys', () => {
-      render(<App />)
-      
-      fireEvent.keyDown(window, { key: ' ' })
-      fireEvent.keyUp(window, { key: ' ' })
-      fireEvent.keyDown(window, { key: 'Shift' })
-      fireEvent.keyUp(window, { key: 'Shift' })
-      
-      expect(true).toBe(true)
-    })
+  it('ignores unrelated keys', async () => {
+    render(<App />)
+    fireEvent.keyDown(window, { key: 'q' })
+    await new Promise(resolve => setTimeout(resolve, 50))
+    fireEvent.keyUp(window, { key: 'q' })
+    expect(cameraPosition()).toBe('0.0, 15.0, -30.0')
   })
 
-  describe('Mouse Controls', () => {
-    it('should handle mouse down event', () => {
-      const { container } = render(<App />)
-      const layerContainer = container.querySelector('.overflow-hidden')
-      
-      if (layerContainer) {
-        fireEvent.mouseDown(layerContainer, { button: 0, clientX: 100, clientY: 100 })
-        fireEvent.mouseUp(layerContainer)
-      }
-      
-      expect(true).toBe(true)
-    })
-
-    it('should handle mouse move for camera rotation', () => {
-      const { container } = render(<App />)
-      const layerContainer = container.querySelector('.overflow-hidden')
-      
-      if (layerContainer) {
-        fireEvent.mouseDown(window, { button: 0, clientX: 100, clientY: 100 })
-        fireEvent.mouseMove(window, { clientX: 150, clientY: 120 })
-        fireEvent.mouseUp(window)
-      }
-      
-      expect(true).toBe(true)
-    })
-  })
-
-  describe('Crosshair', () => {
-    it('should render crosshair in center', () => {
-      const { container } = render(<App />)
-      const crosshair = container.querySelector('.absolute.top-1\\/2.left-1\\/2')
-      expect(crosshair).toBeInTheDocument()
-    })
-  })
-
-  describe('Responsive Behavior', () => {
-    it('should handle window resize', () => {
-      render(<App />)
-      
-      fireEvent.resize(window)
-      
-      expect(true).toBe(true)
-    })
+  it('lists movement controls', () => {
+    render(<App />)
+    expect(screen.getByText('W/S - Forward/Back')).toBeInTheDocument()
+    expect(screen.getByText('A/D - Left/Right')).toBeInTheDocument()
+    expect(screen.getByText('Space/Shift - Up/Down')).toBeInTheDocument()
   })
 })
