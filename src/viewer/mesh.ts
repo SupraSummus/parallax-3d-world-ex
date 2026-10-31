@@ -1,4 +1,5 @@
 import type { World } from '@/lib/world'
+import { FACE_SHADE } from '@/lib/bake'
 
 export interface VoxelMesh {
   /** xyz per vertex, in three.js space: (x, y, -z), so the default -z view looks along world +z. */
@@ -13,13 +14,13 @@ export interface VoxelMesh {
 // four corners in three.js space (z already negated), counter-clockwise when
 // seen from outside so back-face culling works.
 const FACES: { dir: [number, number, number]; shade: number; corners: [number, number, number][] }[] = [
-  { dir: [0, 1, 0], shade: 1, corners: [[0, 1, 0], [1, 1, 0], [1, 1, -1], [0, 1, -1]] },
-  { dir: [0, -1, 0], shade: 0.55, corners: [[0, 0, 0], [0, 0, -1], [1, 0, -1], [1, 0, 0]] },
-  { dir: [1, 0, 0], shade: 0.8, corners: [[1, 0, 0], [1, 0, -1], [1, 1, -1], [1, 1, 0]] },
-  { dir: [-1, 0, 0], shade: 0.7, corners: [[0, 0, -1], [0, 0, 0], [0, 1, 0], [0, 1, -1]] },
+  { dir: [0, 1, 0], shade: FACE_SHADE.top, corners: [[0, 1, 0], [1, 1, 0], [1, 1, -1], [0, 1, -1]] },
+  { dir: [0, -1, 0], shade: FACE_SHADE.bottom, corners: [[0, 0, 0], [0, 0, -1], [1, 0, -1], [1, 0, 0]] },
+  { dir: [1, 0, 0], shade: FACE_SHADE.right, corners: [[1, 0, 0], [1, 0, -1], [1, 1, -1], [1, 1, 0]] },
+  { dir: [-1, 0, 0], shade: FACE_SHADE.left, corners: [[0, 0, -1], [0, 0, 0], [0, 1, 0], [0, 1, -1]] },
   // World -z faces the parallax camera; in three.js space that is +z.
-  { dir: [0, 0, -1], shade: 0.9, corners: [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]] },
-  { dir: [0, 0, 1], shade: 0.65, corners: [[1, 0, -1], [0, 0, -1], [0, 1, -1], [1, 1, -1]] },
+  { dir: [0, 0, -1], shade: FACE_SHADE.front, corners: [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]] },
+  { dir: [0, 0, 1], shade: FACE_SHADE.back, corners: [[1, 0, -1], [0, 0, -1], [0, 1, -1], [1, 1, -1]] },
 ]
 
 /**

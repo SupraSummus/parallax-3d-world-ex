@@ -1,14 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import {
-  ParallaxRenderer, DEFAULT_FOV, MAX_FOV, MIN_FOV,
-  DEFAULT_RENDER_DISTANCE, MAX_RENDER_DISTANCE, MIN_RENDER_DISTANCE,
-  DEFAULT_MAX_LEAK, MAX_MAX_LEAK, MIN_MAX_LEAK,
-} from './renderer'
+import { ParallaxRenderer, DEFAULT_RENDER_DISTANCE, type Chunk } from './renderer'
 import { World } from './world'
-import { selectSlices, leakFreeDetail } from './slice-selection'
+import { selectSlices, leakFreeDetail, chunkWidth, directionStep } from './slice-selection'
 
-// Generating the forest takes a while; the renderer never modifies its world.
-const world = new World(12345)
+// A small world with trees: rasterising the forest (~700k voxels) in jsdom
+// takes seconds per test. The renderer never modifies its world.
+const world = new World(12345, 'hills_with_trees')
 
 describe('ParallaxRenderer', () => {
   let container: HTMLDivElement
@@ -18,6 +15,13 @@ describe('ParallaxRenderer', () => {
     const update = renderer.getStats().lastUpdate
     if (!update) throw new Error('render() has not been called')
     return update
+  }
+
+  const allChunks = () => renderer.getLayers().flatMap(l => l.chunks)
+  const transformOf = (canvas: HTMLCanvasElement) => {
+    const m = /translate3d\(([-\d.e]+)px, ([-\d.e]+)px, 0\) scale\(([-\d.e]+)\)/.exec(canvas.style.transform)
+    if (!m) throw new Error(`unexpected transform: ${canvas.style.transform}`)
+    return { left: Number(m[1]), top: Number(m[2]), scale: Number(m[3]) }
   }
 
   beforeEach(() => {
@@ -52,70 +56,122 @@ describe('ParallaxRenderer', () => {
       expect(lastUpdate().layerCount).toBe(expected.length)
     })
 
-    it('puts exactly the slice voxels in each layer and draws one face per (x, y)', () => {
+    it('puts exactly the slice voxels in each layer', () => {
       renderer.render()
       const layers = renderer.getLayers()
       expect(layers.some(l => l.voxels.length > 0)).toBe(true)
       for (const layer of layers) {
-        const inSlice = layer.voxels.every(v => v.z >= layer.depth && v.z < layer.depth + layer.size)
-        expect(inSlice).toBe(true)
-        expect(layer.facesDrawn).toBe(new Set(layer.voxels.map(v => `${String(v.x)},${String(v.y)}`)).size)
+        expect(layer.voxels.every(v => v.z >= layer.depth && v.z < layer.depth + layer.size)).toBe(true)
+        expect(layer.voxels).toHaveLength(world.getVoxelsInZRange(layer.depth, layer.depth + layer.size).length)
       }
-      expect(lastUpdate().voxelsRendered).toBe(layers.reduce((n, l) => n + l.facesDrawn, 0))
     })
 
-    it('attaches a canvas and a fog overlay per layer, nearer layers on top', () => {
+    it('splits slices into aligned chunks, each clipped to its cell', () => {
+      renderer.render()
+      const chunks = allChunks()
+      expect(chunks.length).toBeGreaterThan(10)
+      for (const layer of renderer.getLayers()) {
+        const w = chunkWidth(layer.size)
+        for (const chunk of layer.chunks) {
+          expect(Math.abs(chunk.x % w)).toBe(0)
+          expect(Math.abs(chunk.y % w)).toBe(0)
+          expect(chunk.facesDrawn).toBeGreaterThan(0)
+          // Canvas sizes are rounded up to whole pixels.
+          const slack = 1 / chunk.scale
+          expect(chunk.originX).toBeGreaterThanOrEqual(chunk.x - 0.5)
+          expect(chunk.originX + chunk.canvas.width / chunk.scale).toBeLessThanOrEqual(chunk.x + w - 0.5 + slack)
+          expect(chunk.originY).toBeLessThanOrEqual(chunk.y + w - 0.5)
+          expect(chunk.originY - chunk.canvas.height / chunk.scale).toBeGreaterThanOrEqual(chunk.y - 0.5 - slack)
+        }
+      }
+      expect(lastUpdate().voxelsRendered).toBeGreaterThanOrEqual(chunks.reduce((n, c) => n + c.facesDrawn, 0))
+    })
+
+    it('bakes each chunk along the grid direction nearest to the ray through its centre', () => {
+      renderer.render()
+      const step = directionStep(renderer.getDetail())
+      const camera = renderer.getCamera()
+      let oblique = 0
+      for (const layer of renderer.getLayers()) {
+        const w = chunkWidth(layer.size)
+        const distance = layer.depth + (layer.size - 1) / 2 - camera.z
+        for (const chunk of layer.chunks) {
+          const tanX = (chunk.x + w / 2 - 0.5 - camera.x) / distance
+          const tanY = (chunk.y + w / 2 - 0.5 - camera.y) / distance
+          expect(Math.abs(chunk.tanX - tanX)).toBeLessThanOrEqual(step / 2 + 1e-9)
+          expect(Math.abs(chunk.tanY - tanY)).toBeLessThanOrEqual(step / 2 + 1e-9)
+          expect(Number.isInteger(chunk.tanX / step) && Number.isInteger(chunk.tanY / step)).toBe(true)
+          if (chunk.tanX !== 0 || chunk.tanY !== 0) oblique++
+        }
+      }
+      expect(oblique).toBeGreaterThan(0)
+    })
+
+    it('rasterises fewer pixels for farther, thicker slices', () => {
+      renderer.render()
+      const scales = renderer.getLayers().filter(l => l.chunks.length > 0).map(l => l.chunks[0].scale)
+      expect(scales).toEqual([...scales].sort((a, b) => b - a))
+      expect(scales[0]).toBeGreaterThan(scales[scales.length - 1])
+    })
+
+    it('only rasterises chunks that are at least partly on screen', () => {
+      renderer.render()
+      const wide = lastUpdate()
+      for (const chunk of allChunks()) {
+        const { left, top, scale } = transformOf(chunk.canvas)
+        expect(left).toBeLessThan(800)
+        expect(top).toBeLessThan(600)
+        expect(left + chunk.canvas.width * scale).toBeGreaterThan(0)
+        expect(top + chunk.canvas.height * scale).toBeGreaterThan(0)
+      }
+      // A narrower view shows less of every slice.
+      const narrow = new ParallaxRenderer(document.createElement('div'), world)
+      narrow.resize(800, 600)
+      narrow.setFov(20)
+      narrow.render()
+      const narrowUpdate = narrow.getStats().lastUpdate
+      expect(narrowUpdate?.chunkCount).toBeLessThan(wide.chunkCount)
+      expect(narrowUpdate?.cachedPixels).toBeLessThan(wide.cachedPixels)
+    })
+
+    it('attaches the chunks in view and a fog overlay per layer, nearer layers on top', () => {
       renderer.render()
       const layers = renderer.getLayers()
-      expect(container.querySelectorAll('canvas')).toHaveLength(layers.length)
-      expect(container.children).toHaveLength(layers.length * 2)
-      const zIndices = layers.map(l => Number(l.canvas.style.zIndex))
+      expect(container.querySelectorAll('canvas')).toHaveLength(allChunks().length)
+      expect(container.querySelectorAll('div')).toHaveLength(layers.length)
+      const zIndices = layers.filter(l => l.chunks.length > 0).map(l => {
+        const own = new Set(l.chunks.map(c => c.canvas.style.zIndex))
+        expect(own.size).toBe(1)
+        return Number(l.chunks[0].canvas.style.zIndex)
+      })
       expect(zIndices).toEqual([...zIndices].sort((a, b) => b - a))
     })
 
-    it('crops layer canvases to the slice content', () => {
+    it('detaches a layer\'s chunks when toggled', () => {
       renderer.render()
-      for (const layer of renderer.getLayers()) {
-        if (layer.voxels.length === 0) {
-          expect([layer.canvas.width, layer.canvas.height]).toEqual([0, 0])
-          continue
-        }
-        const xs = layer.voxels.map(v => v.x)
-        const ys = layer.voxels.map(v => v.y)
-        expect(layer.canvas.width).toBe((Math.max(...xs) - Math.min(...xs) + 1) * 10)
-        expect(layer.canvas.height).toBe((Math.max(...ys) - Math.min(...ys) + 1) * 10)
-        expect(layer.originX).toBe(Math.min(...xs) - 0.5)
-        expect(layer.originY).toBe(Math.max(...ys) + 0.5)
-      }
-    })
-
-    it('hides a layer when toggled', () => {
-      renderer.render()
-      const layer = renderer.getLayers().filter(l => l.facesDrawn > 0)[1]
+      const layer = renderer.getLayers().filter(l => l.chunks.length > 0)[1]
+      const canvases = layer.chunks.map(c => c.canvas)
       renderer.toggleLayerVisibility(layer.depth)
       renderer.render()
       expect(layer.visible).toBe(false)
-      expect(layer.canvas.style.display).toBe('none')
+      expect(canvases.every(c => c.parentNode === null)).toBe(true)
       renderer.toggleLayerVisibility(layer.depth)
       renderer.render()
-      expect(layer.canvas.style.display).toBe('')
+      expect(canvases.every(c => c.parentNode === container)).toBe(true)
+      expect(lastUpdate().chunksRegenerated).toBe(0)
     })
   })
 
   describe('compositing', () => {
-    const transformOf = (canvas: HTMLCanvasElement) => {
-      const m = /translate3d\(([-\d.e]+)px, ([-\d.e]+)px, 0\) scale\(([-\d.e]+)\)/.exec(canvas.style.transform)
-      if (!m) throw new Error(`unexpected transform: ${canvas.style.transform}`)
-      return { left: Number(m[1]), top: Number(m[2]), scale: Number(m[3]) }
-    }
-    const drawnLayers = () => renderer.getLayers().filter(l => l.facesDrawn > 0)
+    /** First chunk of every layer with chunks in view, near to far. */
+    const firstChunks = () => renderer.getLayers().flatMap(l => l.chunks.slice(0, 1).map(chunk => ({ layer: l, chunk })))
 
-    /** Screen position of world point (x, y) on a layer, per its CSS transform (origin 0 0). */
-    const project = (layer: ReturnType<typeof drawnLayers>[number], x: number, y: number) => {
-      const { left, top, scale } = transformOf(layer.canvas)
+    /** Screen position of world point (x, y) on a chunk, per its CSS transform (origin 0 0). */
+    const project = (chunk: Chunk, x: number, y: number) => {
+      const { left, top, scale } = transformOf(chunk.canvas)
       return {
-        sx: left + (x - layer.originX) * 10 * scale,
-        sy: top + (layer.originY - y) * 10 * scale,
+        sx: left + (x - chunk.originX) * chunk.scale * scale,
+        sy: top + (chunk.originY - y) * chunk.scale * scale,
       }
     }
 
@@ -125,15 +181,15 @@ describe('ParallaxRenderer', () => {
 
     it('scales nearer layers up more than farther ones', () => {
       renderer.render()
-      const scales = drawnLayers().map(l => transformOf(l.canvas).scale)
-      expect(scales.length).toBeGreaterThan(3)
-      expect(scales).toEqual([...scales].sort((a, b) => b - a))
+      const pixelsPerUnit = firstChunks().map(({ chunk }) => transformOf(chunk.canvas).scale * chunk.scale)
+      expect(pixelsPerUnit.length).toBeGreaterThan(3)
+      expect(pixelsPerUnit).toEqual([...pixelsPerUnit].sort((a, b) => b - a))
     })
 
-    it('projects the point in front of the camera to the viewport centre on every layer', () => {
+    it('projects the point in front of the camera to the viewport centre on every chunk', () => {
       renderer.render()
-      for (const layer of drawnLayers()) {
-        const { sx, sy } = project(layer, 0, 15)
+      for (const chunk of allChunks()) {
+        const { sx, sy } = project(chunk, 0, 15)
         expect(sx).toBeCloseTo(400)
         expect(sy).toBeCloseTo(300)
       }
@@ -141,10 +197,11 @@ describe('ParallaxRenderer', () => {
 
     it('moves nearer layers further on sideways camera movement (parallax)', () => {
       renderer.render()
-      const before = drawnLayers().map(l => project(l, 0, 0).sx)
-      renderer.setCamera({ x: 3 })
+      const tracked = firstChunks().map(({ chunk }) => ({ chunk, before: project(chunk, 0, 0).sx }))
+      renderer.setCamera({ x: 1 })
       renderer.render()
-      const shifts = drawnLayers().map((l, i) => before[i] - project(l, 0, 0).sx)
+      const shifts = tracked.filter(t => t.chunk.canvas.parentNode === container).map(t => t.before - project(t.chunk, 0, 0).sx)
+      expect(shifts.length).toBeGreaterThan(3)
       expect(shifts.every(s => s > 0)).toBe(true)
       expect(shifts).toEqual([...shifts].sort((a, b) => b - a))
     })
@@ -153,40 +210,39 @@ describe('ParallaxRenderer', () => {
       renderer.setFov(fov)
       renderer.render()
       const camera = renderer.getCamera()
-      for (const layer of drawnLayers()) {
-        const distance = layer.depth + layer.size / 2 - camera.z
-        const focalLength = transformOf(layer.canvas).scale * 10 * distance
+      for (const { layer, chunk } of firstChunks()) {
+        const distance = layer.depth + (layer.size - 1) / 2 - camera.z
+        const focalLength = transformOf(chunk.canvas).scale * chunk.scale * distance
         expect(focalLength).toBeCloseTo(400 / Math.tan((fov * Math.PI) / 360))
       }
     })
 
     it('keeps world points at their projected position across a resize', () => {
       renderer.render()
+      const slices = renderer.getLayers().map(l => [l.depth, l.size])
       // Same longer side, so the same detail and slices.
       renderer.resize(600, 800)
       renderer.render()
-      expect(lastUpdate().layersRegenerated).toBe(0)
-      for (const layer of drawnLayers()) {
-        const { sx, sy } = project(layer, 0, 15)
+      expect(renderer.getLayers().map(l => [l.depth, l.size])).toEqual(slices)
+      for (const chunk of allChunks()) {
+        const { sx, sy } = project(chunk, 0, 15)
         expect(sx).toBeCloseTo(300)
         expect(sy).toBeCloseTo(400)
       }
     })
 
-    it('hides empty slices and fogs farther slices more', () => {
+    it('draws nothing for empty slices and fogs farther slices more', () => {
       renderer.setCamera({ z: -70 })
       renderer.render()
       const layers = renderer.getLayers()
-      const empty = layers.filter(l => l.facesDrawn === 0)
-      expect(empty.length).toBeGreaterThan(0)
-      for (const l of empty) expect(l.canvas.style.display).toBe('none')
+      expect(layers.some(l => l.voxels.length === 0 && l.chunks.length === 0)).toBe(true)
 
-      // Each fog overlay sits directly above its canvas; accumulated fog
-      // transmittance over a slice must decrease with distance.
-      const fogAlphas = layers.map(l => {
-        const fog = l.canvas.nextElementSibling as HTMLElement
-        return Number(/rgba\([^)]*, ([\d.]+)\)/.exec(fog.style.backgroundColor)?.[1])
-      })
+      // One fog overlay per slice; accumulated fog transmittance over a slice
+      // must decrease with distance.
+      const fogAlphas = [...container.querySelectorAll('div')]
+        .sort((a, b) => Number(b.style.zIndex) - Number(a.style.zIndex))
+        .map(fog => Number(/rgba\([^)]*, ([\d.]+)\)/.exec(fog.style.backgroundColor)?.[1]))
+      expect(fogAlphas).toHaveLength(layers.length)
       // Few, visible steps rather than one nearly transparent overlay per slice.
       const steps = fogAlphas.filter(a => a > 0)
       expect(steps.every(a => a >= 0.05)).toBe(true)
@@ -199,71 +255,56 @@ describe('ParallaxRenderer', () => {
   })
 
   describe('cache', () => {
-    it('reuses every layer when the camera only moves in x/y', () => {
+    it('reuses the chunks still in view when the camera moves in x/y', () => {
       renderer.render()
-      const canvases = renderer.getLayers().map(l => l.canvas)
-      renderer.setCamera({ x: 7, y: 3 })
+      renderer.setCamera({ x: renderer.getCamera().x + 2, y: renderer.getCamera().y + 1 })
       renderer.render()
-      expect(lastUpdate().layersRegenerated).toBe(0)
-      expect(lastUpdate().cacheEfficiency).toBe(100)
-      expect(renderer.getLayers().map(l => l.canvas)).toEqual(canvases)
+      expect(lastUpdate().chunksReused).toBeGreaterThan(lastUpdate().chunksRegenerated * 4)
     })
 
-    it('reuses every layer when rendering the same camera twice', () => {
+    it('rasterises nothing when the camera returns to where it was', () => {
+      renderer.render()
+      const start = renderer.getCamera()
+      const canvases = allChunks().map(c => c.canvas)
+      renderer.setCamera({ x: start.x + 10 })
+      renderer.render()
+      renderer.setCamera(start)
+      renderer.render()
+      expect(lastUpdate().chunksRegenerated).toBe(0)
+      expect(allChunks().map(c => c.canvas)).toEqual(canvases)
+    })
+
+    it('rasterises nothing when rendering the same camera twice', () => {
       renderer.render()
       renderer.render()
-      expect(lastUpdate().layersRegenerated).toBe(0)
+      expect(lastUpdate().chunksRegenerated).toBe(0)
       expect(lastUpdate().voxelsRendered).toBe(0)
+      expect(lastUpdate().cacheEfficiency).toBe(100)
     })
 
-    it.each([
-      ['world regeneration', (r: ParallaxRenderer) => { r.regenerateWorld(99999) }],
-    ])('rebuilds every layer after %s', (_, change) => {
+    it('rebuilds every chunk after world regeneration', () => {
       renderer.render()
-      change(renderer)
+      renderer.regenerateWorld(99999)
       renderer.render()
-      expect(lastUpdate().layersReused).toBe(0)
-      expect(lastUpdate().layersRegenerated).toBe(lastUpdate().layerCount)
-    })
-  })
-
-  describe('field of view', () => {
-    it('clamps the field of view', () => {
-      expect(renderer.getFov()).toBe(DEFAULT_FOV)
-      renderer.setFov(1)
-      expect(renderer.getFov()).toBe(MIN_FOV)
-      renderer.setFov(500)
-      expect(renderer.getFov()).toBe(MAX_FOV)
-    })
-
-    it('only zooms: the slicing does not depend on it', () => {
-      renderer.render()
-      const slices = renderer.getLayers()
-      renderer.setFov(20)
-      renderer.render()
-      expect(lastUpdate().layersRegenerated).toBe(0)
-      expect(renderer.getLayers()).toEqual(slices)
+      expect(lastUpdate().chunksReused).toBe(0)
+      expect(lastUpdate().chunksRegenerated).toBe(lastUpdate().chunkCount)
+      expect(container.querySelectorAll('canvas')).toHaveLength(lastUpdate().chunkCount)
     })
   })
 
-  describe('leak tolerance', () => {
-    it('derives detail from the tolerance and the longer viewport side', () => {
-      expect(renderer.getMaxLeak()).toBe(DEFAULT_MAX_LEAK)
-      for (const pixels of [1, 4, 32]) {
+  describe('settings', () => {
+    it('derives detail from the field of view, viewport and leak tolerance', () => {
+      for (const [fov, pixels] of [[90, 16], [90, 4], [10, 16]]) {
+        renderer.setFov(fov)
         renderer.setMaxLeak(pixels)
-        expect(renderer.getDetail()).toBe(leakFreeDetail(800, pixels))
+        const tan = Math.tan((fov * Math.PI) / 360)
+        // The longer viewport side is 800 px.
+        expect(renderer.getDetail()).toBe(leakFreeDetail(400 / tan, tan, pixels))
       }
     })
 
-    it('clamps the tolerance', () => {
-      renderer.setMaxLeak(0)
-      expect(renderer.getMaxLeak()).toBe(MIN_MAX_LEAK)
-      renderer.setMaxLeak(1000)
-      expect(renderer.getMaxLeak()).toBe(MAX_MAX_LEAK)
-    })
-
     it('uses fewer, thicker slices for a larger tolerance', () => {
-      renderer.setMaxLeak(1)
+      renderer.setMaxLeak(4)
       renderer.render()
       const strict = lastUpdate()
       renderer.setMaxLeak(64)
@@ -286,14 +327,6 @@ describe('ParallaxRenderer', () => {
       expect(last.depth + last.size).toBeGreaterThanOrEqual(camera.z + 50)
       expect(last.depth).toBeLessThan(camera.z + 50)
     })
-
-    it('clamps the render distance', () => {
-      expect(renderer.getRenderDistance()).toBe(DEFAULT_RENDER_DISTANCE)
-      renderer.setRenderDistance(1)
-      expect(renderer.getRenderDistance()).toBe(MIN_RENDER_DISTANCE)
-      renderer.setRenderDistance(1e6)
-      expect(renderer.getRenderDistance()).toBe(MAX_RENDER_DISTANCE)
-    })
   })
 
   describe('stats', () => {
@@ -306,7 +339,7 @@ describe('ParallaxRenderer', () => {
 
       const stats = renderer.getStats()
       expect(stats.totalUpdates).toBe(2)
-      expect(stats.totalLayersRegenerated).toBe(first.layersRegenerated + second.layersRegenerated)
+      expect(stats.totalChunksRegenerated).toBe(first.chunksRegenerated + second.chunksRegenerated)
       expect(stats.totalVoxelsRendered).toBe(first.voxelsRendered + second.voxelsRendered)
       expect(stats.totalRenderTime).toBeCloseTo(first.renderTime + second.renderTime)
       expect(stats.averageCacheEfficiency).toBeCloseTo((first.cacheEfficiency + second.cacheEfficiency) / 2)

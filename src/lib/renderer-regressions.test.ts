@@ -14,8 +14,8 @@ import { World } from './world'
 // The global test-setup mocks `getContext` to return a fresh object every call,
 // which makes it impossible to observe what was drawn on a specific canvas.
 // For these tests we install a per-canvas stable mock that records every
-// fillRect call. clearRect resets the recorded list (mirrors real semantics
-// well enough for our purposes).
+// fillRect call and opaque pixel put. clearRect resets the
+// recorded list (mirrors real semantics well enough for our purposes).
 type Draw = { x: number; y: number; w: number; h: number }
 const drawsByCanvas = new WeakMap<HTMLCanvasElement, Draw[]>()
 // eslint-disable-next-line @typescript-eslint/unbound-method
@@ -47,6 +47,16 @@ function installDrawCapture() {
         lineTo: () => {},
         arc: () => {},
         fill: () => {},
+        createImageData: (width: number, height: number) =>
+          ({ width, height, data: new Uint8ClampedArray(width * height * 4) }),
+        // Every opaque pixel counts as a 1×1 draw.
+        putImageData: (image: { width: number; data: Uint8ClampedArray }, dx: number, dy: number) => {
+          for (let i = 3; i < image.data.length; i += 4) {
+            if (image.data[i] === 0) continue
+            const p = (i - 3) / 4
+            draws.push({ x: dx + (p % image.width), y: dy + Math.floor(p / image.width), w: 1, h: 1 })
+          }
+        },
         stroke: () => {},
         save: () => {},
         restore: () => {},
@@ -79,8 +89,13 @@ function drawIsInsideCanvas(d: Draw, canvas: HTMLCanvasElement): boolean {
   )
 }
 
-// Generating the forest takes a while; the renderer never modifies its world.
-const world = new World(12345)
+// A small world with trees: rasterising the forest (~700k voxels) in jsdom
+// takes seconds per test. The renderer never modifies its world.
+const world = new World(12345, 'hills_with_trees')
+
+function chunkCanvases(renderer: ParallaxRenderer): HTMLCanvasElement[] {
+  return renderer.getLayers().flatMap(l => l.chunks.map(c => c.canvas))
+}
 
 function makeWorldWithVoxels(voxels: World['voxels']): World {
   const custom = new World(1, 'hills') // cheapest world to generate; its voxels are replaced
@@ -114,12 +129,12 @@ describe('Renderer regressions', () => {
 
       renderer.render()
 
-      // Gather every draw that landed inside any layer's canvas bitmap.
+      // Gather every draw that landed inside any chunk's canvas bitmap.
       const drawsOnCanvas: Array<{ canvas: HTMLCanvasElement; draw: Draw }> = []
-      for (const layer of renderer.getLayers()) {
-        for (const draw of getDraws(layer.canvas)) {
-          if (drawIsInsideCanvas(draw, layer.canvas)) {
-            drawsOnCanvas.push({ canvas: layer.canvas, draw })
+      for (const canvas of chunkCanvases(renderer)) {
+        for (const draw of getDraws(canvas)) {
+          if (drawIsInsideCanvas(draw, canvas)) {
+            drawsOnCanvas.push({ canvas, draw })
           }
         }
       }
@@ -148,8 +163,7 @@ describe('Renderer regressions', () => {
       // the canvas's CSS transform (scale about the top-left corner, then
       // translate), falls inside the viewport.
       let visibleCount = 0
-      for (const layer of renderer.getLayers()) {
-        const canvas = layer.canvas
+      for (const canvas of chunkCanvases(renderer)) {
         const t = canvas.style.transform
         const translateMatch = t.match(
           /translate3d\(([-\d.]+)px,\s*([-\d.]+)px/,
@@ -185,7 +199,7 @@ describe('Renderer regressions', () => {
   // Small z moves used to invalidate every layer, including distant ones
   // whose content had not changed.
   describe('z-movement cache churn', () => {
-    it('reuses most layers after a 1-unit Z move from the initial camera position', () => {
+    it('reuses most chunks after a 1-unit Z move from the initial camera position', () => {
       const renderer = new ParallaxRenderer(container, world)
       renderer.resize(800, 600)
       renderer.setCamera({ x: 0, y: 15, z: -30 })
@@ -200,17 +214,17 @@ describe('Renderer regressions', () => {
       // redraw because their scale changes noticeably. Distant layers that
       // cover 64 z-units shouldn't. So "reused" should meaningfully beat
       // "regenerated".
-      expect(stats?.layersReused ?? 0).toBeGreaterThan(stats?.layersRegenerated ?? 0)
+      expect(stats?.chunksReused ?? 0).toBeGreaterThan(stats?.chunksRegenerated ?? 0)
     })
 
-    it('does not re-render every layer on every keypress when moving along Z', () => {
+    it('does not re-render every chunk on every keypress when moving along Z', () => {
       const renderer = new ParallaxRenderer(container, world)
       renderer.resize(800, 600)
       renderer.setCamera({ x: 0, y: 15, z: -30 })
 
       renderer.render()
-      const initialRegens = renderer.getStats().totalLayersRegenerated
-      const layerCount = renderer.getLayers().length
+      const initialRegens = renderer.getStats().totalChunksRegenerated
+      const chunkCount = chunkCanvases(renderer).length
 
       // Simulate holding W for 8 frames at the default move speed of 0.5.
       for (let i = 1; i <= 8; i++) {
@@ -219,18 +233,18 @@ describe('Renderer regressions', () => {
       }
 
       const regensDuringMovement =
-        renderer.getStats().totalLayersRegenerated - initialRegens
+        renderer.getStats().totalChunksRegenerated - initialRegens
 
       // Only near slices that get re-tiled, plus newly entering ones, should
       // re-render: well under one full re-render per frame.
-      expect(regensDuringMovement).toBeLessThan(layerCount * 2)
+      expect(regensDuringMovement).toBeLessThan(chunkCount * 2)
     })
   })
 
   // Layers leaving the view used to be deleted, so moving forward and back
   // re-rendered them. They are now kept in an LRU cache.
   describe('layers leaving and re-entering view', () => {
-    it('reuses layers when the camera returns to an already-visited Z position', () => {
+    it('reuses chunks when the camera returns to an already-visited Z position', () => {
       const renderer = new ParallaxRenderer(container, world)
       renderer.resize(800, 600)
       renderer.setCamera({ x: 0, y: 15, z: -30 })
@@ -245,7 +259,7 @@ describe('Renderer regressions', () => {
 
       const returnStats = renderer.getStats().lastUpdate
       expect(returnStats).toBeDefined()
-      expect(returnStats?.layersReused ?? 0).toBeGreaterThan(returnStats?.layersRegenerated ?? 0)
+      expect(returnStats?.chunksReused ?? 0).toBeGreaterThan(returnStats?.chunksRegenerated ?? 0)
     })
   })
 })

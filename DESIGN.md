@@ -1,11 +1,14 @@
 # Rendering Architecture
 
-The camera looks along +z and never rotates. The world is cut into z-slices;
-each slice is rasterised once, flat, into its own canvas, and the browser
-composites the canvases with per-slice perspective scale and parallax offset.
+The camera looks along +z and never rotates. The world is cut into z-slices,
+and each slice into aligned square chunks; each chunk in view is rasterised
+once, flat, as seen from a direction close to the camera's, into its own
+canvas, and the browser composites the canvases with per-slice perspective
+scale and parallax offset. Voxel (x, y, z) is the unit cube centred on
+(x, y, z).
 
 ```
-World (voxels) ──selectSlices──▶ slices ──rasterise once──▶ cached canvases ──CSS transform──▶ screen
+World (voxels) ──selectSlices──▶ slices ──chunks in view──▶ cached canvases ──CSS transform──▶ screen
    world.ts               slice-selection.ts                     renderer.ts
 ```
 
@@ -37,42 +40,31 @@ and the walk jumps to huge slices.
 
 `selectSlices(cameraZ, near, far, detail)` walks from `cameraZ + near` to
 `cameraZ + far`. At each step it requests `minSize` = the largest power of
-two ≤ viewing distance / detail, takes what the world provides (never more
-than requested), and continues from the end of that slice. The result tiles
-the range with no gaps or overlaps. `detail` comes from the leak tolerance
-(section 2); thinner slices are always allowed, so alignment never breaks
-the bound.
+two ≤ a / detail, where a is the distance to the slice's near face
+(depth − 0.5), takes what the world provides (never more than requested),
+and continues from the end of that slice. The result tiles the range with
+no gaps or overlaps. `detail` comes from the leak tolerance (section 2);
+thinner slices are always allowed, so alignment never breaks the bound.
 
-Camera at z=0, range 1–200, detail 1:
-
-| Viewing dist | minSize | Depth | Aligned sizes | Size |
-|---|---|---|---|---|
-| 1 | 1 | 1 | 1 | 1 |
-| 2 | 2 | 2 | 1, 2 | 2 |
-| 4 | 4 | 4 | 1–4 | 4 |
-| 8 | 8 | 8 | 1–8 | 8 |
-| 16 | 16 | 16 | 1–16 | 16 |
-| 32 | 32 | 32 | 1–32 | 32 |
-| 64 | 64 | 64 | 1–64 | 64 |
-| 128 | 64 | 128 | 1–64 | 64 |
-| 192 | 64 | 192 | 1–64 | 64 |
+From camera z=0 with detail 1, sizes go 1, 1, 1, 2, 2, 4, 4, 8, …: measured
+to the near face, a power of two is reached one step after it is requested.
 
 Camera at z=-67: alignment forces some slices smaller than requested
 (e.g. at -62 only sizes 1, 2 are aligned), then sizes catch up:
 
-| Viewing dist | minSize | Depth | Aligned sizes | Size |
+| a | minSize | Depth | Aligned sizes | Size |
 |---|---|---|---|---|
-| 1 | 1 | -66 | 1, 2 | 1 |
-| 2 | 2 | -65 | 1 | 1 |
-| 3 | 2 | -64 | 1–64 | 2 |
-| 5 | 4 | -62 | 1, 2 | 2 |
-| 7 | 4 | -60 | 1, 2, 4 | 4 |
-| 11 | 8 | -56 | 1–8 | 8 |
-| 19 | 16 | -48 | 1–16 | 16 |
-| 35 | 32 | -32 | 1–32 | 32 |
-| 67 | 64 | 0 | 1–64 | 64 |
-| 131 | 64 | 64 | 1–64 | 64 |
-| 195 | 64 | 128 | 1–64 | 64 |
+| 0.5 | 1 | -66 | 1, 2 | 1 |
+| 1.5 | 1 | -65 | 1 | 1 |
+| 2.5 | 2 | -64 | 1–64 | 2 |
+| 4.5 | 4 | -62 | 1, 2 | 2 |
+| 6.5 | 4 | -60 | 1, 2, 4 | 4 |
+| 10.5 | 8 | -56 | 1–8 | 8 |
+| 18.5 | 16 | -48 | 1–16 | 16 |
+| 34.5 | 32 | -32 | 1–32 | 32 |
+| 66.5 | 64 | 0 | 1–64 | 64 |
+| 130.5 | 64 | 64 | 1–64 | 64 |
+| 194.5 | 64 | 128 | 1–64 | 64 |
 
 Covering distance n takes O(detail · log n) slices. Slices are keyed by
 depth and size only, so after a detail change the slices still needed stay
@@ -90,81 +82,120 @@ Bound, with ε = the "max occlusion leak" setting in screen pixels (default
 16): **geometry that perspective hides never shows by more than ε pixels**
 (or, closer than `detail`, by more than tan(fov/2) voxels; see below).
 
-Derivation, for one lateral axis (x and y are independent). Take a slice
-[a, a+s) at viewing distance a, drawn at distance D (its centre). A voxel
-edge at lateral offset u from the camera axis really lies on a face at some
-depth z ∈ [a, a+s]: front, back, top or side face. It appears at screen
-angle u/z but is drawn at u/D. In world units at the slice, the error is
+**Derivation.** Every step below is stated and checked on random samples,
+plus end to end against ray-cast perspective, in
+[`src/lib/leak-bound.test.ts`](src/lib/leak-bound.test.ts); read it to
+follow or change the reasoning. In short, for one lateral axis, a slice
+with near face at distance a, thickness s, centre plane at D, baked along
+tangent τ_b (section 3):
+
+1. A point seen along tangent τ at depth z is drawn off by
+   (τ − τ_b)·(z − D) world units at the plane.
+2. In the slice |z − D| ≤ s/2, so every edge is off by at most τ_err·s/2,
+   τ_err = |τ − τ_b|.
+3. A hidden voxel shows past its occluder by at most both edges' errors:
+   τ_err·s (the one modelling assumption; checked end to end).
+4. In pixels that is τ_err·s·focal/a, and slices are at most a / detail
+   thick, so at most τ_err·focal/detail.
+5. A slice is cut into chunks C·s wide (C = 16), each spanning at most
+   C / detail on screen.
+6. Each chunk is baked along the direction, on a grid spaced by
+   Δ ≤ C / detail (`directionStep`), nearest to its centre ray, so
+   τ_err ≤ C / detail; on screen also τ_err ≤ tan(fov/2).
+7. With τ_err = min(tan(fov/2), √(C·ε/focal)) (`bakeAngleError`) and
+   detail = τ_err·focal/ε (`leakFreeDetail`, rounded up to a quarter
+   octave), the leak is at most ε pixels:
 
 ```
-|u| · |z − D| / z  =  τ · |z − D|  ≤  τ · s/2,      τ = |u| / z
+detail = √(C·focal / ε)        (straight baking: tan(fov/2)·focal/ε = L/(2ε))
 ```
 
-where τ is the tangent of the angle at which the edge is seen. A hidden
-voxel can only show past an occluding edge by the error of the occluder's
-edge plus the error of its own edge: τ·s world units at depth ≥ a, i.e. at
-most τ·s·focal/a pixels. On screen τ·focal ≤ L/2, where L is the longer
-viewport side in pixels, whatever the field of view. So
+Measured in voxels instead of pixels, the bound would be τ_err·s ≤ ε: the
+same thickness at every distance and a slice count linear in the range.
+Pixels are what matters on screen, and far voxels are small, so slices
+grow with distance. Slices are at least one voxel thick, though, so closer
+than `detail` the leak is bounded by τ ≤ tan(fov/2) voxels instead, which
+can be more than ε pixels.
 
-```
-s  ≤  2·ε·a / L        i.e.   detail = L / (2ε)
-```
+Slices for range 200, 1280-pixel-wide viewport, 90° (focal 640):
 
-`leakFreeDetail` rounds L / (2ε) up to a quarter octave, so small resizes
-keep the slicing (and the cache).
+| ε | Straight baking: detail | Slices | Directed baking: detail | Slices |
+|---|---|---|---|---|
+| 16 px | 45.3 | 141 | 26.9 | 105 |
 
-Measured in voxels instead of pixels, the bound would be τ·s ≤ ε: the same
-thickness at every distance and a slice count linear in the range. Pixels
-are what matters on screen, and far voxels are small, so slices can grow
-with distance. Slices are at least one voxel thick, though, so closer than
-`detail` (where 2·ε·a/L < 1) the leak is bounded by τ ≤ tan(fov/2) voxels
-instead, which can be more than ε pixels.
+The bound is nearly tight; the ray-cast check also shows directed baking
+leaking about half as much as straight baking at the same detail. It
+cannot be pushed to zero by thinner slices: even size-1 slices leak,
+because the back faces and the inside of the slab are flattened.
 
-Slices for range 200 (camera z=−70.3):
+## 3. Chunks and rasterisation (`renderer.ts`, `bake.ts`)
 
-| Viewport L | ε | detail | Slices |
-|---|---|---|---|
-| 1280 | 4 px | 181 | 200 |
-| 1280 | 16 px | 45.3 | 142 |
-| 1280 | 32 px | 22.6 | 95 |
+When a slice is first needed, its voxels with a face that is not covered
+by a neighbour (or a front face on the slice's near plane) are indexed by
+chunk, with a bitmask of their open faces; buried voxels are dropped.
+Nothing is drawn yet.
 
-The bound is nearly tight; the `occlusion leaks` tests compare against
-ray-cast perspective. It cannot be pushed to zero by thinner slices: even
-size-1 slices leak up to τ voxels, because only front faces are drawn.
+**Chunks.** A slice of size s is split in x and y into aligned squares of
+width `chunkWidth(s)` = 16·s: chunk (x0, y0) is the cell
+[x0 − 0.5, x0 + w − 0.5) × [y0 − 0.5, y0 + w − 0.5) of the slice's
+centre plane, x0 and y0 multiples of w (NAPOT again). A chunk is a
+16s × 16s × s block; since a slice's size is about its distance / detail,
+every chunk covers about the same part of the screen. Only chunks whose
+cell reaches the screen are rasterised, and empty ones are not shown.
 
-## 3. Rasterisation (`renderer.ts`)
+**Directed baking.** Chunk (x0, y0) is baked as the parallel projection of
+its slice along (τx, τy, 1), the grid direction nearest to the ray through
+the cell's centre (section 2): point (x, y, z) goes to
+(x − τx·(z − c), y − τy·(z − c)) on the centre plane z = c, clipped to the
+cell. A cached chunk is keyed by its cell and its direction, so it does
+not depend on where the camera is; moving the camera sideways or forward
+rebakes a chunk only when its nearest grid direction changes. Drawn are
+the faces a ray along the direction can reach: front faces not covered
+by a voxel in front (except on the near plane, where the cut must show)
+and open side faces facing the camera (−x when τx > 0, the top when
+τy < 0, ...), painted far to near, side faces before front faces of the
+same z (`bakedFaces`). Shading is shared with the reference viewer
+(`FACE_SHADE`).
 
-A slice is drawn orthographically at a fixed `RENDER_SCALE` (pixels per
-world unit). Within one slice every voxel at the same (x, y) lands on the
-same square, so only the nearest one is drawn: a slice of ~70k voxels
-becomes a few thousand squares. The canvas is cropped to the slice's x/y
-extent; `originX`/`originY` record the world position of its top-left
-corner (voxel (x, y) covers [x ± 0.5] × [y ± 0.5]).
+Faces are filled into pixels directly (`fillConvex`): a pixel is filled
+when its centre is inside, with half-open edges, so neighbours meet
+without gaps or overlap. Canvas paths would antialias the slanted edges,
+and a soft 1-pixel edge magnified 20× on screen is a blur.
 
-Each square gets a darker bottom/right edge (voxel outlines) and, when the
-cell above is empty in the world, a lighter top edge.
+**Resolution.** A chunk of a size-s slice is drawn at `renderScale(s)`
+pixels per world unit: 24 / s, between 2 and 10. A slice of size s ≥ 2
+lies at distance ≥ s · detail, where a voxel is at most focal / (s ·
+detail) ≈ 24 / s screen pixels with the defaults, so more pixels would not
+show. Other settings scale the canvas on screen.
 
-Because the image doesn't depend on the camera or the viewport, a canvas is
-drawn once when its slice first appears and is never redrawn.
+Each chunk canvas is cropped to what is drawn; `originX`/`originY` record
+the world position of its top-left corner on the centre plane. The image
+doesn't depend on the camera's position, so a chunk is drawn once when it
+first comes into view (with its direction) and is never redrawn.
+
+On the forest at 1280 × 800, 90°: 105 slices, ~1300 chunks, ~44 Mpx of
+canvases (straight-baked, unchunked slices: 141 slices, ~235 Mpx).
 
 ## 4. Compositing
 
-Each visible slice is a `<canvas>` in the container, followed by a
-full-screen fog `<div>`; nearer slices get higher `z-index`. The container
-is its own stacking context (`isolate`) so the UI stays on top. For viewing
-distance d (to the slice centre), viewport W × H, focal length
-`focal = max(W, H) / 2 / tan(fov/2)` (pixels) and `transform-origin: 0 0`:
+Each chunk in view is a `<canvas>` in the container, and each slice has a
+full-screen fog `<div>` above its chunks; nearer slices get higher
+`z-index`. The container is its own stacking context (`isolate`) so the UI
+stays on top. For a slice at viewing distance d (to its centre), viewport
+W × H, focal length `focal = max(W, H) / 2 / tan(fov/2)` (pixels) and
+`transform-origin: 0 0`:
 
 ```
 scale = focal / d                                       (pixels per world unit)
 left  = W/2 + (originX − camera.x) · scale
 top   = H/2 − (originY − camera.y) · scale
-canvas transform: translate3d(left, top, 0) scale(scale / RENDER_SCALE)
+canvas transform: translate3d(left, top, 0) scale(scale / renderScale)
 ```
 
-Only these style properties change as the camera moves; the canvases are
-promoted to compositor layers (`will-change: transform`), so x/y movement
-costs no rasterisation at all. Magnified canvases use
+Only these style properties change as the camera moves, and chunks
+entering the view (or changing baking direction) are attached, and
+rasterised if new. The canvases are promoted to compositor layers
+(`will-change: transform`). Magnified canvases use
 `image-rendering: pixelated` to keep voxel edges crisp.
 
 **Fog.** A fog overlay tints everything behind it, so overlays compound.
@@ -180,34 +211,36 @@ so the far cut-off stays hazy.
 
 ## 5. Caching
 
-Layers are keyed by `depth:size`. Insertion order of the `Map` is the LRU
-order. Slices that leave the view lose their DOM elements but stay cached
-(up to `MAX_CACHED_LAYERS` = 32) so moving back reuses them.
+Slices are keyed by `depth:size` and hold their chunks keyed by corner.
+Insertion order of the slice `Map` is the LRU order. Slices and chunks that
+leave the view lose their DOM elements but stay cached so moving back
+reuses them: up to `MAX_CACHED_SLICES` = 64 slices, and hidden chunk
+canvases up to `MAX_HIDDEN_CHUNK_PIXELS` = 32 Mpx (oldest slices' first).
 
 | Event | Effect |
 |---|---|
-| x/y movement | All layers reused; transforms update |
-| field of view change | Transforms update |
+| x/y movement | Chunks still in view reused unless their baking direction changes; chunks entering the view rasterised; transforms update |
+| field of view change | Focal length, hence detail and directions, change: slices still needed are reused, chunks rebaked |
 | leak tolerance change | Slices still needed are reused |
 | small z movement | Far slices reused; a few near slices re-tile |
-| resize | All layers reused unless the longer side crosses a quarter octave (detail changes); transforms update |
+| resize | Slices reused unless the longer side crosses a quarter octave (detail changes); transforms update |
 | world regeneration | Whole cache cleared |
 
-Per-render stats (`UpdateStats`) report layers reused vs regenerated and
-voxels rasterised; `SessionStats` accumulates them.
+Per-render stats (`UpdateStats`) report chunks reused vs rasterised, voxels
+rasterised and the pixels of all cached canvases; `SessionStats`
+accumulates them.
 
-## 5. Worlds (`world.ts`, `forest.ts`)
+## 6. Worlds (`world.ts`, `forest.ts`)
 
 A world is a list of integer voxels plus a spawn point.
 Renderer distances are in voxels.
 The forest's `VOXEL_SIZE` is 0.5 m,
 so the default render distance (200) is 100 m and the fog distance 70 m.
 
-Ground columns are filled a few voxels deep.
-The renderer draws only voxel fronts,
-so the ground's top surface shows as the stacked fronts of these columns.
+Ground columns are filled a few voxels deep;
+the renderer only draws faces that no neighbour covers.
 
-## 6. Reference viewer (`src/viewer`)
+## 7. Reference viewer (`src/viewer`)
 
 `viewer.html` rebuilds the world from its seed
 and draws every exposed voxel face with three.js.
@@ -218,8 +251,9 @@ so from the parallax camera's position both renderers should agree.
 
 ## Limitations
 
-- Each slice is drawn at the scale of its centre, so a slice is only
-  approximately in perspective; section 2 bounds the error.
-- Only voxel fronts are drawn; tops and sides between slices are not, so
-  the world's edge facing the camera shows as a cross-section.
+- Each slice is drawn at the scale of its centre, along one direction per
+  chunk, so it is only approximately in perspective; section 2 bounds the
+  error.
+- Faces seen from one direction per chunk: a face nearly parallel to the
+  rays may be missing or slightly too wide.
 - Near slices are heavily upscaled from `RENDER_SCALE`.

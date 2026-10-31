@@ -308,13 +308,15 @@ function App() {
                     <StatRow label="Render Time">{lastUpdate.renderTime.toFixed(2)}ms</StatRow>
                     <StatRow label="Active Layers">{lastUpdate.layerCount}</StatRow>
                     <StatRow label="Slice Detail">{lastUpdate.detail.toFixed(1)}</StatRow>
+                    <StatRow label="Chunks in View">{lastUpdate.chunkCount}</StatRow>
                     <StatRow label="Reused / Regenerated">
-                      <span className="text-primary">{lastUpdate.layersReused}</span>
+                      <span className="text-primary">{lastUpdate.chunksReused}</span>
                       {' / '}
-                      <span className="text-destructive">{lastUpdate.layersRegenerated}</span>
+                      <span className="text-destructive">{lastUpdate.chunksRegenerated}</span>
                     </StatRow>
                     <StatRow label="Cache Efficiency">{lastUpdate.cacheEfficiency.toFixed(1)}%</StatRow>
                     <StatRow label="Voxels Rendered">{lastUpdate.voxelsRendered.toLocaleString()}</StatRow>
+                    <StatRow label="Cached Canvases">{(lastUpdate.cachedPixels / 1e6).toFixed(1)} Mpx</StatRow>
                   </div>
                 </>
               )}

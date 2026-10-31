@@ -38,6 +38,9 @@ HTMLCanvasElement.prototype.getContext = vi.fn(function() {
     rotate: noop,
     scale: noop,
     globalAlpha: 1,
+    // No pixels are kept, so rasterising costs no memory.
+    createImageData: (width: number, height: number) => ({ width, height, data: new Uint8ClampedArray(0) }),
+    putImageData: noop,
     canvas: document.createElement('canvas'),
   }
 }) as unknown as typeof HTMLCanvasElement.prototype.getContext
