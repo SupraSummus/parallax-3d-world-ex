@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react'
-import { ParallaxRenderer, type Camera, type Layer, type SessionStats } from '@/lib/renderer'
+import { ParallaxRenderer, DEFAULT_FOV, MAX_FOV, MIN_FOV, DEFAULT_RENDER_DISTANCE, MAX_RENDER_DISTANCE, MIN_RENDER_DISTANCE, DEFAULT_MAX_LEAK, MAX_MAX_LEAK, MIN_MAX_LEAK, type Camera, type Layer, type SessionStats } from '@/lib/renderer'
 import { World, WORLD_TYPES, type WorldType } from '@/lib/world'
-import { DEFAULT_DETAIL, MAX_DETAIL, MIN_DETAIL } from '@/lib/slice-selection'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -32,7 +31,9 @@ function App() {
   const [layers, setLayers] = useState<Layer[]>([])
   const [moveSpeed, setMoveSpeed] = useState(0.5)
   const [worldType, setWorldType] = useState<WorldType>('forest')
-  const [detail, setDetail] = useState(DEFAULT_DETAIL)
+  const [fov, setFov] = useState(DEFAULT_FOV)
+  const [renderDistance, setRenderDistance] = useState(DEFAULT_RENDER_DISTANCE)
+  const [maxLeak, setMaxLeak] = useState(DEFAULT_MAX_LEAK)
 
   // Read from the movement loop without restarting it.
   const moveSpeedRef = useRef(moveSpeed)
@@ -139,7 +140,13 @@ function App() {
     if (!renderer) return
     const { seed, worldType } = renderer.getWorld()
     const { x, y, z } = renderer.getCamera()
-    const query = new URLSearchParams({ seed: String(seed), world: worldType, camera: [x, y, z].join(',') })
+    const query = new URLSearchParams({
+      seed: String(seed),
+      world: worldType,
+      camera: [x, y, z].join(','),
+      fov: String(renderer.getFov()),
+      distance: String(renderer.getRenderDistance()),
+    })
     window.open(`${import.meta.env.BASE_URL}viewer.html?${query.toString()}`, '_blank', 'noopener')
   }
 
@@ -148,9 +155,21 @@ function App() {
     requestRender()
   }
 
-  const handleDetailChange = ([value]: number[]) => {
-    setDetail(value)
-    rendererRef.current?.setDetail(value)
+  const handleFovChange = ([value]: number[]) => {
+    setFov(value)
+    rendererRef.current?.setFov(value)
+    requestRender()
+  }
+
+  const handleRenderDistanceChange = ([value]: number[]) => {
+    setRenderDistance(value)
+    rendererRef.current?.setRenderDistance(value)
+    requestRender()
+  }
+
+  const handleMaxLeakChange = ([value]: number[]) => {
+    setMaxLeak(value)
+    rendererRef.current?.setMaxLeak(value)
     requestRender()
   }
 
@@ -190,12 +209,28 @@ function App() {
               onChange={([v]) => { setMoveSpeed(v) }}
             />
             <SliderRow
-              label={`Slice Detail: ${String(detail)}`}
-              value={detail}
-              min={MIN_DETAIL}
-              max={MAX_DETAIL}
+              label={`Field of View: ${String(fov)}°`}
+              value={fov}
+              min={MIN_FOV}
+              max={MAX_FOV}
               step={1}
-              onChange={handleDetailChange}
+              onChange={handleFovChange}
+            />
+            <SliderRow
+              label={`Render Distance: ${String(renderDistance)}`}
+              value={renderDistance}
+              min={MIN_RENDER_DISTANCE}
+              max={MAX_RENDER_DISTANCE}
+              step={10}
+              onChange={handleRenderDistanceChange}
+            />
+            <SliderRow
+              label={`Max Occlusion Leak: ${String(maxLeak)} px`}
+              value={maxLeak}
+              min={MIN_MAX_LEAK}
+              max={MAX_MAX_LEAK}
+              step={1}
+              onChange={handleMaxLeakChange}
             />
             <div className="space-y-0.5 text-xs text-muted-foreground">
               <div className="flex items-center gap-2"><Move size={14} /><span>W/S - Forward/Back</span></div>
@@ -272,6 +307,7 @@ function App() {
                     <h3 className="text-xs font-semibold">Last Update</h3>
                     <StatRow label="Render Time">{lastUpdate.renderTime.toFixed(2)}ms</StatRow>
                     <StatRow label="Active Layers">{lastUpdate.layerCount}</StatRow>
+                    <StatRow label="Slice Detail">{lastUpdate.detail.toFixed(1)}</StatRow>
                     <StatRow label="Reused / Regenerated">
                       <span className="text-primary">{lastUpdate.layersReused}</span>
                       {' / '}

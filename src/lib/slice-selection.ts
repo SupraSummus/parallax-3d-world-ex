@@ -1,19 +1,23 @@
 /**
  * Slice selection: decides which z-slices of the world the camera renders.
  *
- * Two mechanisms (see DESIGN.md for worked examples):
+ * Two constraints (see DESIGN.md for the derivation and worked examples):
  *
- * 1. World slice availability (camera-independent). Slice sizes are powers of
- *    two up to MAX_SIZE, and a slice of size N may only start at a depth z
- *    with z % N == 0. Sizes nest (every aligned slice splits into aligned
- *    halves), and a given (depth, size) slice always has the same content, so
- *    it can be cached.
+ * 1. Occlusion (physical). A slice is drawn flat, so a thick slice can show
+ *    geometry that true perspective hides. A slice at viewing distance d at
+ *    most d / detail thick, with detail = leakFreeDetail(screen size, max
+ *    leak), never shows more than `max leak` screen pixels of it. Far
+ *    voxels are small on screen, so slices grow with distance and covering
+ *    distance n takes O(detail · log n) slices.
  *
- * 2. Camera selection (camera-dependent). Walking away from the camera, each
- *    step requests a slice about (viewing distance / detail) thick; the world
- *    returns the smallest aligned size satisfying the request. The result is
- *    contiguous coverage with O(detail · log n) slices: thin near the camera,
- *    thick far away.
+ * 2. Caching (NAPOT). Slice sizes are powers of two up to MAX_SIZE, and a
+ *    slice of size N may only start at a depth z with z % N == 0. Sizes nest
+ *    (every aligned slice splits into aligned halves), and a given
+ *    (depth, size) slice always has the same content, so it can be cached.
+ *
+ * Walking away from the camera, each step takes the largest aligned slice
+ * not thicker than the occlusion limit. Thinner is always allowed, so
+ * alignment never breaks the occlusion bound.
  */
 
 export interface SliceBoundary {
@@ -26,16 +30,22 @@ export interface SliceBoundary {
 const MAX_SIZE = 64
 
 /**
- * Detail is the ratio of viewing distance to requested slice thickness.
- * Higher detail means thinner slices (less perspective error inside each
- * slice) and more of them.
+ * Detail (viewing distance / maximum slice thickness) that keeps occlusion
+ * leaks at most `maxLeakPixels` on a screen whose longer side is
+ * `screenSize` pixels.
+ *
+ * A slice [a, a + s) drawn at its centre misplaces an edge seen at tangent τ
+ * by up to τ·s/2 world units; a leak needs two such errors, so it is at most
+ * τ·s units wide at depth ≥ a, i.e. τ·s·focal/a pixels. On screen
+ * τ·focal ≤ screenSize/2, whatever the field of view, so
+ * s ≤ 2 · maxLeakPixels · a / screenSize suffices.
+ *
+ * Rounded up to a quarter octave (denser slices are always safe), so small
+ * resizes keep the slicing and the cache.
  */
-export const DEFAULT_DETAIL = 4
-export const MIN_DETAIL = 1
-export const MAX_DETAIL = 16
-
-export function clampDetail(detail: number): number {
-  return Math.min(MAX_DETAIL, Math.max(MIN_DETAIL, detail))
+export function leakFreeDetail(screenSize: number, maxLeakPixels: number): number {
+  const detail = screenSize / (2 * maxLeakPixels)
+  return detail <= 1 ? 1 : 2 ** (Math.ceil(4 * Math.log2(detail)) / 4)
 }
 
 /** Largest power of two <= n, clamped to [1, MAX_SIZE]. */
@@ -45,8 +55,8 @@ function floorPowerOfTwo(n: number): number {
 }
 
 /**
- * Mechanism 1: the slice starting at `depth` with the smallest aligned size
- * >= minSize, or the largest aligned size if none is big enough.
+ * The slice starting at `depth` with the smallest aligned size >= minSize,
+ * or the largest aligned size if none is big enough.
  */
 export function getSliceAtDepth(depth: number, minSize: number): SliceBoundary {
   const intDepth = Math.floor(depth)
@@ -56,14 +66,15 @@ export function getSliceAtDepth(depth: number, minSize: number): SliceBoundary {
 }
 
 /**
- * Mechanism 2: contiguous slices covering world z from
- * cameraZ + minRelativeDepth to cameraZ + maxRelativeDepth, sorted near to far.
+ * Contiguous slices covering world z from cameraZ + minRelativeDepth to
+ * cameraZ + maxRelativeDepth, sorted near to far. No slice is thicker than
+ * max(1, its distance from the camera / detail).
  */
 export function selectSlices(
   cameraZ: number,
   minRelativeDepth: number,
   maxRelativeDepth: number,
-  detail: number = DEFAULT_DETAIL,
+  detail: number,
 ): SliceBoundary[] {
   if (minRelativeDepth >= maxRelativeDepth) return []
   const farZ = cameraZ + maxRelativeDepth

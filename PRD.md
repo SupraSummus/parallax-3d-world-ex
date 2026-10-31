@@ -15,12 +15,14 @@ every frame. The demo exists to show (and measure) that idea.
 ## Features
 
 **Camera** – Fixed viewing direction (+z), no rotation. W/S forward/back,
-A/D left/right, Space/Shift up/down, adjustable move speed.
+A/D left/right, Space/Shift up/down, adjustable move speed, field of view
+(5°–120° across the longer screen side) and render distance (20–400).
 
-**Slicing** – Slice thickness grows with viewing distance in powers of two.
-"Slice detail" (1–16) sets how thin slices are relative to their distance:
-more detail, more accurate perspective, more slices. See
-[DESIGN.md](DESIGN.md).
+**Slicing** – Slices are aligned powers of two thick and grow with viewing
+distance. They are thin enough that geometry perspective would hide (e.g.
+stone under the lake's water surface) never shows by more than a set number
+of screen pixels ("Max Occlusion Leak", 1–64 px, default 16); the derived
+slice detail is shown in the statistics. See [DESIGN.md](DESIGN.md).
 
 **Worlds** – Procedurally generated, regenerable with a new seed; the camera
 moves to the world's spawn point.
@@ -32,7 +34,7 @@ moves to the world's spawn point.
 
 **3D viewer** – "Open in 3D Viewer" renders the same world (same seed) as an
 ordinary triangle mesh with three.js and an orbit camera, starting from the
-parallax camera with the same perspective. It is the reference for checking
+parallax camera with the same perspective (field of view) and fog. It is the reference for checking
 what a scene looks like, independent of the slice renderer.
 
 **Layers panel** – Thumbnail, z range, thickness and voxel count of every
