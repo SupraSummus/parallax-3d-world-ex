@@ -1,7 +1,14 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import App from './App'
-import { DEFAULT_CAMERA } from './lib/renderer'
+
+// These tests cover the UI; a few voxels render much faster than the full forest.
+vi.mock('./lib/forest', () => ({
+  generateForest: () => ({
+    voxels: Array.from({ length: 50 }, (_, i) => ({ x: i % 5, y: 0, z: i, color: '#4f7a2a', type: 1 })),
+    spawn: { x: 0, y: 3, z: -2 },
+  }),
+}))
 
 const cameraPosition = () =>
   (screen.getByText('Position').nextElementSibling?.textContent ?? '').split(',').map(Number)
@@ -50,7 +57,6 @@ describe('App', () => {
     const sign = ['s', 'a', 'Shift'].includes(key) ? -1 : 1
     render(<App />)
     const start = cameraPosition()
-    expect(start).toEqual([DEFAULT_CAMERA.x, DEFAULT_CAMERA.y, DEFAULT_CAMERA.z])
 
     fireEvent.keyDown(window, { key })
     await waitFor(() => { expect(sign * (cameraPosition()[axis] - start[axis])).toBeGreaterThanOrEqual(1) })
@@ -67,10 +73,11 @@ describe('App', () => {
 
   it('ignores unrelated keys', async () => {
     render(<App />)
+    const start = cameraPosition()
     fireEvent.keyDown(window, { key: 'q' })
     await new Promise(resolve => setTimeout(resolve, 50))
     fireEvent.keyUp(window, { key: 'q' })
-    expect(cameraPosition()).toEqual([DEFAULT_CAMERA.x, DEFAULT_CAMERA.y, DEFAULT_CAMERA.z])
+    expect(cameraPosition()).toEqual(start)
   })
 
   it('lists movement controls', () => {

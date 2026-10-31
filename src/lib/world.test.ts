@@ -2,17 +2,20 @@ import { describe, it, expect } from 'vitest'
 import { World, WORLD_TYPES } from './world'
 
 describe('World', () => {
+  // The forest's determinism is checked in forest.test.ts; comparing it here is slow.
+  const smallWorlds = WORLD_TYPES.map(t => t.value).filter(t => t !== 'forest')
+
   it('is deterministic for a given seed and type', () => {
-    for (const { value } of WORLD_TYPES) {
+    for (const value of smallWorlds) {
       expect(new World(42, value).voxels).toEqual(new World(42, value).voxels)
     }
   })
 
   it('varies with the seed', () => {
-    expect(new World(42).voxels.length).not.toBe(new World(99).voxels.length)
+    expect(new World(42, 'hills_with_trees').voxels.length).not.toBe(new World(99, 'hills_with_trees').voxels.length)
   })
 
-  it.each(WORLD_TYPES.map(t => t.value))('generates a %s world with a grass surface', worldType => {
+  it.each(smallWorlds)('generates a %s world with a grass surface', worldType => {
     const world = new World(12345, worldType)
     expect(world.worldType).toBe(worldType)
     expect(world.voxels.some(v => v.type === 1)).toBe(true)
@@ -37,7 +40,7 @@ describe('World', () => {
   })
 
   it('selects voxels by absolute z range', () => {
-    const world = new World(12345)
+    const world = new World(12345, 'hills')
     const voxels = world.getVoxelsInZRange(-10, -6)
     expect(voxels.length).toBeGreaterThan(0)
     expect(voxels.every(v => v.z >= -10 && v.z < -6)).toBe(true)

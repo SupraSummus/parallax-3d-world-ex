@@ -1,13 +1,7 @@
 import { selectSlices, clampDetail, DEFAULT_DETAIL } from './slice-selection'
-import { World, type Voxel, type WorldType } from './world'
+import { World, type Vec3, type Voxel, type WorldType } from './world'
 
-export interface Camera {
-  x: number
-  y: number
-  z: number
-}
-
-export const DEFAULT_CAMERA: Readonly<Camera> = { x: 0, y: 20, z: -70 }
+export type Camera = Vec3
 
 export interface Layer {
   /** First world z covered by this slice. */
@@ -48,7 +42,7 @@ export interface SessionStats {
 
 // Perspective: pixels per world unit at viewing distance d is
 // PROJECTION_SCALE_FACTOR / d (i.e. the focal length in pixels).
-const PROJECTION_SCALE_FACTOR = 600
+export const PROJECTION_SCALE_FACTOR = 600
 
 // Pixels per world unit used when rasterising a slice canvas. The canvas is
 // rendered camera-independently at this fixed scale so its content can be
@@ -68,12 +62,12 @@ const FAR_DEPTH = 200
 const MAX_CACHED_LAYERS = 32
 
 // Sky gradient; the horizon sits at eye level (screen centre).
-const SKY_TOP = '#3f73b8'
-const SKY_HORIZON = '#b9d3e8'
+export const SKY_TOP = '#3f73b8'
+export const SKY_HORIZON = '#b9d3e8'
 // Exponential distance fog towards the horizon colour: at viewing distance d
 // a voxel keeps exp(-d / FOG_DISTANCE) of its own colour.
 const FOG_RGB = '185, 211, 232'
-const FOG_DISTANCE = 140
+export const FOG_DISTANCE = 140
 
 interface LayerElements {
   canvas: HTMLCanvasElement
@@ -91,7 +85,7 @@ function layerKey(depth: number, size: number): string {
 export class ParallaxRenderer {
   private container: HTMLElement
   private world: World
-  private camera: Camera = { ...DEFAULT_CAMERA }
+  private camera: Camera
   private detail = DEFAULT_DETAIL
   private width: number
   private height: number
@@ -118,6 +112,7 @@ export class ParallaxRenderer {
     this.width = container.clientWidth
     this.height = container.clientHeight
     this.world = world
+    this.camera = { ...world.spawn }
   }
 
   render() {
@@ -194,6 +189,10 @@ export class ParallaxRenderer {
     this.camera = { ...this.camera, ...camera }
   }
 
+  getWorld(): World {
+    return this.world
+  }
+
   getStats(): SessionStats {
     return { ...this.stats }
   }
@@ -204,8 +203,10 @@ export class ParallaxRenderer {
     this.height = height
   }
 
+  /** Replaces the world and moves the camera to its spawn point. */
   regenerateWorld(seed?: number, worldType?: WorldType) {
     this.world = new World(seed, worldType)
+    this.camera = { ...this.world.spawn }
     this.clearAllLayers()
   }
 

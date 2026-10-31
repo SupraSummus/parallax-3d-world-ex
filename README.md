@@ -15,6 +15,8 @@ pnpm dev
 ```
 
 Controls: W/S forward/back, A/D left/right, Space/Shift up/down.
+"Open in 3D Viewer" shows the same scene with a conventional (three.js)
+renderer and an orbit camera.
 
 Other scripts (`test`, `lint`, `typecheck`, `knip`, `build`) are in
 `package.json`.

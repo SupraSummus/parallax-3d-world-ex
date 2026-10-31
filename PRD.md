@@ -22,8 +22,18 @@ A/D left/right, Space/Shift up/down, adjustable move speed.
 more detail, more accurate perspective, more slices. See
 [DESIGN.md](DESIGN.md).
 
-**Worlds** – Procedurally generated 80×80 terrain, regenerable with a new
-seed. Types: forest, hills, mountains, hills with trees, lake with island.
+**Worlds** – Procedurally generated, regenerable with a new seed; the camera
+moves to the world's spawn point.
+- *Forest* (default): a 96 m × 160 m autumn forest valley at 0.5 m per
+  voxel: a winding path, spruces, birches and oaks, ferns, bushes, boulders
+  and fallen logs, and a ridge closing the far end. ~700k voxels.
+- Hills, mountains, hills with trees, lake with island: small 80×80 toy
+  scenes without a real-world scale.
+
+**3D viewer** – "Open in 3D Viewer" renders the same world (same seed) as an
+ordinary triangle mesh with three.js and an orbit camera, starting from the
+parallax camera with the same perspective. It is the reference for checking
+what a scene looks like, independent of the slice renderer.
 
 **Layers panel** – Thumbnail, z range, thickness and voxel count of every
 non-empty slice in view, with a visibility toggle per slice.
@@ -41,5 +51,8 @@ reused vs regenerated).
 ## Open ideas
 
 - Throttle or budget slice regeneration during fast forward movement.
-- Generate geometry on demand (chunks) instead of one fixed 80×80 world.
+- Generate geometry on demand (chunks) instead of one fixed world.
+- Store worlds in typed arrays instead of one object per voxel
+  (the forest has ~700k).
+- Port the toy worlds to the forest's metric scale, or drop them.
 - Move rasterisation to a worker or WebAssembly if it becomes the bottleneck.

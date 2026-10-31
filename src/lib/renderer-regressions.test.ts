@@ -79,10 +79,13 @@ function drawIsInsideCanvas(d: Draw, canvas: HTMLCanvasElement): boolean {
   )
 }
 
+// Generating the forest takes a while; the renderer never modifies its world.
+const world = new World(12345)
+
 function makeWorldWithVoxels(voxels: World['voxels']): World {
-  const world = new World(1)
-  world.voxels = voxels
-  return world
+  const custom = new World(1, 'hills') // cheapest world to generate; its voxels are replaced
+  custom.voxels = voxels
+  return custom
 }
 
 describe('Renderer regressions', () => {
@@ -183,7 +186,6 @@ describe('Renderer regressions', () => {
   // whose content had not changed.
   describe('z-movement cache churn', () => {
     it('reuses most layers after a 1-unit Z move from the initial camera position', () => {
-      const world = new World(12345)
       const renderer = new ParallaxRenderer(container, world)
       renderer.resize(800, 600)
       renderer.setCamera({ x: 0, y: 15, z: -30 })
@@ -202,7 +204,6 @@ describe('Renderer regressions', () => {
     })
 
     it('does not re-render every layer on every keypress when moving along Z', () => {
-      const world = new World(12345)
       const renderer = new ParallaxRenderer(container, world)
       renderer.resize(800, 600)
       renderer.setCamera({ x: 0, y: 15, z: -30 })
@@ -230,7 +231,6 @@ describe('Renderer regressions', () => {
   // re-rendered them. They are now kept in an LRU cache.
   describe('layers leaving and re-entering view', () => {
     it('reuses layers when the camera returns to an already-visited Z position', () => {
-      const world = new World(12345)
       const renderer = new ParallaxRenderer(container, world)
       renderer.resize(800, 600)
       renderer.setCamera({ x: 0, y: 15, z: -30 })

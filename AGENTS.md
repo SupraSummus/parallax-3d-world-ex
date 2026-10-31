@@ -27,10 +27,15 @@ src/
 │   ├── LayerPreview.tsx     # Layers panel
 │   └── ui/                  # shadcn/ui primitives (generated; CLI config in components.json)
 └── lib/
-    ├── world.ts             # Procedural voxel world
+    ├── world.ts             # World: voxel list, indexes, toy world types
+    ├── forest.ts            # Forest scene generator (VOXEL_SIZE lives here)
     ├── slice-selection.ts   # Which z-slices to render (pure functions)
     ├── renderer.ts          # Slice rasterisation, caching, CSS compositing
     └── utils.ts             # cn() for class names
+viewer.html                  # Reference 3D viewer page (second Vite entry)
+src/viewer/
+├── main.ts                  # three.js scene, orbit camera
+└── mesh.ts                  # World -> triangle mesh of exposed faces
 ```
 
 ## Workflow
