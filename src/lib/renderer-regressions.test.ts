@@ -13,8 +13,8 @@ import { World } from './world'
 // ---------------------------------------------------------------------------
 // The global test-setup mocks `getContext` to return a fresh object every call,
 // which makes it impossible to observe what was drawn on a specific canvas.
-// For these tests we install a per-canvas stable mock that records every
-// fillRect call and opaque pixel put. clearRect resets the
+// Tests that inspect pixels install a per-canvas stable mock that records
+// every fillRect call and opaque pixel put. clearRect resets the
 // recorded list (mirrors real semantics well enough for our purposes).
 type Draw = { x: number; y: number; w: number; h: number }
 const drawsByCanvas = new WeakMap<HTMLCanvasElement, Draw[]>()
@@ -107,18 +107,16 @@ describe('Renderer regressions', () => {
   let container: HTMLDivElement
 
   beforeEach(() => {
-    installDrawCapture()
     container = document.createElement('div')
-  })
-
-  afterEach(() => {
-    restoreDrawCapture()
   })
 
   // Near layers used to be rasterised at their full perspective scale, so a
   // voxel right in front of the camera landed far outside the canvas bitmap.
   // Layers are now rasterised at a fixed scale and scaled by CSS.
   describe('near-layer cropping', () => {
+    beforeEach(installDrawCapture)
+    afterEach(restoreDrawCapture)
+
     it('draws a voxel at eye level 1 unit in front of the camera somewhere on a layer canvas', () => {
       const world = makeWorldWithVoxels([
         { x: 0, y: 15, z: -29, color: '#ff0000', type: 1 },

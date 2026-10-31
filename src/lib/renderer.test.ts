@@ -284,7 +284,7 @@ describe('ParallaxRenderer', () => {
 
     it('rebuilds every chunk after world regeneration', () => {
       renderer.render()
-      renderer.regenerateWorld(99999)
+      renderer.regenerateWorld(99999, 'hills_with_trees')
       renderer.render()
       expect(lastUpdate().chunksReused).toBe(0)
       expect(lastUpdate().chunksRegenerated).toBe(lastUpdate().chunkCount)
