@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react'
-import { ParallaxRenderer, DEFAULT_CAMERA, type Camera, type Layer, type SessionStats } from '@/lib/renderer'
+import { ParallaxRenderer, type Camera, type Layer, type SessionStats } from '@/lib/renderer'
 import { World, WORLD_TYPES, type WorldType } from '@/lib/world'
 import { DEFAULT_DETAIL, MAX_DETAIL, MIN_DETAIL } from '@/lib/slice-selection'
 import { Card } from '@/components/ui/card'
@@ -8,7 +8,7 @@ import { Separator } from '@/components/ui/separator'
 import { Slider } from '@/components/ui/slider'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { LayerPreview } from '@/components/LayerPreview'
-import { Box, ChartLine, Crosshair, Eye, EyeOff, History, Layers, Move, RefreshCw } from 'lucide-react'
+import { Box, ChartLine, Crosshair, ExternalLink, Eye, EyeOff, History, Layers, Move, RefreshCw } from 'lucide-react'
 
 /** Key -> movement direction (x, y, z) for held keys. Keys are lower-cased. */
 const MOVEMENT_KEYS: Record<string, [number, number, number]> = {
@@ -25,7 +25,8 @@ function App() {
   const rendererRef = useRef<ParallaxRenderer | null>(null)
 
   const [sessionStats, setSessionStats] = useState<SessionStats | null>(null)
-  const [camera, setCamera] = useState<Camera>(DEFAULT_CAMERA)
+  // Replaced by the world's spawn point on the first render.
+  const [camera, setCamera] = useState<Camera>({ x: 0, y: 0, z: 0 })
   const [showStats, setShowStats] = useState(true)
   const [showLayers, setShowLayers] = useState(true)
   const [layers, setLayers] = useState<Layer[]>([])
@@ -132,6 +133,16 @@ function App() {
     requestRender()
   }
 
+  // The viewer rebuilds the same world from its seed and type.
+  const openViewer = () => {
+    const renderer = rendererRef.current
+    if (!renderer) return
+    const { seed, worldType } = renderer.getWorld()
+    const { x, y, z } = renderer.getCamera()
+    const query = new URLSearchParams({ seed: String(seed), world: worldType, camera: [x, y, z].join(',') })
+    window.open(`${import.meta.env.BASE_URL}viewer.html?${query.toString()}`, '_blank', 'noopener')
+  }
+
   const handleToggleLayerVisibility = (depth: number) => {
     rendererRef.current?.toggleLayerVisibility(depth)
     requestRender()
@@ -207,6 +218,10 @@ function App() {
             <Button onClick={() => { handleRegenerateWorld() }} className="w-full">
               <RefreshCw size={16} />
               Regenerate World
+            </Button>
+            <Button onClick={openViewer} variant="outline" className="w-full">
+              <ExternalLink size={16} />
+              Open in 3D Viewer
             </Button>
             <div className="flex gap-2">
               {!showStats && (

@@ -144,6 +144,26 @@ order. Slices that leave the view lose their DOM elements but stay cached
 Per-render stats (`UpdateStats`) report layers reused vs regenerated and
 voxels rasterised; `SessionStats` accumulates them.
 
+## 5. Worlds (`world.ts`, `forest.ts`)
+
+A world is a list of integer voxels plus a spawn point.
+Renderer distances are in voxels.
+The forest's `VOXEL_SIZE` is 0.5 m,
+so the visible range (200) is 100 m and the fog distance 70 m.
+
+Ground columns are filled a few voxels deep.
+The renderer draws only voxel fronts,
+so the ground's top surface shows as the stacked fronts of these columns.
+
+## 6. Reference viewer (`src/viewer`)
+
+`viewer.html` rebuilds the world from its seed
+and draws every exposed voxel face with three.js.
+World (x, y, z) maps to three.js (x, y, −z),
+so the default camera, looking down −z, looks along world +z.
+Its field of view matches `PROJECTION_SCALE_FACTOR`,
+so from the parallax camera's position both renderers should agree.
+
 ## Limitations
 
 - Each slice is drawn at the scale of its centre, so a slice is only

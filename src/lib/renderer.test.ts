@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { ParallaxRenderer, DEFAULT_CAMERA } from './renderer'
+import { ParallaxRenderer } from './renderer'
 import { World } from './world'
 import { selectSlices } from './slice-selection'
+
+// Generating the forest takes a while; the renderer never modifies its world.
+const world = new World(12345)
 
 describe('ParallaxRenderer', () => {
   let container: HTMLDivElement
@@ -15,18 +18,24 @@ describe('ParallaxRenderer', () => {
 
   beforeEach(() => {
     container = document.createElement('div')
-    renderer = new ParallaxRenderer(container, new World(12345))
+    renderer = new ParallaxRenderer(container, world)
     renderer.resize(800, 600)
   })
 
   describe('camera', () => {
-    it('starts at the default position', () => {
-      expect(renderer.getCamera()).toEqual(DEFAULT_CAMERA)
+    it("starts at the world's spawn point", () => {
+      expect(renderer.getCamera()).toEqual(world.spawn)
     })
 
     it('merges partial updates', () => {
       renderer.setCamera({ x: 5 })
-      expect(renderer.getCamera()).toEqual({ ...DEFAULT_CAMERA, x: 5 })
+      expect(renderer.getCamera()).toEqual({ ...world.spawn, x: 5 })
+    })
+
+    it("moves to the new world's spawn point when the world is regenerated", () => {
+      renderer.setCamera({ x: 5 })
+      renderer.regenerateWorld(99999, 'hills')
+      expect(renderer.getCamera()).toEqual(new World(99999, 'hills').spawn)
     })
   })
 
@@ -204,7 +213,7 @@ describe('ParallaxRenderer', () => {
     renderer.setDetail(2)
     renderer.render()
     expect(lastUpdate().layersReused).toBeGreaterThan(0)
-    expect(lastUpdate().layerCount).toBe(selectSlices(DEFAULT_CAMERA.z, 1, 200, 2).length)
+    expect(lastUpdate().layerCount).toBe(selectSlices(world.spawn.z, 1, 200, 2).length)
   })
 
   describe('stats', () => {

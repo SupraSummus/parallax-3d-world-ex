@@ -1,9 +1,17 @@
+import { generateForest } from './forest'
+
 export interface Voxel {
   x: number
   y: number
   z: number
   color: string
   type: number
+}
+
+export interface Vec3 {
+  x: number
+  y: number
+  z: number
 }
 
 export type WorldType = 'forest' | 'hills' | 'mountains' | 'hills_with_trees' | 'lake_with_island'
@@ -16,7 +24,7 @@ export const WORLD_TYPES: { value: WorldType; label: string }[] = [
   { value: 'lake_with_island', label: 'Lake with Island' },
 ]
 
-interface Material {
+export interface Material {
   color: string
   type: number
 }
@@ -44,10 +52,21 @@ export class World {
   voxels: Voxel[] = []
   readonly seed: number
   readonly worldType: WorldType
+  /** Where the camera starts. */
+  readonly spawn: Readonly<Vec3>
 
   constructor(seed: number = Date.now(), worldType: WorldType = 'forest') {
     this.seed = seed
     this.worldType = worldType
+
+    if (worldType === 'forest') {
+      const forest = generateForest(seed)
+      this.voxels = forest.voxels
+      this.spawn = forest.spawn
+      return
+    }
+
+    this.spawn = { x: 0, y: 20, z: -70 }
 
     for (let x = -HALF_SIZE; x < HALF_SIZE; x++) {
       for (let z = -HALF_SIZE; z < HALF_SIZE; z++) {
@@ -148,18 +167,6 @@ export class World {
 
   private generateColumn(x: number, z: number) {
     switch (this.worldType) {
-      case 'forest': {
-        const ground = this.terrainHeight(x, z, 1)
-        this.soilColumn(x, z, ground, GRASS)
-        if (this.noise(x * 0.3, 0, z * 0.3) > 0.6 && ground > 2) {
-          this.tree(x, ground, z, 4 + Math.floor(this.noise(x, 0, z) * 3))
-        }
-        if (this.noise(x * 0.5, 50, z * 0.5) > 0.85) {
-          this.push(x, ground + 1, z, { color: '#FFD700', type: 6 })
-        }
-        break
-      }
-
       case 'hills': {
         const ground = this.terrainHeight(x, z, 0.7)
         this.soilColumn(x, z, ground, { color: '#7CFC00', type: 1 })

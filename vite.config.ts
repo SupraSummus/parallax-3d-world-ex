@@ -12,6 +12,16 @@ export default defineConfig({
       '@': resolve(import.meta.dirname, 'src'),
     },
   },
+  build: {
+    // three.js (~540 kB) is only loaded by the viewer page.
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      input: {
+        main: resolve(import.meta.dirname, 'index.html'),
+        viewer: resolve(import.meta.dirname, 'viewer.html'),
+      },
+    },
+  },
   test: {
     environment: 'jsdom',
     setupFiles: './src/test-setup.ts',
