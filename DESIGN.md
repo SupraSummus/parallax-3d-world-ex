@@ -132,8 +132,8 @@ because the back faces and the inside of the slab are flattened.
 
 When a slice is first needed, its voxels with a face that is not covered
 by a neighbour (or a front face on the slice's near plane) are indexed by
-chunk, with a bitmask of their open faces; buried voxels are dropped.
-Nothing is drawn yet.
+chunk, with a bitmask of their open faces; buried voxels are dropped
+(`sliceSurface`). Nothing is drawn yet.
 
 **Chunks.** A slice of size s is split in x and y into aligned squares of
 width `chunkWidth(s)` = 16·s: chunk (x0, y0) is the cell
@@ -154,13 +154,19 @@ the faces a ray along the direction can reach: front faces not covered
 by a voxel in front (except on the near plane, where the cut must show)
 and open side faces facing the camera (−x when τx > 0, the top when
 τy < 0, ...), painted far to near, side faces before front faces of the
-same z (`bakedFaces`). Shading is shared with the reference viewer
+same z (`chunkFaces`). Shading is shared with the reference viewer
 (`FACE_SHADE`).
 
-Faces are filled into pixels directly (`fillConvex`): a pixel is filled
+Faces are filled into pixels directly (`fillQuad`): a pixel is filled
 when its centre is inside, with half-open edges, so neighbours meet
 without gaps or overlap. Canvas paths would antialias the slanted edges,
 and a soft 1-pixel edge magnified 20× on screen is a blur.
+
+`bake.ts` has no DOM and works on flat typed arrays,
+ready for a worker or a Rust/WASM port.
+A cell's surface records are stored far to near,
+so painting order needs no sort:
+the cell and its eight neighbours are walked one z at a time.
 
 **Resolution.** A chunk of a size-s slice is drawn at `renderScale(s)`
 pixels per world unit: 24 / s, between 2 and 10. A slice of size s ≥ 2
@@ -232,7 +238,10 @@ accumulates them.
 
 ## 6. Worlds (`world.ts`, `forest.ts`)
 
-A world is a list of integer voxels plus a spawn point.
+A world is a dense voxel grid plus a spawn point (`voxel-grid.ts`):
+one material id byte per cell of a box, 0 for empty.
+Cells are z-major, so a slice is one contiguous range.
+A list of voxel objects is built only on request (reference viewer, tests).
 Renderer distances are in voxels.
 The forest's `VOXEL_SIZE` is 0.5 m,
 so the default render distance (200) is 100 m and the fog distance 70 m.

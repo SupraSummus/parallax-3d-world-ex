@@ -75,7 +75,7 @@ function LayerItem({ layer, onToggleVisibility }: LayerItemProps) {
           )}
         </div>
         <div className="text-xs text-muted-foreground font-mono truncate">
-          {layer.voxels.length} voxels
+          {layer.voxelCount} voxels
         </div>
       </div>
 

@@ -39,11 +39,4 @@ describe('World', () => {
     expect(surfaceAt(0, 0).type).not.toBe(8)
   })
 
-  it('selects voxels by absolute z range', () => {
-    const world = new World(12345, 'hills')
-    const voxels = world.getVoxelsInZRange(-10, -6)
-    expect(voxels.length).toBeGreaterThan(0)
-    expect(voxels.every(v => v.z >= -10 && v.z < -6)).toBe(true)
-    expect(voxels.length).toBe(world.voxels.filter(v => v.z >= -10 && v.z < -6).length)
-  })
 })

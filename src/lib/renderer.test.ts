@@ -56,13 +56,13 @@ describe('ParallaxRenderer', () => {
       expect(lastUpdate().layerCount).toBe(expected.length)
     })
 
-    it('puts exactly the slice voxels in each layer', () => {
+    it('counts exactly the slice voxels in each layer', () => {
       renderer.render()
       const layers = renderer.getLayers()
-      expect(layers.some(l => l.voxels.length > 0)).toBe(true)
+      expect(layers.some(l => l.voxelCount > 0)).toBe(true)
       for (const layer of layers) {
-        expect(layer.voxels.every(v => v.z >= layer.depth && v.z < layer.depth + layer.size)).toBe(true)
-        expect(layer.voxels).toHaveLength(world.getVoxelsInZRange(layer.depth, layer.depth + layer.size).length)
+        const inSlice = world.voxels.filter(v => v.z >= layer.depth && v.z < layer.depth + layer.size)
+        expect(layer.voxelCount).toBe(inSlice.length)
       }
     })
 
@@ -235,7 +235,7 @@ describe('ParallaxRenderer', () => {
       renderer.setCamera({ z: -70 })
       renderer.render()
       const layers = renderer.getLayers()
-      expect(layers.some(l => l.voxels.length === 0 && l.chunks.length === 0)).toBe(true)
+      expect(layers.some(l => l.voxelCount === 0 && l.chunks.length === 0)).toBe(true)
 
       // One fog overlay per slice; accumulated fog transmittance over a slice
       // must decrease with distance.

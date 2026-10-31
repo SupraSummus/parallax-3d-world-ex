@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { generateForest, VOXEL_SIZE } from './forest'
-import type { Voxel } from './world'
+import type { Voxel } from './voxel-grid'
 
 // Generation takes a while; every test only reads the result.
-const { voxels, spawn } = generateForest(42)
+const { grid, spawn } = generateForest(42)
+const voxels = grid.toVoxels()
 const key = (x: number, y: number, z: number) => `${String(x)},${String(y)},${String(z)}`
 const fingerprint = (vs: Voxel[]) => vs.map(v => key(v.x, v.y, v.z) + v.color).join(';')
 
@@ -12,7 +13,7 @@ describe('generateForest', () => {
   it('is deterministic for a seed', () => {
     const again = generateForest(42)
     expect(again.spawn).toEqual(spawn)
-    expect(fingerprint(again.voxels)).toBe(fingerprint(voxels))
+    expect(fingerprint(again.grid.toVoxels())).toBe(fingerprint(voxels))
   })
 
   it('has ground under every column of a 96 m × 160 m area', () => {

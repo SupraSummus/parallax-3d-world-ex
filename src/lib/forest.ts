@@ -1,4 +1,5 @@
-import type { Material, Vec3, Voxel } from './world'
+import type { Vec3 } from './world'
+import { VoxelGrid, type Material } from './voxel-grid'
 
 /**
  * Metres per voxel. Terrain and plant sizes below are in metres, converted
@@ -15,7 +16,6 @@ const MAX_Z = vox(128)
 const MIN_Y = vox(-8)
 const MAX_Y = vox(64)
 const NX = MAX_X - MIN_X
-const NY = MAX_Y - MIN_Y
 const NZ = MAX_Z - MIN_Z
 
 // Material kinds; each voxel gets one shade of its kind, picked by position.
@@ -115,27 +115,25 @@ function rng(seed: number): () => number {
 // ---------------------------------------------------------------------------
 // Voxel grid
 
-/** Dense material grid used while generating; converted to Voxels at the end. */
+/** The world's voxel grid, with placement helpers that pick a shade of a kind. */
 class Grid {
-  readonly cells = new Uint8Array(NX * NY * NZ)
+  readonly voxels = new VoxelGrid(
+    { minX: MIN_X, minY: MIN_Y, minZ: MIN_Z, maxX: MAX_X, maxY: MAX_Y, maxZ: MAX_Z },
+    MATERIALS,
+  )
   constructor(private readonly shadeSeed: number) {}
 
-  private index(x: number, y: number, z: number): number {
-    if (x < MIN_X || x >= MAX_X || y < MIN_Y || y >= MAX_Y || z < MIN_Z || z >= MAX_Z) return -1
-    return ((x - MIN_X) * NZ + (z - MIN_Z)) * NY + (y - MIN_Y)
-  }
-
   get(x: number, y: number, z: number): number {
-    const i = this.index(x, y, z)
-    return i < 0 ? 0 : this.cells[i]
+    return this.voxels.get(x, y, z)
   }
 
   /** Places a shade of `kind`; keeps an existing voxel unless `replace`. Out-of-range cells are ignored. */
   put(x: number, y: number, z: number, kind: Kind, replace = false) {
-    const i = this.index(x, y, z)
-    if (i < 0 || (!replace && this.cells[i] !== 0)) return
+    const i = this.voxels.index(x, y, z)
+    const { cells } = this.voxels
+    if (i < 0 || (!replace && cells[i] !== 0)) return
     const shades = KIND_MATERIALS[kind]
-    this.cells[i] = shades[Math.floor(hash(this.shadeSeed, x, y, z) * shades.length)]
+    cells[i] = shades[Math.floor(hash(this.shadeSeed, x, y, z) * shades.length)]
   }
 
   /** Fills a ball, keeping each cell with probability `fill`. */
@@ -180,7 +178,7 @@ interface Column {
  * slopes rising on both sides, and a ridge closing the view at the far end.
  * Spruce, birch and oak, with ferns, bushes, boulders and fallen logs.
  */
-export function generateForest(seed: number): { voxels: Voxel[]; spawn: Vec3 } {
+export function generateForest(seed: number): { grid: VoxelGrid; spawn: Vec3 } {
   const s = (k: number) => (seed | 0) + k * 1013904223
   const pathPhase = hash(s(1), 0, 0) * 100
   /** Path centre line, in metres. */
@@ -279,28 +277,27 @@ export function generateForest(seed: number): { voxels: Voxel[]; spawn: Vec3 } {
     }
   }
 
-  // Emit voxels, dropping leaves enclosed on all six sides to save memory
-  // (where a slice cuts through a crown, the leaves behind look the same).
-  const voxels: Voxel[] = []
-  const filled = (x: number, y: number, z: number) => grid.get(x, y, z) !== 0
+  // Drop leaves enclosed on all six sides: crowns become shells, which keeps
+  // the reference viewer's voxel list small.
+  const { voxels } = grid
+  const { cells, nx, ny } = voxels
+  const enclosed: number[] = []
   for (let z = MIN_Z; z < MAX_Z; z++) {
-    for (let x = MIN_X; x < MAX_X; x++) {
-      for (let y = MIN_Y; y < MAX_Y; y++) {
-        const id = grid.get(x, y, z)
-        if (id === 0) continue
-        const { color, type } = MATERIALS[id]
+    for (let y = MIN_Y; y < MAX_Y; y++) {
+      for (let x = MIN_X; x < MAX_X; x++) {
+        const i = voxels.index(x, y, z)
+        const id = cells[i]
+        if (id === 0 || MATERIALS[id].type !== LEAVES_TYPE) continue
         if (
-          type === LEAVES_TYPE &&
-          filled(x - 1, y, z) && filled(x + 1, y, z) &&
-          filled(x, y - 1, z) && filled(x, y + 1, z) &&
-          filled(x, y, z - 1) && filled(x, y, z + 1)
-        ) continue
-        voxels.push({ x, y, z, color, type })
+          x > MIN_X && x < MAX_X - 1 && y > MIN_Y && y < MAX_Y - 1 && z > MIN_Z && z < MAX_Z - 1 &&
+          cells[i - 1] && cells[i + 1] && cells[i - nx] && cells[i + nx] && cells[i - nx * ny] && cells[i + nx * ny]
+        ) enclosed.push(i)
       }
     }
   }
+  for (const i of enclosed) cells[i] = 0
 
-  return { voxels, spawn }
+  return { grid: voxels, spawn }
 }
 
 /** A vertical trunk, `width` voxels square, from just below `ground` up to `top`. */
