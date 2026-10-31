@@ -1,157 +1,58 @@
 # Agent Development Guide
 
-> **This is the entry point for AI developer agents working on this codebase.**
+Entry point for AI agents working on this codebase. Read this first.
 
-## Quick Reference
+## Documents
 
-| Document | Purpose | When to Read |
-|----------|---------|--------------|
-| [AGENTS.md](AGENTS.md) | Agent guidelines & rules | Always read first |
-| [README.md](README.md) | Project overview & setup | Before making changes |
-| [PRD.md](PRD.md) | Product requirements | When adding features |
-| [DESIGN.md](DESIGN.md) | Technical architecture | When modifying rendering |
-| [TESTING.md](TESTING.md) | Test guide | Before/after code changes |
-| [CHANGES.md](CHANGES.md) | Recent changes log | To understand recent work |
-| [SECURITY.md](SECURITY.md) | Security reporting | For security issues |
+| Document | Purpose | Read when |
+|----------|---------|-----------|
+| [README.md](README.md) | Overview and quick start | First |
+| [PRD.md](PRD.md) | What the product does and doesn't do | Adding or changing features |
+| [DESIGN.md](DESIGN.md) | Slicing, caching and compositing architecture | Touching `src/lib` |
+| [TESTING.md](TESTING.md) | Test layout and conventions | Writing tests |
 
-## Core Principles
+Each concept has one home: build/test commands live in `package.json`
+scripts, architecture in DESIGN.md, product behaviour in PRD.md, test
+conventions in TESTING.md, agent rules here. Link instead of duplicating.
 
-### 1. No Dangling Files
+## Source layout
 
-Every file in this repository must be **referenced** from at least one other file:
+```
+src/
+├── main.tsx                 # Entry: error boundary + App
+├── App.tsx                  # UI panels, keyboard movement loop
+├── ErrorFallback.tsx
+├── main.css                 # Tailwind + design tokens
+├── components/
+│   ├── LayerPreview.tsx     # Layers panel
+│   └── ui/                  # shadcn/ui primitives (generated; CLI config in components.json)
+└── lib/
+    ├── world.ts             # Procedural voxel world
+    ├── slice-selection.ts   # Which z-slices to render (pure functions)
+    ├── renderer.ts          # Slice rasterisation, caching, CSS compositing
+    └── utils.ts             # cn() for class names
+```
 
-- **Documentation files** → referenced from AGENTS.md or README.md
-- **Code files** → imported by another file or test
-- **Config files** → referenced in package.json or other configs
-- **Assets** → imported or referenced in code
+## Workflow
 
-**Before adding a file:** Ensure it will be properly linked.
-**Before removing a file:** Verify no references will break.
-
-### 2. Documentation Maintenance Burden
-
-Keep documentation **minimal and high-value**:
-
-- **Don't duplicate information** → link to the source instead
-- **Prefer code comments over external docs** for implementation details
-- **Delete outdated docs** rather than let them mislead future agents
-- **Use the Quick Reference table** above to describe each doc's purpose
-
-**Test for staleness:** If updating code, grep for mentions in docs. Update or remove stale references.
-
-### 3. Single Source of Truth
-
-Each concept should have **one authoritative location**:
-
-| Concept | Authoritative Location |
-|---------|----------------------|
-| How to build/test | `package.json` scripts |
-| Architecture decisions | [DESIGN.md](DESIGN.md) |
-| Product behavior | [PRD.md](PRD.md) |
-| Test patterns | [TESTING.md](TESTING.md) |
-| Agent rules | [AGENTS.md](AGENTS.md) (this file) |
-
-## Development Commands
+Before and after changing code, run the `package.json` scripts and fix
+errors (lint warnings are advisory):
 
 ```bash
-# Install dependencies
-pnpm install
-
-# Development server
-pnpm dev
-
-# Lint code (fix errors before committing)
-pnpm lint
-
-# Check for unused code, exports, and dependencies
-pnpm knip
-
-# Run all tests
-pnpm exec vitest run
-
-# Run tests in watch mode
-pnpm exec vitest --watch
-
-# Build for production
-pnpm build
+pnpm lint && pnpm typecheck && pnpm test && pnpm knip && pnpm knip:production
 ```
 
-## Code Style
+CI runs the same scripts plus `pnpm build`. For rendering changes, also look
+at the result in the browser (`pnpm dev`); unit tests can't see pixels.
 
-- **TypeScript strict mode** is enabled
-- **ESLint** enforces code quality - run `pnpm lint` before committing
-- Fix lint **errors** (required), **warnings** are advisory
-- Use existing patterns - check similar files for conventions
+## Rules
 
-## File Structure
-
-```
-├── AGENTS.md           # ← You are here (agent entry point)
-├── README.md           # Project overview for humans
-├── PRD.md              # Product requirements document
-├── DESIGN.md           # Layer-based rendering architecture
-├── TESTING.md          # Testing guide and patterns
-├── CHANGES.md          # Recent changes log
-├── SECURITY.md         # Security policy
-├── src/
-│   ├── App.tsx         # Main application component
-│   ├── App.test.tsx    # Application tests
-│   ├── lib/            # Core logic (renderer, utils)
-│   ├── components/     # React components
-│   ├── hooks/          # Custom React hooks
-│   └── styles/         # CSS styles
-├── package.json        # Dependencies and scripts
-├── eslint.config.js    # ESLint configuration
-├── tsconfig.json       # TypeScript configuration
-└── vite.config.ts      # Vite build configuration
-```
-
-## Making Changes
-
-### Before Changing Code
-
-1. **Understand the context** → Read [DESIGN.md](DESIGN.md) for architecture
-2. **Run tests first** → `pnpm exec vitest run` to see baseline state
-3. **Check lint** → `pnpm lint` to see existing issues
-
-### After Changing Code
-
-1. **Run tests** → `pnpm exec vitest run` to verify no regressions
-2. **Run lint** → `pnpm lint` and fix errors
-3. **Run knip** → `pnpm knip` to check for unused code
-4. **Update docs if needed** → Keep docs in sync with code
-
-### Documentation Changes
-
-When modifying documentation:
-
-1. **Update the Quick Reference table** above if adding/removing docs
-2. **Check for broken links** in all markdown files
-3. **Consider if the doc is needed** → delete if obsolete
-
-## Agent-Specific Rules
-
-### When Adding New Files
-
-- [ ] Is the file referenced/imported by existing code?
-- [ ] If documentation, is it linked from AGENTS.md or README.md?
-- [ ] Does it follow existing naming conventions?
-
-### When Removing Files
-
-- [ ] Are all references to this file removed?
-- [ ] Is the Quick Reference table updated?
-- [ ] Are tests still passing?
-
-### When Modifying Architecture
-
-- [ ] Is [DESIGN.md](DESIGN.md) updated to reflect changes?
-- [ ] Are affected tests updated?
-
-## Governance
-
-This AGENTS.md file is the **authoritative source** for agent development guidelines. It should be:
-
-- **Read first** by any agent before making changes
-- **Updated** when development practices change
-- **Referenced** from README.md for discoverability
+1. **No dangling files.** Every file is imported, referenced by config, or
+   linked from this file or README.md. When removing a file, remove its
+   references. `knip` enforces this for code.
+2. **Minimal docs.** Prefer code comments for implementation details. Delete
+   outdated docs rather than letting them mislead. When changing code, grep
+   the docs for mentions and update them.
+3. **Architecture changes** update DESIGN.md and the affected tests.
+4. **TypeScript strict** (`strictTypeChecked` ESLint rules). Follow existing
+   patterns in neighbouring files.
