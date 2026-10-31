@@ -17,15 +17,16 @@ every frame. The demo exists to show (and measure) that idea.
 **Camera** – Fixed viewing direction (+z), no rotation. W/S forward/back,
 A/D left/right, Space/Shift up/down, adjustable move speed.
 
-**Slicing** – Slice thickness grows geometrically with viewing distance;
-the growth factor ("depth multiplier", 1.2–4) is adjustable. See
+**Slicing** – Slice thickness grows with viewing distance in powers of two.
+"Slice detail" (1–16) sets how thin slices are relative to their distance:
+more detail, more accurate perspective, more slices. See
 [DESIGN.md](DESIGN.md).
 
 **Worlds** – Procedurally generated 80×80 terrain, regenerable with a new
 seed. Types: forest, hills, mountains, hills with trees, lake with island.
 
 **Layers panel** – Thumbnail, z range, thickness and voxel count of every
-visible slice, with a visibility toggle per slice.
+non-empty slice in view, with a visibility toggle per slice.
 
 **Statistics panel** – Session totals (updates, average render time, average
 cache efficiency, voxels rendered) and details of the last update (layers

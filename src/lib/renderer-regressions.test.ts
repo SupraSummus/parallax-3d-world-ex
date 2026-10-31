@@ -98,8 +98,8 @@ describe('Renderer regressions', () => {
   })
 
   // Near layers used to be rasterised at their full perspective scale, so a
-  // voxel right in front of the camera landed far outside the viewport-sized
-  // canvas. Layers are now rasterised at a fixed scale and scaled by CSS.
+  // voxel right in front of the camera landed far outside the canvas bitmap.
+  // Layers are now rasterised at a fixed scale and scaled by CSS.
   describe('near-layer cropping', () => {
     it('draws a voxel at eye level 1 unit in front of the camera somewhere on a layer canvas', () => {
       const world = makeWorldWithVoxels([
@@ -142,9 +142,8 @@ describe('Renderer regressions', () => {
       renderer.render()
 
       // A draw is visible if it lands inside the canvas bitmap *and*, after
-      // the canvas's CSS transform (translate + optional scale around the
-      // canvas centre), falls inside the viewport. We apply the same
-      // transform the browser would.
+      // the canvas's CSS transform (scale about the top-left corner, then
+      // translate), falls inside the viewport.
       let visibleCount = 0
       for (const layer of renderer.getLayers()) {
         const canvas = layer.canvas
@@ -156,17 +155,13 @@ describe('Renderer regressions', () => {
         const tx = translateMatch ? parseFloat(translateMatch[1]) : 0
         const ty = translateMatch ? parseFloat(translateMatch[2]) : 0
         const s = scaleMatch ? parseFloat(scaleMatch[1]) : 1
-        const cx = canvas.width / 2
-        const cy = canvas.height / 2
+        expect(canvas.style.transformOrigin).toBe('0 0')
         for (const draw of getDraws(canvas)) {
           if (!drawIsInsideCanvas(draw, canvas)) continue
-          // Scale around canvas centre, then translate.
           const scaledW = draw.w * s
           const scaledH = draw.h * s
-          const scaledX = cx + (draw.x - cx) * s
-          const scaledY = cy + (draw.y - cy) * s
-          const vx = scaledX + tx
-          const vy = scaledY + ty
+          const vx = tx + draw.x * s
+          const vy = ty + draw.y * s
           if (
             vx + scaledW > 0 &&
             vx < viewportW &&

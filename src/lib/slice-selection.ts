@@ -3,16 +3,17 @@
  *
  * Two mechanisms (see DESIGN.md for worked examples):
  *
- * 1. World slice availability (camera-independent). Valid slice sizes form a
- *    geometric progression 1, m, m², ... (rounded, capped at MAX_SIZE). A
- *    slice of size N may only start at a depth z with z % N == 0, so a given
- *    (depth, size) slice always has the same content and can be cached.
+ * 1. World slice availability (camera-independent). Slice sizes are powers of
+ *    two up to MAX_SIZE, and a slice of size N may only start at a depth z
+ *    with z % N == 0. Sizes nest (every aligned slice splits into aligned
+ *    halves), and a given (depth, size) slice always has the same content, so
+ *    it can be cached.
  *
  * 2. Camera selection (camera-dependent). Walking away from the camera, each
- *    step requests a slice whose size grows with viewing distance; the world
+ *    step requests a slice about (viewing distance / detail) thick; the world
  *    returns the smallest aligned size satisfying the request. The result is
- *    contiguous coverage with ~log(n) slices: thin near the camera, thick far
- *    away.
+ *    contiguous coverage with O(detail · log n) slices: thin near the camera,
+ *    thick far away.
  */
 
 export interface SliceBoundary {
@@ -23,47 +24,35 @@ export interface SliceBoundary {
 }
 
 const MAX_SIZE = 64
-export const DEFAULT_DEPTH_MULTIPLIER = 2
-export const MIN_DEPTH_MULTIPLIER = 1.2
-export const MAX_DEPTH_MULTIPLIER = 4
 
-export function clampDepthMultiplier(multiplier: number): number {
-  return Math.min(MAX_DEPTH_MULTIPLIER, Math.max(MIN_DEPTH_MULTIPLIER, multiplier))
+/**
+ * Detail is the ratio of viewing distance to requested slice thickness.
+ * Higher detail means thinner slices (less perspective error inside each
+ * slice) and more of them.
+ */
+export const DEFAULT_DETAIL = 4
+export const MIN_DETAIL = 1
+export const MAX_DETAIL = 16
+
+export function clampDetail(detail: number): number {
+  return Math.min(MAX_DETAIL, Math.max(MIN_DETAIL, detail))
 }
 
-/** Slice sizes 1, m, m², ... up to MAX_SIZE, rounded; stops if rounding stops growth. */
-function getValidSizes(depthMultiplier: number): number[] {
-  const sizes: number[] = []
-  for (let size = 1; size <= MAX_SIZE; ) {
-    sizes.push(size)
-    const next = Math.round(size * depthMultiplier)
-    if (next <= size) break
-    size = next
-  }
-  return sizes
+/** Largest power of two <= n, clamped to [1, MAX_SIZE]. */
+function floorPowerOfTwo(n: number): number {
+  if (n < 2) return 1
+  return Math.min(2 ** Math.floor(Math.log2(n)), MAX_SIZE)
 }
 
 /**
  * Mechanism 1: the slice starting at `depth` with the smallest aligned size
  * >= minSize, or the largest aligned size if none is big enough.
  */
-export function getSliceAtDepth(
-  depth: number,
-  minSize: number,
-  depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER,
-): SliceBoundary {
+export function getSliceAtDepth(depth: number, minSize: number): SliceBoundary {
   const intDepth = Math.floor(depth)
-  // Size 1 is always aligned, so this is never empty.
-  const aligned = getValidSizes(depthMultiplier).filter(size => intDepth % size === 0)
-  const size = aligned.find(s => s >= minSize) ?? aligned[aligned.length - 1]
+  let size = 1
+  while (size < minSize && size < MAX_SIZE && intDepth % (size * 2) === 0) size *= 2
   return { depth: intDepth, size }
-}
-
-/** Largest power of the multiplier <= viewingDistance, clamped to [1, MAX_SIZE]. */
-function getMinSizeForViewingDistance(viewingDistance: number, depthMultiplier: number): number {
-  if (viewingDistance < 1) return 1
-  const exponent = Math.floor(Math.log(viewingDistance) / Math.log(depthMultiplier))
-  return Math.min(Math.max(Math.round(depthMultiplier ** exponent), 1), MAX_SIZE)
 }
 
 /**
@@ -74,14 +63,13 @@ export function selectSlices(
   cameraZ: number,
   minRelativeDepth: number,
   maxRelativeDepth: number,
-  depthMultiplier: number = DEFAULT_DEPTH_MULTIPLIER,
+  detail: number = DEFAULT_DETAIL,
 ): SliceBoundary[] {
   if (minRelativeDepth >= maxRelativeDepth) return []
   const farZ = cameraZ + maxRelativeDepth
   const slices: SliceBoundary[] = []
   for (let z = Math.floor(cameraZ + minRelativeDepth); z < farZ; ) {
-    const minSize = getMinSizeForViewingDistance(z - cameraZ, depthMultiplier)
-    const slice = getSliceAtDepth(z, minSize, depthMultiplier)
+    const slice = getSliceAtDepth(z, floorPowerOfTwo((z - cameraZ) / detail))
     slices.push(slice)
     z = slice.depth + slice.size
   }

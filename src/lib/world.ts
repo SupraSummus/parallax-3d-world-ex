@@ -34,7 +34,12 @@ const HALF_SIZE = 40
 /** Every column is filled from this y up to its surface. */
 const BEDROCK_Y = -5
 
-/** A procedurally generated, immutable voxel world. */
+/** Packs integer coordinates in [-512, 512) into one number. */
+function cellKey(x: number, y: number, z: number): number {
+  return ((x + 512) * 1024 + (y + 512)) * 1024 + (z + 512)
+}
+
+/** A procedurally generated voxel world. */
 export class World {
   voxels: Voxel[] = []
   readonly seed: number
@@ -51,9 +56,39 @@ export class World {
     }
   }
 
-  /** Voxels with world z in [minZ, maxZ). */
+  // Lookup indexes, built on first query (so `voxels` may be replaced before
+  // the world is first rendered, as tests do).
+  private index: { byZ: Map<number, Voxel[]>; occupied: Set<number> } | null = null
+
+  private getIndex() {
+    if (!this.index) {
+      const byZ = new Map<number, Voxel[]>()
+      const occupied = new Set<number>()
+      for (const v of this.voxels) {
+        const column = byZ.get(v.z)
+        if (column) column.push(v)
+        else byZ.set(v.z, [v])
+        occupied.add(cellKey(v.x, v.y, v.z))
+      }
+      this.index = { byZ, occupied }
+    }
+    return this.index
+  }
+
+  /** Voxels with integer world z in [minZ, maxZ). */
   getVoxelsInZRange(minZ: number, maxZ: number): Voxel[] {
-    return this.voxels.filter(v => v.z >= minZ && v.z < maxZ)
+    const { byZ } = this.getIndex()
+    const result: Voxel[] = []
+    for (let z = Math.ceil(minZ); z < maxZ; z++) {
+      const slice = byZ.get(z)
+      if (slice) result.push(...slice)
+    }
+    return result
+  }
+
+  /** Whether a voxel occupies the given integer cell. */
+  has(x: number, y: number, z: number): boolean {
+    return this.getIndex().occupied.has(cellKey(x, y, z))
   }
 
   /** Deterministic hash noise in [0, 1). */
@@ -139,7 +174,8 @@ export class World {
         const ground = this.terrainHeight(x, z, 2.5)
         for (let y = BEDROCK_Y; y <= ground; y++) {
           let material: Material
-          if (y > 15) material = { color: '#FFFFFF', type: 7 }
+          // Snow caps: the top two blocks of peaks above y=15.
+          if (y > 15 && y > ground - 2) material = { color: '#FFFFFF', type: 7 }
           else if (y === ground && y > 8) material = { color: '#808080', type: 3 }
           else if (y === ground) material = GRASS
           else if (y > ground - 3) material = DIRT
