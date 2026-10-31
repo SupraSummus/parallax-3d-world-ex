@@ -1,6 +1,3 @@
-/* eslint-disable @typescript-eslint/no-deprecated */
-// Phosphor icon names like Stack are deprecated in favor of StackIcon,
-// but the Icon suffixed versions are not exported at package level
 import { useEffect, useRef } from 'react'
 import { Layer } from '@/lib/renderer'
 import { Card } from '@/components/ui/card'
@@ -8,7 +5,7 @@ import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { Separator } from '@/components/ui/separator'
-import { Stack } from '@phosphor-icons/react'
+import { Layers } from 'lucide-react'
 
 interface LayerPreviewProps {
   layers: Layer[]
@@ -85,7 +82,7 @@ export function LayerPreview({ layers, onToggleVisibility }: LayerPreviewProps) 
     <Card className="bg-card/90 backdrop-blur-sm w-72 flex flex-col max-h-[calc(100vh-48px)] gap-0 py-0 overflow-hidden">
       <div className="px-3 py-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
-          <Stack className="text-primary flex-shrink-0" size={18} />
+          <Layers className="text-primary flex-shrink-0" size={18} />
           <h2 className="font-bold text-base">Layers</h2>
         </div>
         <Badge variant="secondary" className="font-mono text-xs flex-shrink-0">

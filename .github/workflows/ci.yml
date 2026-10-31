@@ -20,20 +20,20 @@ jobs:
       - name: Set up environment
         uses: ./.github/actions/setup
 
-      - name: Run linting
+      - name: Lint
         run: pnpm lint
 
-      - name: Run knip (check for unused code)
+      - name: Type check
+        run: pnpm typecheck
+
+      - name: Unused code (knip)
         run: pnpm knip
 
-      - name: Run knip production mode (check for test-only code)
+      - name: Test-only code (knip --production)
         run: pnpm knip:production
 
-      - name: Run TypeScript type check
-        run: pnpm exec tsc --noEmit
+      - name: Test
+        run: pnpm test
 
       - name: Build
         run: pnpm build
-
-      - name: Run tests
-        run: pnpm exec vitest run

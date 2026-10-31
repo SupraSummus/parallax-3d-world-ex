@@ -1,57 +1,19 @@
-import tailwindcss from "@tailwindcss/vite";
-import react from "@vitejs/plugin-react-swc";
-import reactPlugin from "@vitejs/plugin-react";
-import { defineConfig, PluginOption } from "vite";
-
-import sparkPlugin from "@github/spark/spark-vite-plugin";
-import createIconImportProxy from "@github/spark/vitePhosphorIconProxyPlugin";
+import tailwindcss from '@tailwindcss/vite'
+import react from '@vitejs/plugin-react-swc'
 import { resolve } from 'path'
+import { defineConfig } from 'vitest/config'
 
-const projectRoot = process.env.PROJECT_ROOT || import.meta.dirname
-const isTest = process.env.NODE_ENV === 'test' || process.env.VITEST === 'true' || !!process.env.VITEST
-
-// https://vite.dev/config/
 export default defineConfig({
+  // Served from https://<user>.github.io/parallax-3d-world-ex/
   base: '/parallax-3d-world-ex/',
-  plugins: [
-    // Use regular React plugin for tests without Fast Refresh
-    isTest 
-      ? reactPlugin({ 
-          // Include only test files for React transformation
-          include: /\.test\.(tsx?|jsx?)$/
-        }) 
-      : react(),
-    tailwindcss(),
-    // DO NOT REMOVE
-    createIconImportProxy() as PluginOption,
-    sparkPlugin() as PluginOption,
-  ],
+  plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
-      '@': resolve(projectRoot, 'src')
-    }
+      '@': resolve(import.meta.dirname, 'src'),
+    },
   },
   test: {
-    globals: true,
     environment: 'jsdom',
     setupFiles: './src/test-setup.ts',
-    deps: {
-      optimizer: {
-        web: {
-          include: []
-        }
-      }
-    },
-    coverage: {
-      provider: 'v8',
-      reporter: ['text', 'json', 'html'],
-      exclude: [
-        'node_modules/',
-        'src/test-setup.ts',
-        'src/components/ui/**',
-        '**/*.test.{ts,tsx}',
-        '**/*.d.ts',
-      ]
-    }
-  }
-});
+  },
+})
