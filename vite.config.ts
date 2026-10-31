@@ -16,7 +16,7 @@ export default defineConfig({
   build: {
     // three.js (~540 kB) is only loaded by the viewer page.
     chunkSizeWarningLimit: 600,
-    rollupOptions: {
+    rolldownOptions: {
       input: {
         main: resolve(import.meta.dirname, 'index.html'),
         viewer: resolve(import.meta.dirname, 'viewer.html'),

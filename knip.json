@@ -1,7 +1,6 @@
 {
-  "$schema": "https://unpkg.com/knip@5/schema.json",
-  "entry": ["src/**/*.test.{ts,tsx}", "src/viewer/main.ts!"],
-  "project": ["src/**/*.{ts,tsx}!", "!src/test-setup.ts!"],
-  "ignoreDependencies": ["tailwindcss", "tw-animate-css"],
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": ["src/**/*.test.{ts,tsx}"],
+  "project": ["src/**/*.{ts,tsx,css}!", "!src/test-setup.ts!"],
   "ignoreExportsUsedInFile": true
 }

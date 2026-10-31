@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react'
+import { useEffect, useEffectEvent, useRef, useState, useCallback, type ReactNode } from 'react'
 import { ParallaxRenderer, DEFAULT_FOV, MAX_FOV, MIN_FOV, DEFAULT_RENDER_DISTANCE, MAX_RENDER_DISTANCE, MIN_RENDER_DISTANCE, DEFAULT_MAX_LEAK, MAX_MAX_LEAK, MIN_MAX_LEAK, type Camera, type Layer, type SessionStats } from '@/lib/renderer'
 import { World, WORLD_TYPES, type WorldType } from '@/lib/world'
 import { Card } from '@/components/ui/card'
@@ -36,8 +36,7 @@ function App() {
   const [maxLeak, setMaxLeak] = useState(DEFAULT_MAX_LEAK)
 
   // Read from the movement loop without restarting it.
-  const moveSpeedRef = useRef(moveSpeed)
-  moveSpeedRef.current = moveSpeed
+  const getMoveSpeed = useEffectEvent(() => moveSpeed)
 
   const requestRender = useCallback(() => {
     const renderer = rendererRef.current
@@ -81,7 +80,7 @@ function App() {
       }
       const renderer = rendererRef.current
       if (renderer) {
-        const speed = moveSpeedRef.current
+        const speed = getMoveSpeed()
         const cam = renderer.getCamera()
         for (const key of held) {
           const [dx, dy, dz] = MOVEMENT_KEYS[key]
