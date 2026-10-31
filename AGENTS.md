@@ -29,8 +29,9 @@ src/
 └── lib/
     ├── world.ts             # World: voxel list, indexes, toy world types
     ├── forest.ts            # Forest scene generator (VOXEL_SIZE lives here)
-    ├── slice-selection.ts   # Which z-slices to render (pure functions)
-    ├── renderer.ts          # Slice rasterisation, caching, CSS compositing
+    ├── slice-selection.ts   # Slices, chunks and baking directions (pure functions)
+    ├── renderer.ts          # Chunk rasterisation, caching, CSS compositing
+    ├── bake.ts              # Which voxel faces a chunk shows, filled into pixels
     └── utils.ts             # cn() for class names
 viewer.html                  # Reference 3D viewer page (second Vite entry)
 src/viewer/

@@ -2,8 +2,9 @@
 
 A proof of concept that renders a 3D voxel world as a stack of cached 2D
 depth slices composited with CSS transforms. Slices get thicker with
-distance, so ~10 cached canvases cover 200 units of depth, and sideways
-camera movement never re-renders pixels.
+distance, but never so thick that they show more than a few pixels of what
+true perspective would hide; camera movement mostly just moves cached
+canvases.
 
 Live demo: <https://suprasummus.github.io/parallax-3d-world-ex/> (deployed from `main`).
 
