@@ -6,7 +6,7 @@ distance, but never so thick that they show more than a few pixels of what
 true perspective would hide; camera movement mostly just moves cached
 canvases.
 
-Live demo: <https://suprasummus.github.io/parallax-3d-world-ex/> (deployed from `main`).
+Live demo: <https://suprasummus.github.io/parallax-world/> (deployed from `main`).
 
 ## Quick start
 

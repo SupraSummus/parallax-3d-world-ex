@@ -4,8 +4,9 @@ import { resolve } from 'path'
 import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
-  // Served from https://<user>.github.io/parallax-3d-world-ex/
-  base: '/parallax-3d-world-ex/',
+  // Relative asset URLs, so the build works under any path
+  // (GitHub Pages serves it from /<repo-name>/).
+  base: './',
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {
