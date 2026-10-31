@@ -1,6 +1,3 @@
-/* eslint-disable @typescript-eslint/no-deprecated */
-// Phosphor icon names like ChartLine are deprecated in favor of ChartLineIcon,
-// but the Icon suffixed versions are not exported at package level
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { ParallaxRenderer, World, Camera, SessionStats, Layer, WorldType, WORLD_TYPES } from '@/lib/renderer'
 import { Card } from '@/components/ui/card'
@@ -10,17 +7,7 @@ import { Separator } from '@/components/ui/separator'
 import { Slider } from '@/components/ui/slider'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { LayerPreview } from '@/components/LayerPreview'
-import {
-  ArrowsOutCardinal,
-  ArrowClockwise,
-  Eye,
-  EyeSlash,
-  Cube,
-  ChartLine,
-  Crosshair,
-  Stack,
-  ClockCounterClockwise
-} from '@phosphor-icons/react'
+import { Box, ChartLine, Crosshair, Eye, EyeOff, History, Layers, Move, RefreshCw } from 'lucide-react'
 
 function App() {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -272,14 +259,14 @@ function App() {
               className="h-6 w-6 p-0"
               aria-label="Hide statistics"
             >
-              <EyeSlash size={16} />
+              <EyeOff size={16} />
             </Button>
           </div>
 
           <div className="space-y-3">
             <div>
               <div className="flex items-center gap-2 mb-2">
-                <ClockCounterClockwise size={16} className="text-muted-foreground" />
+                <History size={16} className="text-muted-foreground" />
                 <h3 className="text-sm font-semibold">Session Total</h3>
               </div>
               <div className="space-y-1.5 font-mono text-xs pl-6">
@@ -395,7 +382,7 @@ function App() {
 
       <Card className="absolute bottom-6 right-6 p-4 bg-card/90 backdrop-blur-sm pointer-events-auto w-72">
         <div className="flex items-center gap-2 mb-3">
-          <Cube className="text-primary" size={20} />
+          <Box className="text-primary" size={20} />
           <h2 className="font-bold text-lg">World</h2>
         </div>
 
@@ -422,7 +409,7 @@ function App() {
           className="w-full mb-3"
           variant="default"
         >
-          <ArrowClockwise size={16} className="mr-2" />
+          <RefreshCw size={16} className="mr-2" />
           Regenerate World
         </Button>
 
@@ -442,7 +429,7 @@ function App() {
             className="flex-1"
             variant="outline"
           >
-            {showLayers ? <EyeSlash size={16} className="mr-2" /> : <Stack size={16} className="mr-2" />}
+            {showLayers ? <EyeOff size={16} className="mr-2" /> : <Layers size={16} className="mr-2" />}
             {showLayers ? 'Hide' : 'Show'} Layers
           </Button>
         </div>
@@ -451,7 +438,7 @@ function App() {
 
         <div className="text-xs text-muted-foreground space-y-1">
           <div className="flex items-center gap-2">
-            <ArrowsOutCardinal size={14} />
+            <Move size={14} />
             <span>WASD - Move Horizontally</span>
           </div>
           <div className="flex items-center gap-2">
