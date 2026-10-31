@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import type { Layer } from '@/lib/renderer'
+import type { Chunk, Layer } from '@/lib/renderer'
 import { Card } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
@@ -12,6 +12,31 @@ interface LayerPreviewProps {
   onToggleVisibility: (depth: number) => void
 }
 
+/** Fits the chunks' world extent into the thumbnail, centred, sampling the nearest chunk pixel. */
+function drawThumbnail(chunks: Chunk[], out: Uint32Array, width: number, height: number) {
+  // World extent of the chunks; y grows upwards.
+  const left = Math.min(...chunks.map(c => c.originX))
+  const right = Math.max(...chunks.map(c => c.originX + c.width / c.scale))
+  const top = Math.max(...chunks.map(c => c.originY))
+  const bottom = Math.min(...chunks.map(c => c.originY - c.height / c.scale))
+  const fit = Math.min(width / (right - left), height / (top - bottom))
+  const offsetX = (width - (right - left) * fit) / 2
+  const offsetY = (height - (top - bottom) * fit) / 2
+  for (const c of chunks) {
+    // Chunk pixels per thumbnail pixel, and the chunk's corner in thumbnail pixels.
+    const k = c.scale / fit
+    const x0 = offsetX + (c.originX - left) * fit
+    const y0 = offsetY + (top - c.originY) * fit
+    for (let ty = Math.max(0, Math.ceil(y0 - 0.5)); ty < Math.min(height, y0 + c.height / k - 0.5); ty++) {
+      const row = Math.floor((ty + 0.5 - y0) * k) * c.width
+      for (let tx = Math.max(0, Math.ceil(x0 - 0.5)); tx < Math.min(width, x0 + c.width / k - 0.5); tx++) {
+        const pixel = c.pixels[row + Math.floor((tx + 0.5 - x0) * k)]
+        if (pixel) out[ty * width + tx] = pixel
+      }
+    }
+  }
+}
+
 interface LayerItemProps {
   layer: Layer
   onToggleVisibility: (depth: number) => void
@@ -21,32 +46,15 @@ function LayerItem({ layer, onToggleVisibility }: LayerItemProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   // Re-drawn when the set of chunks in view changes as the camera moves.
-  const chunkIds = layer.chunks.map(c => `${String(c.x)},${String(c.y)}`).join(' ')
+  const chunkIds = layer.chunks.map(c => [c.x, c.y, c.tanX, c.tanY].join(',')).join(' ')
   useEffect(() => {
     const thumb = canvasRef.current
     const ctx = thumb?.getContext('2d')
     if (!thumb || !ctx) return
-    ctx.clearRect(0, 0, thumb.width, thumb.height)
+    const image = ctx.createImageData(thumb.width, thumb.height)
     const { chunks } = layer
-    if (chunks.length === 0) return
-    // World extent of the chunks in view; y grows upwards.
-    const left = Math.min(...chunks.map(c => c.originX))
-    const right = Math.max(...chunks.map(c => c.originX + c.canvas.width / c.scale))
-    const top = Math.max(...chunks.map(c => c.originY))
-    const bottom = Math.min(...chunks.map(c => c.originY - c.canvas.height / c.scale))
-    // Fit into the thumbnail, centred.
-    const fit = Math.min(thumb.width / (right - left), thumb.height / (top - bottom))
-    const offsetX = (thumb.width - (right - left) * fit) / 2
-    const offsetY = (thumb.height - (top - bottom) * fit) / 2
-    for (const c of chunks) {
-      ctx.drawImage(
-        c.canvas,
-        offsetX + (c.originX - left) * fit,
-        offsetY + (top - c.originY) * fit,
-        (c.canvas.width / c.scale) * fit,
-        (c.canvas.height / c.scale) * fit,
-      )
-    }
+    if (chunks.length > 0) drawThumbnail(chunks, new Uint32Array(image.data.buffer), thumb.width, thumb.height)
+    ctx.putImageData(image, 0, 0)
   }, [layer, chunkIds])
 
   const depthRange = layer.size === 1

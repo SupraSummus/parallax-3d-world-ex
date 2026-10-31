@@ -31,7 +31,8 @@ src/
     ├── world.ts             # World: voxel grid, spawn, toy world types
     ├── forest.ts            # Forest scene generator (VOXEL_SIZE lives here)
     ├── slice-selection.ts   # Slices, chunks and baking directions (pure functions)
-    ├── renderer.ts          # Chunk rasterisation, caching, CSS compositing
+    ├── renderer.ts          # Chunk rasterisation, caching, screen placement (no DOM)
+    ├── compositor.ts        # Draws the renderer's frames with WebGL 2
     ├── bake.ts              # Which voxel faces a chunk shows, filled into pixels (no DOM)
     └── utils.ts             # cn() for class names
 viewer.html                  # Reference 3D viewer page (second Vite entry)

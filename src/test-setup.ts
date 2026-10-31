@@ -16,7 +16,9 @@ globalThis.ResizeObserver = vi.fn(function(this: ResizeObserver) {
 // scene makes millions of them.
 const noop = () => undefined
 
-HTMLCanvasElement.prototype.getContext = vi.fn(function() {
+// A 2D context only: jsdom has no WebGL, so the scene isn't drawn.
+HTMLCanvasElement.prototype.getContext = vi.fn(function(type: string) {
+  if (type !== '2d') return null
   return {
     fillStyle: '',
     strokeStyle: '',
@@ -38,7 +40,7 @@ HTMLCanvasElement.prototype.getContext = vi.fn(function() {
     rotate: noop,
     scale: noop,
     globalAlpha: 1,
-    // No pixels are kept, so rasterising costs no memory.
+    // No pixels are kept, so drawing costs no memory.
     createImageData: (width: number, height: number) => ({ width, height, data: new Uint8ClampedArray(0) }),
     putImageData: noop,
     canvas: document.createElement('canvas'),

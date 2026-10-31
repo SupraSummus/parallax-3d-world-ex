@@ -2,14 +2,14 @@
 
 The camera looks along +z and never rotates. The world is cut into z-slices,
 and each slice into aligned square chunks; each chunk in view is rasterised
-once, flat, as seen from a direction close to the camera's, into its own
-canvas, and the browser composites the canvases with per-slice perspective
-scale and parallax offset. Voxel (x, y, z) is the unit cube centred on
+once, flat, as seen from a direction close to the camera's, into a pixel
+buffer, and WebGL composites the buffers with per-slice perspective scale
+and parallax offset. Voxel (x, y, z) is the unit cube centred on
 (x, y, z).
 
 ```
-World (voxels) ──selectSlices──▶ slices ──chunks in view──▶ cached canvases ──CSS transform──▶ screen
-   world.ts               slice-selection.ts                     renderer.ts
+World (voxels) ──selectSlices──▶ slices ──chunks in view──▶ cached pixels ──Frame──▶ WebGL ──▶ screen
+   world.ts               slice-selection.ts                  renderer.ts          compositor.ts
 ```
 
 ## 1. Slice selection (`slice-selection.ts`)
@@ -172,68 +172,64 @@ the cell and its eight neighbours are walked one z at a time.
 pixels per world unit: 24 / s, between 2 and 10. A slice of size s ≥ 2
 lies at distance ≥ s · detail, where a voxel is at most focal / (s ·
 detail) ≈ 24 / s screen pixels with the defaults, so more pixels would not
-show. Other settings scale the canvas on screen.
+show. Other settings scale the chunk on screen.
 
-Each chunk canvas is cropped to what is drawn; `originX`/`originY` record
+Each chunk is cropped to what is drawn; `originX`/`originY` record
 the world position of its top-left corner on the centre plane. The image
 doesn't depend on the camera's position, so a chunk is drawn once when it
 first comes into view (with its direction) and is never redrawn.
 
-On the forest at 1280 × 800, 90°: 105 slices, ~1300 chunks, ~44 Mpx of
-canvases (straight-baked, unchunked slices: 141 slices, ~235 Mpx).
+On the forest at 1280 × 800, 90°: 105 slices, ~1100 chunks, ~38 Mpx
+(straight-baked, unchunked slices: 141 slices, ~235 Mpx).
 
-## 4. Compositing
+## 4. Compositing (`renderer.ts`, `compositor.ts`)
 
-Each chunk in view is a `<canvas>` in the container, and each slice has a
-full-screen fog `<div>` above its chunks; nearer slices get higher
-`z-index`. The container is its own stacking context (`isolate`) so the UI
-stays on top. For a slice at viewing distance d (to its centre), viewport
-W × H, focal length `focal = max(W, H) / 2 / tan(fov/2)` (pixels) and
-`transform-origin: 0 0`:
+`render()` returns a `Frame`: for each slice, near to far, where its
+chunks go on screen, and its fog. For a slice at viewing distance d (to
+its centre), viewport W × H in CSS pixels and focal length
+`focal = max(W, H) / 2 / tan(fov/2)` (pixels):
 
 ```
-scale = focal / d                                       (pixels per world unit)
+scale = focal / d                       (pixels per world unit)
 left  = W/2 + (originX − camera.x) · scale
 top   = H/2 − (originY − camera.y) · scale
-canvas transform: translate3d(left, top, 0) scale(scale / renderScale)
+size  = chunk pixels · scale / renderScale
 ```
 
-Only these style properties change as the camera moves, and chunks
-entering the view (or changing baking direction) are attached, and
-rasterised if new. The canvases are promoted to compositor layers
-(`will-change: transform`). Magnified canvases use
-`image-rendering: pixelated` to keep voxel edges crisp.
+The `Compositor` draws a frame onto one opaque WebGL 2 canvas, one
+textured rectangle per chunk, then the sky behind them. Chunk pixels are
+opaque or empty, so it draws near to far with a depth test and discards
+empty pixels: what nearer slices cover is rejected instead of blended
+(the forest stacks ~40 screens of chunks). A chunk's texture is uploaded
+when it comes into view and deleted when it leaves. Magnified chunks are
+sampled nearest, to keep voxel edges crisp; minified ones smoothly.
 
-**Fog.** A fog overlay tints everything behind it, so overlays compound.
-Walking near to far, an overlay at slice k gets opacity
-`1 − exp(−(d_k − d_prev) / F)`, where d_prev is the previous overlay's
-distance, once that reaches 5%; other slices get none. The accumulated fog
-over a slice at distance d is then `1 − exp(−d / F)` rounded down to the
-last step, regardless of how many slices there are. (One overlay per thin
-slice would be nearly transparent, and hundreds of 8-bit blends drift the
-colours.) The fog colour matches the sky gradient's horizon, which sits at
-eye level (screen centre). The fog distance F is 0.7 × the render distance,
-so the far cut-off stays hazy.
+**Fog.** A slice at distance d keeps `exp(−d / F)` of its own colour;
+the rest is the horizon colour, mixed in per pixel.
+F is 0.7 × the render distance, so the far cut-off stays hazy.
+The sky fades from blue at the top to the horizon colour at eye level
+(screen centre) and gets the fog of the render distance
+(or of the last slice, if farther).
 
 ## 5. Caching
 
 Slices are keyed by `depth:size` and hold their chunks keyed by corner.
 Insertion order of the slice `Map` is the LRU order. Slices and chunks that
-leave the view lose their DOM elements but stay cached so moving back
-reuses them: up to `MAX_CACHED_SLICES` = 64 slices, and hidden chunk
-canvases up to `MAX_HIDDEN_CHUNK_PIXELS` = 32 Mpx (oldest slices' first).
+leave the view lose their textures but stay cached so moving back
+reuses them: up to `MAX_CACHED_SLICES` = 64 slices, and hidden chunks
+up to `MAX_HIDDEN_CHUNK_PIXELS` = 32 Mpx (oldest slices' first).
 
 | Event | Effect |
 |---|---|
-| x/y movement | Chunks still in view reused unless their baking direction changes; chunks entering the view rasterised; transforms update |
+| x/y movement | Chunks still in view reused unless their baking direction changes; chunks entering the view rasterised; placements update |
 | field of view change | Focal length, hence detail and directions, change: slices still needed are reused, chunks rebaked |
 | leak tolerance change | Slices still needed are reused |
 | small z movement | Far slices reused; a few near slices re-tile |
-| resize | Slices reused unless the longer side crosses a quarter octave (detail changes); transforms update |
+| resize | Slices reused unless the longer side crosses a quarter octave (detail changes); placements update |
 | world regeneration | Whole cache cleared |
 
 Per-render stats (`UpdateStats`) report chunks reused vs rasterised, voxels
-rasterised and the pixels of all cached canvases; `SessionStats`
+rasterised and the pixels of all cached chunks; `SessionStats`
 accumulates them.
 
 ## 6. Worlds (`world.ts`, `forest.ts`)

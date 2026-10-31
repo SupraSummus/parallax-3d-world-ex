@@ -18,20 +18,21 @@ pnpm exec vitest -t "cache"     # filter by test name
 | `src/lib/world.test.ts` | Toy world types: determinism, bounds |
 | `src/lib/forest.test.ts` | Forest: determinism, coverage, voxel budget, tree heights in metres, clear spawn |
 | `src/viewer/mesh.test.ts` | Reference viewer mesh: face culling, coordinates, winding, shading |
-| `src/lib/renderer.test.ts` | Layer and chunk contents, culling to the view, baking directions, DOM z-order, perspective/parallax transforms, cache reuse and invalidation, stats (on a small world: the forest is slow in jsdom) |
-| `src/lib/renderer-regressions.test.ts` | Previously fixed rendering bugs, checked through a recording canvas context |
+| `src/lib/renderer.test.ts` | Layer and chunk contents, culling to the view, baking directions, frame order and fog, perspective/parallax placement, cache reuse and invalidation, stats (on a small world: the forest is slow in jsdom) |
+| `src/lib/renderer-regressions.test.ts` | Previously fixed rendering bugs, checked on chunk pixels and their placement |
 | `src/App.test.tsx` | UI panels and keyboard movement (with a stub forest, for speed) |
 
-`src/test-setup.ts` stubs what jsdom lacks: a no-op 2D canvas context,
+`src/test-setup.ts` stubs what jsdom lacks: a no-op 2D canvas context
+(no WebGL, so `compositor.ts` is only checked in the browser),
 `ResizeObserver`, and a timer-based `requestAnimationFrame`.
 
 ## Conventions
 
-- Assert observable behaviour (layer contents, CSS transforms, stats), not
+- Assert observable behaviour (layer contents, frames, stats), not
   private fields. Every test must be able to fail: no `expect(true)` or
   `toBeGreaterThanOrEqual(0)` placeholders.
-- jsdom does not rasterise canvases. To check what was drawn, install a
-  recording context as `renderer-regressions.test.ts` does.
+- To check what was drawn, read the chunks' pixels and placements, as
+  `renderer-regressions.test.ts` does.
 - Prefer one invariant test over a grid of inputs to many near-identical
   example tests. For a claim about all inputs, check it on seeded random
   samples (`forAll` in `leak-bound.test.ts`) so failures reproduce.

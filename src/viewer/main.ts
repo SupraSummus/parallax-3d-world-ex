@@ -6,9 +6,8 @@
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { World, WORLD_TYPES, type Vec3, type WorldType } from '@/lib/world'
-import {
-  DEFAULT_FOV, DEFAULT_RENDER_DISTANCE, FOG_PER_RENDER_DISTANCE, SKY_HORIZON, SKY_TOP, focalLength,
-} from '@/lib/renderer'
+import { DEFAULT_FOV, DEFAULT_RENDER_DISTANCE, FOG_PER_RENDER_DISTANCE, focalLength } from '@/lib/renderer'
+import { SKY_HORIZON, SKY_TOP } from '@/lib/compositor'
 import { buildVoxelMesh } from './mesh'
 
 const params = new URLSearchParams(location.search)

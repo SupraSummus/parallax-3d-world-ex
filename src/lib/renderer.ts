@@ -15,15 +15,38 @@ export interface Chunk {
    */
   tanX: number
   tanY: number
-  /** Cropped to the chunk's content; see originX/originY. */
-  canvas: HTMLCanvasElement
-  /** World x, y of the canvas's top-left corner. */
+  /** Size in pixels, cropped to the chunk's content; see originX/originY. */
+  width: number
+  height: number
+  /** RGBA, rows top to bottom; transparent where nothing is drawn. */
+  pixels: Uint32Array
+  /** World x, y of the top-left pixel's corner. */
   originX: number
   originY: number
-  /** Canvas pixels per world unit (see renderScale). */
+  /** Pixels per world unit (see renderScale). */
   scale: number
-  /** Number of voxel faces drawn on the canvas. */
+  /** Number of voxel faces drawn. */
   facesDrawn: number
+}
+
+/** Where a chunk lands on screen: its top-left corner, in CSS pixels, and screen pixels per chunk pixel. */
+export interface Placement {
+  chunk: Chunk
+  left: number
+  top: number
+  scale: number
+}
+
+/**
+ * What to draw, in CSS pixels. Layers go near to far; nearer ones hide what
+ * is behind them. `fog` is the share of the horizon colour mixed into a
+ * layer's pixels, and into the sky where no layer is drawn.
+ */
+export interface Frame {
+  width: number
+  height: number
+  fog: number
+  layers: { placements: Placement[]; fog: number }[]
 }
 
 export interface Layer {
@@ -51,7 +74,7 @@ export interface UpdateStats {
   voxelsRendered: number
   /** Percentage of chunks in view served from the cache. */
   cacheEfficiency: number
-  /** Pixels of all cached chunk canvases, in view or not. */
+  /** Pixels of all cached chunks, in view or not. */
   cachedPixels: number
 }
 
@@ -77,17 +100,17 @@ export function focalLength(fov: number, width: number, height: number): number 
 }
 
 // Pixels per world unit used when rasterising the nearest (size-1) slices.
-// Canvases are rendered camera-independently so they can be cached and
-// reused as the camera moves; perspective scaling is applied via a CSS
-// transform at composite time.
+// Chunks are rasterised camera-independently so they can be cached and
+// reused as the camera moves; perspective scaling is applied when
+// compositing.
 const RENDER_SCALE = 10
 
 /**
- * Canvas pixels per world unit for a slice of `size`: 24 / size, between 2
+ * Chunk pixels per world unit for a slice of `size`: 24 / size, between 2
  * and RENDER_SCALE. A slice of size s ≥ 2 lies at distance ≥ s · detail,
  * where a voxel is at most focal / (s · detail) screen pixels, about 24 / s
- * with the defaults; finer canvases would not show. Other settings just
- * scale the canvas on screen.
+ * with the defaults; finer chunks would not show. Other settings just
+ * scale the chunks on screen.
  */
 function renderScale(size: number): number {
   return Math.max(2, Math.min(RENDER_SCALE, Math.floor(24 / size)))
@@ -106,23 +129,15 @@ export const DEFAULT_RENDER_DISTANCE = 200
 export const MIN_RENDER_DISTANCE = 20
 export const MAX_RENDER_DISTANCE = 400
 
-// Slices and chunks outside the view are kept (without DOM elements) so that
-// moving back reuses them, up to these caps. What is in view is never evicted.
+// Slices and chunks outside the view are kept so that moving back reuses
+// them, up to these caps. What is in view is never evicted.
 const MAX_CACHED_SLICES = 64
 const MAX_HIDDEN_CHUNK_PIXELS = 32_000_000
 
-// Sky gradient; the horizon sits at eye level (screen centre).
-export const SKY_TOP = '#3f73b8'
-export const SKY_HORIZON = '#b9d3e8'
 // Exponential distance fog towards the horizon colour: at viewing distance d
 // a voxel keeps exp(-d / fogDistance) of its own colour. The fog distance
 // scales with the render distance so the far cut-off stays hazy.
-const FOG_RGB = '185, 211, 232'
 export const FOG_PER_RENDER_DISTANCE = 0.7
-// Minimum opacity of one fog overlay. Each overlay is blended in 8 bits, so
-// hundreds of nearly transparent overlays (one per thin slice) round every
-// channel differently and tint the scene; fewer, stronger steps don't.
-const MIN_FOG_STEP = 0.05
 
 function sliceKey(depth: number, size: number): string {
   return `${String(depth)}:${String(size)}`
@@ -136,7 +151,6 @@ interface Slice {
   palette: Uint32Array
   /** Keyed by chunkKey. */
   chunks: Map<string, Chunk>
-  fog: HTMLDivElement | null
 }
 
 function chunkKey(x: number, y: number, tanX: number, tanY: number): string {
@@ -144,27 +158,27 @@ function chunkKey(x: number, y: number, tanX: number, tanY: number): string {
 }
 
 /**
- * Renders a World as a stack of flat, cached slices composited by the
- * browser, each split into chunks so that only what is in view is
- * rasterised. See DESIGN.md for the slicing and caching scheme.
+ * Renders a World as a stack of flat, cached slices, each split into chunks
+ * so that only what is in view is rasterised. render() returns where each
+ * chunk goes on screen; drawing it is the compositor's job. See DESIGN.md
+ * for the slicing and caching scheme.
  */
 export class ParallaxRenderer {
-  private container: HTMLElement
   private world: World
   private camera: Camera
   private fov = DEFAULT_FOV
   private maxLeak = DEFAULT_MAX_LEAK
   private renderDistance = DEFAULT_RENDER_DISTANCE
-  private width: number
-  private height: number
+  private width = 0
+  private height = 0
 
   // Keyed by sliceKey(depth, size). Map insertion order doubles as LRU order
   // (oldest first).
   private slices = new Map<string, Slice>()
   // Slices of the most recent render, near to far.
   private visibleSlices: Slice[] = []
-  // Chunk canvases attached to the container, i.e. in view.
-  private attached = new Set<HTMLCanvasElement>()
+  // Chunks of the most recent render.
+  private inView = new Set<Chunk>()
 
   private stats: SessionStats = {
     totalUpdates: 0,
@@ -175,44 +189,38 @@ export class ParallaxRenderer {
     lastUpdate: null,
   }
 
-  constructor(container: HTMLElement, world: World) {
-    this.container = container
-    this.container.style.background = `linear-gradient(${SKY_TOP}, ${SKY_HORIZON} 50%)`
-    this.width = container.clientWidth
-    this.height = container.clientHeight
+  constructor(world: World) {
     this.world = world
     this.camera = { ...world.spawn }
   }
 
-  render() {
+  render(): Frame {
     const startTime = performance.now()
 
-    // Far to near, so nearer slices stack on top.
     const detail = this.getDetail()
     const step = directionStep(detail)
-    const boundaries = selectSlices(this.camera.z, NEAR_DEPTH, this.renderDistance, detail).reverse()
+    const boundaries = selectSlices(this.camera.z, NEAR_DEPTH, this.renderDistance, detail)
     const distances = boundaries.map(s => sliceCentre(s) - this.camera.z)
-    const fogAlphas = this.fogAlphas(distances)
     const focal = focalLength(this.fov, this.width, this.height)
 
     let chunksRegenerated = 0
     let chunksReused = 0
     let voxelsRendered = 0
-    const inView = new Set<HTMLCanvasElement>()
+    const inView = new Set<Chunk>()
     const slicesInView: Slice[] = []
+    const frame: Frame = {
+      width: this.width,
+      height: this.height,
+      // The last slice may reach past the render distance; the sky is behind it.
+      fog: this.fog(Math.max(this.renderDistance, ...distances)),
+      layers: distances.map(d => ({ placements: [], fog: this.fog(d) })),
+    }
 
     boundaries.forEach(({ depth, size }, index) => {
       const slice = this.getSlice(depth, size)
       slicesInView.push(slice)
       const { layer } = slice
       layer.chunks = []
-
-      const fog = slice.fog ?? this.createFog()
-      slice.fog = fog
-      fog.style.zIndex = String(index * 2 + 1)
-      // Fog stays even for hidden layers so the slices behind keep their haze.
-      fog.style.backgroundColor = `rgba(${FOG_RGB}, ${fogAlphas[index].toFixed(4)})`
-      fog.style.display = fogAlphas[index] > 0 ? '' : 'none'
       if (!layer.visible) return
 
       // Slices start at least NEAR_DEPTH ahead of the camera, so this is > 0.
@@ -244,26 +252,24 @@ export class ParallaxRenderer {
           }
           if (chunk.facesDrawn === 0) continue
           // The chunk's content, not just its cell, must reach the screen.
-          if (chunk.originX >= right || chunk.originX + chunk.canvas.width / chunk.scale <= left) continue
-          if (chunk.originY <= bottom || chunk.originY - chunk.canvas.height / chunk.scale >= top) continue
+          if (chunk.originX >= right || chunk.originX + chunk.width / chunk.scale <= left) continue
+          if (chunk.originY <= bottom || chunk.originY - chunk.height / chunk.scale >= top) continue
           if (cached) chunksReused++
           else chunksRegenerated++
           layer.chunks.push(chunk)
-          inView.add(chunk.canvas)
-          this.composite(chunk, index, scale)
+          inView.add(chunk)
+          frame.layers[index].placements.push({
+            chunk,
+            left: this.width / 2 + (chunk.originX - this.camera.x) * scale,
+            top: this.height / 2 - (chunk.originY - this.camera.y) * scale,
+            scale: scale / chunk.scale,
+          })
         }
       }
     })
 
-    for (const canvas of this.attached) {
-      if (!inView.has(canvas)) canvas.remove()
-    }
-    this.attached = inView
-    const stillVisible = new Set(slicesInView)
-    for (const slice of this.visibleSlices) {
-      if (!stillVisible.has(slice)) this.removeFog(slice)
-    }
-    this.visibleSlices = slicesInView.reverse()
+    this.inView = inView
+    this.visibleSlices = slicesInView
     this.evict()
 
     const chunkCount = chunksReused + chunksRegenerated
@@ -286,6 +292,7 @@ export class ParallaxRenderer {
       cacheEfficiency,
       cachedPixels: this.cachedPixels(() => true),
     }
+    return frame
   }
 
   getCamera(): Camera {
@@ -304,7 +311,7 @@ export class ParallaxRenderer {
     return { ...this.stats }
   }
 
-  /** Sets the viewport size. Cached chunks stay valid; call render() to reposition them. */
+  /** Sets the viewport size in CSS pixels. Cached chunks stay valid; call render() to reposition them. */
   resize(width: number, height: number) {
     this.width = width
     this.height = height
@@ -314,9 +321,7 @@ export class ParallaxRenderer {
   regenerateWorld(seed?: number, worldType?: WorldType) {
     this.world = new World(seed, worldType)
     this.camera = { ...this.world.spawn }
-    for (const canvas of this.attached) canvas.remove()
-    this.attached.clear()
-    for (const slice of this.visibleSlices) this.removeFog(slice)
+    this.inView.clear()
     this.visibleSlices = []
     this.slices.clear()
   }
@@ -373,24 +378,9 @@ export class ParallaxRenderer {
     if (layer) layer.visible = !layer.visible
   }
 
-  /**
-   * Overlay k tints slice k and everything behind it. Walking near to far,
-   * an overlay gets the fog of the depth interval since the previous overlay
-   * once that reaches MIN_FOG_STEP, so the accumulated fog at slice d is
-   * 1 - exp(-d / fogDistance), rounded down to the last step.
-   */
-  private fogAlphas(distances: number[]): number[] {
-    const fogDistance = this.renderDistance * FOG_PER_RENDER_DISTANCE
-    const alphas = distances.map(() => 0)
-    let foggedDistance = 0
-    for (let i = distances.length - 1; i >= 0; i--) {
-      const alpha = 1 - Math.exp(-(distances[i] - foggedDistance) / fogDistance)
-      if (alpha >= MIN_FOG_STEP) {
-        alphas[i] = alpha
-        foggedDistance = distances[i]
-      }
-    }
-    return alphas
+  /** Share of the fog colour at viewing distance d. */
+  private fog(d: number): number {
+    return 1 - Math.exp(-d / (this.renderDistance * FOG_PER_RENDER_DISTANCE))
   }
 
   /** Returns the cached slice, or indexes a new one by chunk cell. Nothing is rasterised yet. */
@@ -411,7 +401,6 @@ export class ParallaxRenderer {
       surface,
       palette: shadedPalette(grid.materials),
       chunks: new Map(),
-      fog: null,
     }
     this.slices.set(key, slice)
     return slice
@@ -435,65 +424,21 @@ export class ParallaxRenderer {
     const maxY = Math.min(faces.maxY, y0 + w - 0.5)
 
     const scale = renderScale(surface.size)
-    const canvas = document.createElement('canvas')
     const empty = maxX <= minX || maxY <= minY
-    canvas.width = empty ? 0 : Math.ceil((maxX - minX) * scale)
-    canvas.height = empty ? 0 : Math.ceil((maxY - minY) * scale)
-    Object.assign(canvas.style, {
-      position: 'absolute',
-      left: '0',
-      top: '0',
-      transformOrigin: '0 0',
-      willChange: 'transform',
-      pointerEvents: 'none',
-    })
-    const chunk: Chunk = { x: x0, y: y0, tanX, tanY, canvas, originX: minX, originY: maxY, scale, facesDrawn: 0 }
-    const ctx = empty ? null : canvas.getContext('2d')
-    if (!ctx) return chunk
-
+    const width = empty ? 0 : Math.ceil((maxX - minX) * scale)
+    const height = empty ? 0 : Math.ceil((maxY - minY) * scale)
+    const pixels = new Uint32Array(width * height)
     // Without antialiasing: magnified many times on screen, a soft 1-pixel
     // edge would become a wide blur.
-    const image = ctx.createImageData(canvas.width, canvas.height)
-    const pixels = new Uint32Array(image.data.buffer)
-    chunk.facesDrawn = fillFaces(faces, slice.palette, pixels, canvas.width, canvas.height, minX, maxY, scale)
-    ctx.putImageData(image, 0, 0)
-    return chunk
+    const facesDrawn = fillFaces(faces, slice.palette, pixels, width, height, minX, maxY, scale)
+    return { x: x0, y: y0, tanX, tanY, width, height, pixels, originX: minX, originY: maxY, scale, facesDrawn }
   }
 
-  private createFog(): HTMLDivElement {
-    const fog = document.createElement('div')
-    Object.assign(fog.style, { position: 'absolute', inset: '0', pointerEvents: 'none' })
-    this.container.append(fog)
-    return fog
-  }
-
-  private removeFog(slice: Slice) {
-    slice.fog?.remove()
-    slice.fog = null
-  }
-
-  /**
-   * Positions a cached chunk canvas for the current camera: scale for
-   * perspective and translate for parallax. Only CSS changes here, never
-   * pixels.
-   */
-  private composite(chunk: Chunk, stackIndex: number, scale: number) {
-    const { canvas } = chunk
-    if (canvas.parentNode !== this.container) this.container.append(canvas)
-    canvas.style.zIndex = String(stackIndex * 2)
-    const left = this.width / 2 + (chunk.originX - this.camera.x) * scale
-    const top = this.height / 2 - (chunk.originY - this.camera.y) * scale
-    canvas.style.transform =
-      `translate3d(${String(left)}px, ${String(top)}px, 0) scale(${String(scale / chunk.scale)})`
-    // Keep voxel edges crisp when magnified; smooth when minified.
-    canvas.style.imageRendering = scale > chunk.scale ? 'pixelated' : 'auto'
-  }
-
-  private cachedPixels(include: (canvas: HTMLCanvasElement) => boolean): number {
+  private cachedPixels(include: (chunk: Chunk) => boolean): number {
     let pixels = 0
     for (const slice of this.slices.values()) {
-      for (const { canvas } of slice.chunks.values()) {
-        if (include(canvas)) pixels += canvas.width * canvas.height
+      for (const chunk of slice.chunks.values()) {
+        if (include(chunk)) pixels += chunk.width * chunk.height
       }
     }
     return pixels
@@ -510,12 +455,12 @@ export class ParallaxRenderer {
       if (this.slices.size <= MAX_CACHED_SLICES) break
       if (!inView.has(slice)) this.slices.delete(key)
     }
-    let hidden = this.cachedPixels(canvas => !this.attached.has(canvas))
+    let hidden = this.cachedPixels(chunk => !this.inView.has(chunk))
     for (const slice of this.slices.values()) {
       if (hidden <= MAX_HIDDEN_CHUNK_PIXELS) return
-      for (const [key, { canvas }] of slice.chunks) {
-        if (this.attached.has(canvas)) continue
-        hidden -= canvas.width * canvas.height
+      for (const [key, chunk] of slice.chunks) {
+        if (this.inView.has(chunk)) continue
+        hidden -= chunk.width * chunk.height
         slice.chunks.delete(key)
       }
     }

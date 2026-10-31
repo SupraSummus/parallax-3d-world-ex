@@ -6,7 +6,7 @@ every frame. The demo exists to show (and measure) that idea.
 
 ## Goals
 
-- **Cheap camera movement.** Moving mostly changes CSS transforms; only
+- **Cheap camera movement.** Moving mostly redraws cached images; only
   chunks coming into view or changing baking direction are rasterised.
 - **Close to true perspective.** Nothing that perspective would hide shows
   by more than a set number of pixels.
@@ -48,7 +48,7 @@ per slice.
 
 **Statistics panel** – Session totals (updates, average render time, average
 cache efficiency, voxels rendered) and details of the last update (layers,
-slice detail, chunks in view reused vs rasterised, cached canvas pixels).
+slice detail, chunks in view reused vs rasterised, cached chunk pixels).
 
 ## Non-goals (for the POC)
 
@@ -62,7 +62,7 @@ slice detail, chunks in view reused vs rasterised, cached canvas pixels).
 - Generate geometry on demand (chunks) instead of one fixed world.
 - Port the toy worlds to the forest's metric scale, or drop them.
 - Move baking to a worker (`bake.ts` is DOM-free), later to Rust/WASM.
-- Composite with WebGL instead of one DOM canvas per chunk (~1300 on the
-  forest) and one fog overlay per slice; not measured on a real GPU yet.
+- Measure the WebGL compositor on real GPUs (headless Chromium only has a
+  software one); if draw calls matter, pack chunks into a texture atlas.
 - Paint cut cross-sections with the colour of the surface above them: a 2D
   prototype allowed slices twice as thick at the same leak.
