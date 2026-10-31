@@ -1,6 +1,6 @@
-import { selectSlices, leakFreeDetail, chunkWidth, directionStep, nearestDirection, sliceCentre } from './slice-selection'
-import { openFaces, bakedFaces, fillConvex, type SurfaceVoxel } from './bake'
-import { World, type Vec3, type Voxel, type WorldType } from './world'
+import { selectSlices, leakFreeDetail, directionStep, nearestDirection, sliceCentre } from './slice-selection'
+import { sliceSurface, chunkFaces, fillFaces, shadedPalette, type SliceSurface } from './bake'
+import { World, type Vec3, type WorldType } from './world'
 
 export type Camera = Vec3
 
@@ -31,8 +31,8 @@ export interface Layer {
   depth: number
   /** Thickness in z units; the slice holds voxels with z in [depth, depth + size). */
   size: number
-  /** All voxels in the slice (most are hidden behind nearer ones). */
-  voxels: Voxel[]
+  /** Number of voxels in the slice (most are hidden behind nearer ones). */
+  voxelCount: number
   /** Non-empty chunks in view in the most recent render. */
   chunks: Chunk[]
   visible: boolean
@@ -128,18 +128,12 @@ function sliceKey(depth: number, size: number): string {
   return `${String(depth)}:${String(size)}`
 }
 
-/** Packs integer x, y (|x|, |y| < 2^20) into one number. */
-function cellKey(x: number, y: number): number {
-  return (x + 1048576) * 2097152 + (y + 1048576)
-}
-
 /** A cached slice: its voxels grouped by chunk cell, and the chunks rasterised so far. */
 interface Slice {
   layer: Layer
-  /** Chunk width, see chunkWidth. */
-  width: number
-  /** Voxels with a face a baking ray can reach, by chunk cell (keyed by cellKey of the cell corner). */
-  cells: Map<number, SurfaceVoxel[]>
+  surface: SliceSurface
+  /** Pixel colours of the world's materials, see shadedPalette. */
+  palette: Uint32Array
   /** Keyed by chunkKey. */
   chunks: Map<string, Chunk>
   fog: HTMLDivElement | null
@@ -229,7 +223,7 @@ export class ParallaxRenderer {
       const right = this.camera.x + this.width / 2 / scale
       const bottom = this.camera.y - this.height / 2 / scale
       const top = this.camera.y + this.height / 2 / scale
-      const w = slice.width
+      const w = slice.surface.width
       // Voxel x covers [x - 0.5, x + 0.5], so chunk x0 covers [x0 - 0.5, x0 + w - 0.5).
       const firstX = Math.floor((left + 0.5) / w) * w
       const firstY = Math.floor((bottom + 0.5) / w) * w
@@ -242,9 +236,9 @@ export class ParallaxRenderer {
           let chunk = slice.chunks.get(key)
           const cached = chunk !== undefined
           if (!chunk) {
-            const voxels = this.voxelsNear(slice, x, y, tanX, tanY)
-            if (voxels.length === 0) continue
-            chunk = this.rasterise(slice, x, y, tanX, tanY, voxels)
+            const rasterised = this.rasterise(slice, x, y, tanX, tanY)
+            if (!rasterised) continue
+            chunk = rasterised
             slice.chunks.set(key, chunk)
             voxelsRendered += chunk.facesDrawn
           }
@@ -410,23 +404,12 @@ export class ParallaxRenderer {
       return cached
     }
 
-    const voxels = this.world.getVoxelsInZRange(depth, depth + size)
-    const width = chunkWidth(size)
-    const cells = new Map<number, SurfaceVoxel[]>()
-    const has = (x: number, y: number, z: number) => this.world.has(x, y, z)
-    for (const voxel of voxels) {
-      const open = openFaces(voxel, depth, has)
-      // Buried voxels have no face to draw.
-      if (open === 0) continue
-      const k = cellKey(Math.floor(voxel.x / width) * width, Math.floor(voxel.y / width) * width)
-      const list = cells.get(k)
-      if (list) list.push({ voxel, open })
-      else cells.set(k, [{ voxel, open }])
-    }
+    const { grid } = this.world
+    const surface = sliceSurface(grid, depth, size)
     const slice: Slice = {
-      layer: { depth, size, voxels, chunks: [], visible: true },
-      width,
-      cells,
+      layer: { depth, size, voxelCount: surface.voxelCount, chunks: [], visible: true },
+      surface,
+      palette: shadedPalette(grid.materials),
       chunks: new Map(),
       fog: null,
     }
@@ -435,62 +418,23 @@ export class ParallaxRenderer {
   }
 
   /**
-   * Voxels whose projection along (tanX, tanY, 1) can reach the cell at
-   * (x, y): within |tan|·s/2 + 1 of it. That is less than a cell width, so
-   * only the cell and its eight neighbours need looking at.
-   */
-  private voxelsNear(slice: Slice, x: number, y: number, tanX: number, tanY: number): SurfaceVoxel[] {
-    const w = slice.width
-    const marginX = (Math.abs(tanX) * slice.layer.size) / 2 + 1
-    const marginY = (Math.abs(tanY) * slice.layer.size) / 2 + 1
-    const result: SurfaceVoxel[] = []
-    for (let dx = -w; dx <= w; dx += w) {
-      for (let dy = -w; dy <= w; dy += w) {
-        const cell = slice.cells.get(cellKey(x + dx, y + dy))
-        if (!cell) continue
-        if (dx === 0 && dy === 0) {
-          result.push(...cell)
-          continue
-        }
-        for (const v of cell) {
-          const { x: vx, y: vy } = v.voxel
-          if (vx > x - 1 - marginX && vx < x + w + marginX && vy > y - 1 - marginY && vy < y + w + marginY) {
-            result.push(v)
-          }
-        }
-      }
-    }
-    return result
-  }
-
-  /**
    * Rasterises one chunk: the slice baked along (tanX, tanY, 1) onto its
    * centre plane (see bake.ts), clipped to the chunk's cell and cropped to
-   * what is drawn there.
+   * what is drawn there. Null if no face reaches the chunk.
    */
-  private rasterise(slice: Slice, x0: number, y0: number, tanX: number, tanY: number, voxels: SurfaceVoxel[]): Chunk {
-    const faces = bakedFaces(voxels, tanX, tanY, sliceCentre(slice.layer))
+  private rasterise(slice: Slice, x0: number, y0: number, tanX: number, tanY: number): Chunk | null {
+    const { surface } = slice
+    const faces = chunkFaces(surface, x0, y0, tanX, tanY)
+    if (faces.count === 0) return null
 
     // Drawn extent, clipped to the cell [x0 - 0.5, x0 + w - 0.5) × [y0 - 0.5, y0 + w - 0.5).
-    const w = slice.width
-    let minX = x0 + w - 0.5
-    let maxX = x0 - 0.5
-    let minY = y0 + w - 0.5
-    let maxY = y0 - 0.5
-    for (const { corners } of faces) {
-      for (const [px, py] of corners) {
-        minX = Math.min(minX, px)
-        maxX = Math.max(maxX, px)
-        minY = Math.min(minY, py)
-        maxY = Math.max(maxY, py)
-      }
-    }
-    minX = Math.max(minX, x0 - 0.5)
-    maxX = Math.min(maxX, x0 + w - 0.5)
-    minY = Math.max(minY, y0 - 0.5)
-    maxY = Math.min(maxY, y0 + w - 0.5)
+    const w = surface.width
+    const minX = Math.max(faces.minX, x0 - 0.5)
+    const maxX = Math.min(faces.maxX, x0 + w - 0.5)
+    const minY = Math.max(faces.minY, y0 - 0.5)
+    const maxY = Math.min(faces.maxY, y0 + w - 0.5)
 
-    const scale = renderScale(slice.layer.size)
+    const scale = renderScale(surface.size)
     const canvas = document.createElement('canvas')
     const empty = maxX <= minX || maxY <= minY
     canvas.width = empty ? 0 : Math.ceil((maxX - minX) * scale)
@@ -511,10 +455,7 @@ export class ParallaxRenderer {
     // edge would become a wide blur.
     const image = ctx.createImageData(canvas.width, canvas.height)
     const pixels = new Uint32Array(image.data.buffer)
-    for (const { voxel, shade, corners } of faces) {
-      const points = corners.map(([px, py]): [number, number] => [(px - minX) * scale, (maxY - py) * scale])
-      if (fillConvex(pixels, canvas.width, canvas.height, points, pixelColor(voxel.color, shade))) chunk.facesDrawn++
-    }
+    chunk.facesDrawn = fillFaces(faces, slice.palette, pixels, canvas.width, canvas.height, minX, maxY, scale)
     ctx.putImageData(image, 0, 0)
     return chunk
   }
@@ -579,18 +520,4 @@ export class ParallaxRenderer {
       }
     }
   }
-}
-
-const pixelColors = new Map<string, number>()
-
-/** A '#rrggbb' colour scaled by `shade`, as an opaque RGBA pixel (little-endian Uint32). */
-function pixelColor(color: string, shade: number): number {
-  const key = `${color}:${String(shade)}`
-  let result = pixelColors.get(key)
-  if (result === undefined) {
-    const [r, g, b] = [1, 3, 5].map(i => Math.round(parseInt(color.slice(i, i + 2), 16) * shade))
-    result = ((255 << 24) | (b << 16) | (g << 8) | r) >>> 0
-    pixelColors.set(key, result)
-  }
-  return result
 }

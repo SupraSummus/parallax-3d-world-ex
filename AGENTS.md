@@ -27,11 +27,12 @@ src/
 │   ├── LayerPreview.tsx     # Layers panel
 │   └── ui/                  # shadcn/ui primitives (generated; CLI config in components.json)
 └── lib/
-    ├── world.ts             # World: voxel list, indexes, toy world types
+    ├── voxel-grid.ts        # Dense voxel storage (typed arrays)
+    ├── world.ts             # World: voxel grid, spawn, toy world types
     ├── forest.ts            # Forest scene generator (VOXEL_SIZE lives here)
     ├── slice-selection.ts   # Slices, chunks and baking directions (pure functions)
     ├── renderer.ts          # Chunk rasterisation, caching, CSS compositing
-    ├── bake.ts              # Which voxel faces a chunk shows, filled into pixels
+    ├── bake.ts              # Which voxel faces a chunk shows, filled into pixels (no DOM)
     └── utils.ts             # cn() for class names
 viewer.html                  # Reference 3D viewer page (second Vite entry)
 src/viewer/

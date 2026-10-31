@@ -35,8 +35,8 @@ import {
   selectSlices, leakFreeDetail, bakeAngleError, directionStep, chunkWidth, nearestDirection, sliceCentre, bake,
   type SliceBoundary,
 } from './slice-selection'
-import { bakedFaces, openFaces } from './bake'
-import type { Voxel } from './world'
+import { sliceSurface, chunkFaces, FACE, RECORD } from './bake'
+import { VoxelGrid } from './voxel-grid'
 
 /** Seeded uniform samples in [lo, hi). */
 function sampler(seed: number) {
@@ -270,32 +270,31 @@ describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', T
   /** dirStep 0 bakes every chunk straight along z. */
   function parallaxOwners(cells: Cell[], cu: number, cz: number, slices: SliceBoundary[], dirStep: number): number[] {
     // The renderer's own face logic, on voxels (u, 0, z).
-    const voxels: Voxel[] = cells.map(({ u, z }) => ({ x: u, y: 0, z, color: '', type: 0 }))
-    const index = new Map(voxels.map((v, cell) => [v, cell]))
-    const occupied = new Set(cells.map(({ u, z }) => `${String(u)},${String(z)}`))
-    const has = (x: number, y: number, z: number) => y === 0 && occupied.has(`${String(x)},${String(z)}`)
+    const grid = VoxelGrid.fromVoxels(cells.map(({ u, z }) => ({ x: u, y: 0, z, color: '#808080', type: 3 })))
+    const cellAt = new Map(cells.map(({ u, z }, cell) => [`${String(u)},${String(z)}`, cell]))
     const owner = rays.map(() => -1)
     for (const slice of [...slices].reverse()) {
       const centre = sliceCentre(slice)
       const distance = centre - cz
       const w = chunkWidth(slice.size)
-      const inSlice = voxels
-        .filter(v => v.z >= slice.depth && v.z < slice.depth + slice.size)
-        .map(voxel => ({ voxel, open: openFaces(voxel, slice.depth, has) }))
-      const chunkCells = new Set(inSlice.flatMap(({ voxel }) => {
-        const x0 = Math.floor(voxel.x / w) * w
+      const surface = sliceSurface(grid, slice.depth, slice.size)
+      const chunkCells = new Set(cells.filter(({ z }) => z >= slice.depth && z < slice.depth + slice.size).flatMap(({ u }) => {
+        const x0 = Math.floor(u / w) * w
         return [x0 - w, x0, x0 + w]
       }))
       for (const x0 of chunkCells) {
         const tan = dirStep === 0 ? 0 : nearestDirection((x0 + w / 2 - 0.5 - cu) / distance, dirStep)
-        for (const { voxel, corners } of bakedFaces(inSlice, tan, 0, centre)) {
+        const { data, count } = chunkFaces(surface, x0, 0, tan, 0)
+        for (let f = 0; f < count; f++) {
+          const record = data[f * FACE + 9] * RECORD
+          const cell = cellAt.get(`${String(surface.records[record])},${String(surface.records[record + 2])}`) ?? -1
           // Clipped to the chunk's cell, then drawn at the centre plane's distance.
-          const xs = corners.map(c => c[0])
+          const xs = [0, 2, 4, 6].map(k => data[f * FACE + k])
           const from = Math.max(x0 - 0.5, Math.min(...xs))
           const to = Math.min(x0 + w - 0.5, Math.max(...xs))
           const first = Math.ceil(((from - cu) / distance + TAN_HALF_FOV) / step)
           const last = Math.floor(((to - cu) / distance + TAN_HALF_FOV) / step)
-          for (let i = Math.max(0, first); i <= Math.min(RAYS - 1, last); i++) owner[i] = index.get(voxel) ?? -1
+          for (let i = Math.max(0, first); i <= Math.min(RAYS - 1, last); i++) owner[i] = cell
         }
       }
     }

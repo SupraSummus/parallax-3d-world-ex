@@ -60,10 +60,8 @@ slice detail, chunks in view reused vs rasterised, cached canvas pixels).
 
 - Throttle or budget slice regeneration during fast forward movement.
 - Generate geometry on demand (chunks) instead of one fixed world.
-- Store worlds in typed arrays instead of one object per voxel
-  (the forest has ~700k).
 - Port the toy worlds to the forest's metric scale, or drop them.
-- Move rasterisation to a worker or WebAssembly if it becomes the bottleneck.
+- Move baking to a worker (`bake.ts` is DOM-free), later to Rust/WASM.
 - Composite with WebGL instead of one DOM canvas per chunk (~1300 on the
   forest) and one fog overlay per slice; not measured on a real GPU yet.
 - Paint cut cross-sections with the colour of the surface above them: a 2D

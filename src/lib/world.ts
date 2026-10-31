@@ -1,12 +1,5 @@
 import { generateForest } from './forest'
-
-export interface Voxel {
-  x: number
-  y: number
-  z: number
-  color: string
-  type: number
-}
+import { VoxelGrid, type Material, type Voxel } from './voxel-grid'
 
 export interface Vec3 {
   x: number
@@ -24,11 +17,6 @@ export const WORLD_TYPES: { value: WorldType; label: string }[] = [
   { value: 'lake_with_island', label: 'Lake with Island' },
 ]
 
-export interface Material {
-  color: string
-  type: number
-}
-
 // `type` ids: 1 grass, 2 dirt, 3 stone, 4 wood, 5 leaves, 6 flower, 7 snow, 8 water, 9 sand
 const GRASS: Material = { color: '#4CAF50', type: 1 }
 const DIRT: Material = { color: '#8B4513', type: 2 }
@@ -42,18 +30,18 @@ const HALF_SIZE = 40
 /** Every column is filled from this y up to its surface. */
 const BEDROCK_Y = -5
 
-/** Packs integer coordinates in [-512, 512) into one number. */
-function cellKey(x: number, y: number, z: number): number {
-  return ((x + 512) * 1024 + (y + 512)) * 1024 + (z + 512)
-}
-
 /** A procedurally generated voxel world. */
 export class World {
-  voxels: Voxel[] = []
   readonly seed: number
   readonly worldType: WorldType
   /** Where the camera starts. */
   readonly spawn: Readonly<Vec3>
+
+  private store: VoxelGrid
+  // Voxels as a list, built from the grid on first use.
+  private list: Voxel[] | null = null
+  // Toy world voxels while generating.
+  private generated: Voxel[] = []
 
   constructor(seed: number = Date.now(), worldType: WorldType = 'forest') {
     this.seed = seed
@@ -61,7 +49,7 @@ export class World {
 
     if (worldType === 'forest') {
       const forest = generateForest(seed)
-      this.voxels = forest.voxels
+      this.store = forest.grid
       this.spawn = forest.spawn
       return
     }
@@ -73,41 +61,29 @@ export class World {
         this.generateColumn(x, z)
       }
     }
+    this.store = VoxelGrid.fromVoxels(this.generated)
+    this.generated = []
   }
 
-  // Lookup indexes, built on first query (so `voxels` may be replaced before
-  // the world is first rendered, as tests do).
-  private index: { byZ: Map<number, Voxel[]>; occupied: Set<number> } | null = null
-
-  private getIndex() {
-    if (!this.index) {
-      const byZ = new Map<number, Voxel[]>()
-      const occupied = new Set<number>()
-      for (const v of this.voxels) {
-        const column = byZ.get(v.z)
-        if (column) column.push(v)
-        else byZ.set(v.z, [v])
-        occupied.add(cellKey(v.x, v.y, v.z))
-      }
-      this.index = { byZ, occupied }
-    }
-    return this.index
+  /** The voxels as stored, the form the renderer reads. */
+  get grid(): VoxelGrid {
+    return this.store
   }
 
-  /** Voxels with integer world z in [minZ, maxZ). */
-  getVoxelsInZRange(minZ: number, maxZ: number): Voxel[] {
-    const { byZ } = this.getIndex()
-    const result: Voxel[] = []
-    for (let z = Math.ceil(minZ); z < maxZ; z++) {
-      const slice = byZ.get(z)
-      if (slice) result.push(...slice)
-    }
-    return result
+  /** The voxels as a list, ordered by z, y, x. Assigning replaces the world's contents (tests build worlds this way). */
+  get voxels(): Voxel[] {
+    this.list ??= this.store.toVoxels()
+    return this.list
+  }
+
+  set voxels(voxels: Voxel[]) {
+    this.store = VoxelGrid.fromVoxels(voxels)
+    this.list = null
   }
 
   /** Whether a voxel occupies the given integer cell. */
   has(x: number, y: number, z: number): boolean {
-    return this.getIndex().occupied.has(cellKey(x, y, z))
+    return this.store.get(x, y, z) !== 0
   }
 
   /** Deterministic hash noise in [0, 1). */
@@ -127,7 +103,7 @@ export class World {
   }
 
   private push(x: number, y: number, z: number, material: Material) {
-    this.voxels.push({ x, y, z, color: material.color, type: material.type })
+    this.generated.push({ x, y, z, color: material.color, type: material.type })
   }
 
   /** Fills a column from bedrock to `top`: surface block, 2 subsoil blocks, rock below. */
