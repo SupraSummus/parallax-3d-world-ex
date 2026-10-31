@@ -21,32 +21,31 @@ function LayerItem({ layer, onToggleVisibility }: LayerItemProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
-    const canvas = canvasRef.current
-    if (!canvas) return
-
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-    const scale = 0.1
-
-    canvas.width = layer.canvas.width * scale
-    canvas.height = layer.canvas.height * scale
-
-    ctx.drawImage(layer.canvas, 0, 0, canvas.width, canvas.height)
+    const thumb = canvasRef.current
+    const ctx = thumb?.getContext('2d')
+    if (!thumb || !ctx) return
+    ctx.clearRect(0, 0, thumb.width, thumb.height)
+    const { width, height } = layer.canvas
+    if (width === 0 || height === 0) return
+    // Fit the (cropped) layer canvas into the thumbnail, centred.
+    const fit = Math.min(thumb.width / width, thumb.height / height)
+    const w = width * fit
+    const h = height * fit
+    ctx.drawImage(layer.canvas, (thumb.width - w) / 2, (thumb.height - h) / 2, w, h)
   }, [layer.canvas])
 
   const depthRange = layer.size === 1
     ? String(layer.depth)
-    : `${String(layer.depth)}–${String(layer.depth + layer.size - 1)}`
+    : `${String(layer.depth)}..${String(layer.depth + layer.size - 1)}`
 
   return (
     <div className="flex items-center gap-2 p-1.5 rounded-md bg-muted/30 hover:bg-muted/50 transition-colors">
       <canvas
         ref={canvasRef}
+        width={144}
+        height={96}
         className="rounded border border-border w-[72px] h-12 bg-background/50 flex-shrink-0"
-        style={{
-          imageRendering: 'pixelated',
-          opacity: layer.visible ? 1 : 0.3
-        }}
+        style={{ opacity: layer.visible ? 1 : 0.3 }}
       />
 
       <div className="flex-1 min-w-0">
@@ -75,31 +74,36 @@ function LayerItem({ layer, onToggleVisibility }: LayerItemProps) {
 }
 
 export function LayerPreview({ layers, onToggleVisibility }: LayerPreviewProps) {
-  const visibleCount = layers.filter(l => l.visible).length
-  const totalCount = layers.length
+  // Slices with nothing to draw (e.g. between the camera and the world) only add noise.
+  const drawn = layers.filter(l => l.facesDrawn > 0)
+  const emptyCount = layers.length - drawn.length
+  const visibleCount = drawn.filter(l => l.visible).length
 
   return (
-    <Card className="bg-card/90 backdrop-blur-sm w-72 flex flex-col max-h-[calc(100vh-48px)] gap-0 py-0 overflow-hidden">
+    <Card className="pointer-events-auto flex min-h-0 flex-col gap-0 overflow-hidden bg-card/80 py-0 backdrop-blur-md">
       <div className="px-3 py-2 flex items-center justify-between gap-2">
         <div className="flex items-center gap-2 min-w-0">
-          <Layers className="text-primary flex-shrink-0" size={18} />
-          <h2 className="font-bold text-base">Layers</h2>
+          <Layers className="text-primary flex-shrink-0" size={16} />
+          <h2 className="text-sm font-semibold">Layers</h2>
         </div>
-        <Badge variant="secondary" className="font-mono text-xs flex-shrink-0">
-          {visibleCount}/{totalCount}
-        </Badge>
+        <div className="flex items-center gap-2 font-mono text-xs text-muted-foreground">
+          {emptyCount > 0 && <span>+{emptyCount} empty</span>}
+          <Badge variant="secondary" className="font-mono text-xs flex-shrink-0">
+            {visibleCount}/{drawn.length}
+          </Badge>
+        </div>
       </div>
 
       <Separator />
 
       <ScrollArea className="flex-1 min-h-0">
         <div className="p-2 space-y-1">
-          {layers.length === 0 ? (
+          {drawn.length === 0 ? (
             <div className="text-center py-8 text-muted-foreground text-sm">
-              No layers rendered yet
+              Nothing in view
             </div>
           ) : (
-            layers.map(layer => (
+            drawn.map(layer => (
               <LayerItem
                 key={layer.depth}
                 layer={layer}

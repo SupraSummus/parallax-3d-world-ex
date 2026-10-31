@@ -15,9 +15,8 @@ Two mechanisms, so that slices are both cacheable and adapted to the camera.
 
 ### World availability (camera-independent)
 
-Valid sizes form a geometric progression `1, m, m², …` (rounded, capped at
-64) where `m` is the depth multiplier (default 2). A
-slice of size N may only start at depth z with `z % N == 0`:
+Slice sizes are powers of two up to 64. A slice of size N may only start at
+depth z with `z % N == 0`:
 
 ```
 z=0  → every size
@@ -29,14 +28,32 @@ z=6  → 1, 2
 the largest aligned size if none is big enough. Alignment means a given
 `(depth, size)` slice always contains the same voxels, wherever the camera is.
 
+Sizes must nest (each divides the next) for alignment to work: with
+non-power sizes such as 1, 2, 3, 5, 8, … few sizes are aligned at any depth
+and the walk jumps to huge slices.
+
 ### Camera selection (camera-dependent)
 
-`selectSlices(cameraZ, near, far)` walks from `cameraZ + near` to
+`selectSlices(cameraZ, near, far, detail)` walks from `cameraZ + near` to
 `cameraZ + far`. At each step it requests `minSize` = the largest power of
-`m` ≤ viewing distance, takes what the world provides, and continues from the
-end of that slice. The result tiles the range with no gaps or overlaps.
+two ≤ viewing distance / detail, takes what the world provides, and
+continues from the end of that slice. The result tiles the range with no
+gaps or overlaps.
 
-Camera at z=0, range 1–200 (multiplier 2):
+**Detail** (default 4, adjustable 1–16 in the UI) trades slice count for
+accuracy: each slice is drawn at the scale of its centre, so a slice as
+thick as its distance (detail 1) flattens everything inside it into a wall,
+while detail 4 keeps slices at most a quarter of their distance thick.
+Changing detail keeps the cache: slices are keyed by depth and size only.
+
+| Detail | Max slices (range 200) |
+|---|---|
+| 1 | 14 |
+| 2 | 20 |
+| 4 | 30 |
+| 8 | 47 |
+
+Camera at z=0, range 1–200, detail 1:
 
 | Viewing dist | minSize | Depth | Aligned sizes | Size |
 |---|---|---|---|---|
@@ -67,31 +84,48 @@ Camera at z=-67: alignment forces some slices smaller than requested
 | 131 | 64 | 64 | 1–64 | 64 |
 | 195 | 64 | 128 | 1–64 | 64 |
 
-Covering distance n takes O(log n) slices (~10 for 200 units).
+Covering distance n takes O(detail · log n) slices.
 
 ## 2. Rasterisation (`renderer.ts`)
 
-A slice's canvas is viewport-sized and drawn at a fixed `RENDER_SCALE`
-(pixels per world unit) with the world origin at the canvas centre. Voxels
-are orthographic squares, painted back to front within the slice. Because
-the image doesn't depend on the camera, a canvas is drawn once when its
-slice first appears and is never redrawn.
+A slice is drawn orthographically at a fixed `RENDER_SCALE` (pixels per
+world unit). Within one slice every voxel at the same (x, y) lands on the
+same square, so only the nearest one is drawn: a slice of ~70k voxels
+becomes a few thousand squares. The canvas is cropped to the slice's x/y
+extent; `originX`/`originY` record the world position of its top-left
+corner (voxel (x, y) covers [x ± 0.5] × [y ± 0.5]).
+
+Each square gets a darker bottom/right edge (voxel outlines) and, when the
+cell above is empty in the world, a lighter top edge.
+
+Because the image doesn't depend on the camera or the viewport, a canvas is
+drawn once when its slice first appears and is never redrawn.
 
 ## 3. Compositing
 
-Each visible slice is a `<canvas>` in the container, followed by a fog
-`<div>` whose opacity grows with distance. Nearer slices get higher
-`z-index`. For viewing distance d (to the slice centre) and focal length
-`PROJECTION_SCALE_FACTOR`:
+Each visible slice is a `<canvas>` in the container, followed by a
+full-screen fog `<div>`; nearer slices get higher `z-index`. The container
+is its own stacking context (`isolate`) so the UI stays on top. For viewing
+distance d (to the slice centre), focal length `PROJECTION_SCALE_FACTOR` and
+viewport W × H, with `transform-origin: 0 0`:
 
 ```
-scale  = PROJECTION_SCALE_FACTOR / d          (pixels per world unit)
-canvas transform: translate3d(-camera.x·scale, camera.y·scale, 0) scale(scale / RENDER_SCALE)
+scale = PROJECTION_SCALE_FACTOR / d                     (pixels per world unit)
+left  = W/2 + (originX − camera.x) · scale
+top   = H/2 − (originY − camera.y) · scale
+canvas transform: translate3d(left, top, 0) scale(scale / RENDER_SCALE)
 ```
 
 Only these style properties change as the camera moves; the canvases are
 promoted to compositor layers (`will-change: transform`), so x/y movement
-costs no rasterisation at all.
+costs no rasterisation at all. Magnified canvases use
+`image-rendering: pixelated` to keep voxel edges crisp.
+
+**Fog.** A fog overlay tints everything behind it, so overlays compound.
+Overlay k gets opacity `1 − exp(−(d_k − d_{k−1}) / FOG_DISTANCE)`, which
+makes the accumulated fog over slice k exactly `1 − exp(−d_k / FOG_DISTANCE)`
+regardless of how many slices there are. The fog colour matches the sky
+gradient's horizon, which sits at eye level (screen centre).
 
 ## 4. Caching
 
@@ -103,15 +137,18 @@ order. Slices that leave the view lose their DOM elements but stay cached
 |---|---|
 | x/y movement | All layers reused; transforms update |
 | small z movement | Far slices reused; a few near slices re-tile |
-| world regeneration, resize, multiplier change | Whole cache cleared |
+| resize | All layers reused; transforms update |
+| detail change | Slices still needed are reused |
+| world regeneration | Whole cache cleared |
 
 Per-render stats (`UpdateStats`) report layers reused vs regenerated and
 voxels rasterised; `SessionStats` accumulates them.
 
 ## Limitations
 
-- Each slice is drawn at the scale of its centre, so thick slices are only
-  approximately in perspective. Slices are thick only far away, where the
-  error is small relative to their size on screen.
-- Only voxel fronts are drawn; tops and sides between slices are not.
+- Each slice is drawn at the scale of its centre, so a slice is only
+  approximately in perspective; the error grows with thickness / distance,
+  i.e. shrinks with detail.
+- Only voxel fronts are drawn; tops and sides between slices are not, so
+  the world's edge facing the camera shows as a cross-section.
 - Near slices are heavily upscaled from `RENDER_SCALE`.

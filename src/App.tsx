@@ -1,10 +1,9 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, type ReactNode } from 'react'
 import { ParallaxRenderer, DEFAULT_CAMERA, type Camera, type Layer, type SessionStats } from '@/lib/renderer'
 import { World, WORLD_TYPES, type WorldType } from '@/lib/world'
-import { DEFAULT_DEPTH_MULTIPLIER, MAX_DEPTH_MULTIPLIER, MIN_DEPTH_MULTIPLIER } from '@/lib/slice-selection'
+import { DEFAULT_DETAIL, MAX_DETAIL, MIN_DETAIL } from '@/lib/slice-selection'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { Slider } from '@/components/ui/slider'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -32,7 +31,7 @@ function App() {
   const [layers, setLayers] = useState<Layer[]>([])
   const [moveSpeed, setMoveSpeed] = useState(0.5)
   const [worldType, setWorldType] = useState<WorldType>('forest')
-  const [depthMultiplier, setDepthMultiplier] = useState(DEFAULT_DEPTH_MULTIPLIER)
+  const [detail, setDetail] = useState(DEFAULT_DETAIL)
 
   // Read from the movement loop without restarting it.
   const moveSpeedRef = useRef(moveSpeed)
@@ -138,9 +137,9 @@ function App() {
     requestRender()
   }
 
-  const handleDepthMultiplierChange = ([value]: number[]) => {
-    setDepthMultiplier(value)
-    rendererRef.current?.setDepthMultiplier(value)
+  const handleDetailChange = ([value]: number[]) => {
+    setDetail(value)
+    rendererRef.current?.setDetail(value)
     requestRender()
   }
 
@@ -152,240 +151,175 @@ function App() {
     : '0.00'
 
   return (
-    <div className="relative w-screen h-screen overflow-hidden bg-background">
-      <div
-        ref={containerRef}
-        className="absolute inset-0 overflow-hidden"
-      />
+    <div className="relative h-screen w-screen overflow-hidden bg-background text-foreground">
+      {/* `isolate` keeps the layer canvases' z-indices below the UI panels. */}
+      <div ref={containerRef} className="absolute inset-0 isolate overflow-hidden" />
 
-      <div className="absolute top-6 left-6 pointer-events-none">
-        <h1 className="text-4xl font-bold font-mono text-primary tracking-tight">
-          PARALLAX ENGINE
-        </h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Event-Driven 2.5D Rendering
-        </p>
+      <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
+        <Crosshair size={20} className="text-white/60" />
       </div>
 
-      {showStats && (
-        <Card className="absolute top-6 right-6 p-4 bg-card/90 backdrop-blur-sm pointer-events-auto w-80">
-          <div className="flex items-center justify-between mb-3">
-            <div className="flex items-center gap-2">
-              <ChartLine className="text-primary" size={20} />
-              <h2 className="font-bold text-lg">Render Statistics</h2>
-            </div>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => { setShowStats(false) }}
-              className="h-6 w-6 p-0"
-              aria-label="Hide statistics"
-            >
-              <EyeOff size={16} />
-            </Button>
-          </div>
+      <div className="pointer-events-none absolute inset-0 flex justify-between gap-4 p-4">
+        <aside className="flex w-72 min-h-0 flex-col gap-3 overflow-y-auto">
+          <header className="px-1">
+            <h1 className="font-mono text-2xl font-bold tracking-tight text-white drop-shadow">PARALLAX ENGINE</h1>
+            <p className="text-xs text-white/80 drop-shadow">Event-driven 2.5D voxel rendering</p>
+          </header>
 
-          <div className="space-y-3">
-            <div>
-              <div className="flex items-center gap-2 mb-2">
-                <History size={16} className="text-muted-foreground" />
-                <h3 className="text-sm font-semibold">Session Total</h3>
-              </div>
-              <div className="space-y-1.5 font-mono text-xs pl-6">
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Total Updates</span>
-                  <span className="text-primary font-bold">{totalUpdates}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Avg Render Time</span>
-                  <span className="text-foreground">{avgRenderTime}ms</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Avg Cache Efficiency</span>
-                  <Badge variant={averageCacheEfficiency > 70 ? 'default' : 'secondary'}>
-                    {averageCacheEfficiency.toFixed(1)}%
-                  </Badge>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Total Voxels</span>
-                  <span className="text-foreground">{(sessionStats?.totalVoxelsRendered ?? 0).toLocaleString()}</span>
-                </div>
-              </div>
-            </div>
-
-            {lastUpdate && (
-              <>
-                <Separator />
-                <div>
-                  <h3 className="text-sm font-semibold mb-2">Last Update</h3>
-                  <div className="space-y-1.5 font-mono text-xs">
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Render Time</span>
-                      <span className="text-foreground">{lastUpdate.renderTime.toFixed(2)}ms</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Active Layers</span>
-                      <span className="text-primary">{lastUpdate.layerCount}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Reused / Regenerated</span>
-                      <span className="text-foreground">
-                        <span className="text-accent">{lastUpdate.layersReused}</span> / <span className="text-destructive">{lastUpdate.layersRegenerated}</span>
-                      </span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Cache Efficiency</span>
-                      <Badge variant={lastUpdate.cacheEfficiency > 70 ? 'default' : 'secondary'}>
-                        {lastUpdate.cacheEfficiency.toFixed(1)}%
-                      </Badge>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-muted-foreground">Voxels Rendered</span>
-                      <span className="text-foreground">{lastUpdate.voxelsRendered.toLocaleString()}</span>
-                    </div>
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-        </Card>
-      )}
-
-      <Card className="absolute bottom-6 left-6 p-4 bg-card/90 backdrop-blur-sm pointer-events-auto w-72">
-        <div className="flex items-center gap-2 mb-3">
-          <Crosshair className="text-primary" size={20} />
-          <h2 className="font-bold text-lg">Camera</h2>
-        </div>
-
-        <div className="space-y-2 font-mono text-xs mb-4">
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Position</span>
-            <span className="text-foreground">
+          <Panel icon={<Crosshair size={16} />} title="Camera">
+            <StatRow label="Position">
               {camera.x.toFixed(1)}, {camera.y.toFixed(1)}, {camera.z.toFixed(1)}
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-muted-foreground">Active Layers</span>
-            <span className="text-primary">{layers.length}</span>
-          </div>
-        </div>
-
-        <Separator className="my-3" />
-
-        <div className="space-y-3">
-          <div>
-            <label className="text-xs text-muted-foreground mb-2 block">
-              Move Speed: {moveSpeed.toFixed(1)}
-            </label>
-            <Slider
-              value={[moveSpeed]}
-              onValueChange={(v) => { setMoveSpeed(v[0]) }}
+            </StatRow>
+            <SliderRow
+              label={`Move Speed: ${moveSpeed.toFixed(1)}`}
+              value={moveSpeed}
               min={0.1}
               max={2}
               step={0.1}
-              className="w-full"
+              onChange={([v]) => { setMoveSpeed(v) }}
             />
-          </div>
-          <div>
-            <label className="text-xs text-muted-foreground mb-2 block">
-              Depth Multiplier: {depthMultiplier.toFixed(1)}
-            </label>
-            <Slider
-              value={[depthMultiplier]}
-              onValueChange={handleDepthMultiplierChange}
-              min={MIN_DEPTH_MULTIPLIER}
-              max={MAX_DEPTH_MULTIPLIER}
-              step={0.1}
-              className="w-full"
+            <SliderRow
+              label={`Slice Detail: ${String(detail)}`}
+              value={detail}
+              min={MIN_DETAIL}
+              max={MAX_DETAIL}
+              step={1}
+              onChange={handleDetailChange}
             />
-          </div>
-        </div>
-      </Card>
+            <div className="space-y-0.5 text-xs text-muted-foreground">
+              <div className="flex items-center gap-2"><Move size={14} /><span>W/S - Forward/Back</span></div>
+              <div className="pl-[22px]">A/D - Left/Right</div>
+              <div className="pl-[22px]">Space/Shift - Up/Down</div>
+            </div>
+          </Panel>
 
-      <Card className="absolute bottom-6 right-6 p-4 bg-card/90 backdrop-blur-sm pointer-events-auto w-72">
-        <div className="flex items-center gap-2 mb-3">
-          <Box className="text-primary" size={20} />
-          <h2 className="font-bold text-lg">World</h2>
-        </div>
-
-        <div className="mb-3">
-          <label className="text-xs text-muted-foreground mb-2 block">
-            World Type
-          </label>
-          <Select value={worldType} onValueChange={(v) => { handleRegenerateWorld(v as WorldType) }}>
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select world type" />
-            </SelectTrigger>
-            <SelectContent>
-              {WORLD_TYPES.map((type) => (
-                <SelectItem key={type.value} value={type.value}>
-                  {type.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        <Button
-          onClick={() => { handleRegenerateWorld() }}
-          className="w-full mb-3"
-          variant="default"
-        >
-          <RefreshCw size={16} className="mr-2" />
-          Regenerate World
-        </Button>
-
-        <div className="flex gap-2 mb-3">
-          {!showStats && (
-            <Button
-              onClick={() => { setShowStats(true) }}
-              className="flex-1"
-              variant="outline"
-            >
-              <Eye size={16} className="mr-2" />
-              Stats
+          <Panel icon={<Box size={16} />} title="World">
+            <Select value={worldType} onValueChange={(v) => { handleRegenerateWorld(v as WorldType) }}>
+              <SelectTrigger className="w-full" aria-label="World type">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {WORLD_TYPES.map(type => (
+                  <SelectItem key={type.value} value={type.value}>{type.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button onClick={() => { handleRegenerateWorld() }} className="w-full">
+              <RefreshCw size={16} />
+              Regenerate World
             </Button>
+            <div className="flex gap-2">
+              {!showStats && (
+                <Button onClick={() => { setShowStats(true) }} className="flex-1" variant="outline">
+                  <Eye size={16} />
+                  Stats
+                </Button>
+              )}
+              <Button onClick={() => { setShowLayers(!showLayers) }} className="flex-1" variant="outline">
+                {showLayers ? <EyeOff size={16} /> : <Layers size={16} />}
+                {showLayers ? 'Hide' : 'Show'} Layers
+              </Button>
+            </div>
+          </Panel>
+        </aside>
+
+        <aside className="flex w-72 min-h-0 flex-col gap-3">
+          {showStats && (
+            <Panel
+              icon={<ChartLine size={16} />}
+              title="Render Statistics"
+              action={
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => { setShowStats(false) }}
+                  className="h-6 w-6 p-0"
+                  aria-label="Hide statistics"
+                >
+                  <EyeOff size={14} />
+                </Button>
+              }
+            >
+              <div className="space-y-1">
+                <h3 className="flex items-center gap-1.5 text-xs font-semibold">
+                  <History size={12} className="text-muted-foreground" />
+                  Session
+                </h3>
+                <StatRow label="Total Updates">{totalUpdates}</StatRow>
+                <StatRow label="Avg Render Time">{avgRenderTime}ms</StatRow>
+                <StatRow label="Avg Cache Efficiency">{averageCacheEfficiency.toFixed(1)}%</StatRow>
+                <StatRow label="Total Voxels">{(sessionStats?.totalVoxelsRendered ?? 0).toLocaleString()}</StatRow>
+              </div>
+              {lastUpdate && (
+                <>
+                  <Separator />
+                  <div className="space-y-1">
+                    <h3 className="text-xs font-semibold">Last Update</h3>
+                    <StatRow label="Render Time">{lastUpdate.renderTime.toFixed(2)}ms</StatRow>
+                    <StatRow label="Active Layers">{lastUpdate.layerCount}</StatRow>
+                    <StatRow label="Reused / Regenerated">
+                      <span className="text-primary">{lastUpdate.layersReused}</span>
+                      {' / '}
+                      <span className="text-destructive">{lastUpdate.layersRegenerated}</span>
+                    </StatRow>
+                    <StatRow label="Cache Efficiency">{lastUpdate.cacheEfficiency.toFixed(1)}%</StatRow>
+                    <StatRow label="Voxels Rendered">{lastUpdate.voxelsRendered.toLocaleString()}</StatRow>
+                  </div>
+                </>
+              )}
+            </Panel>
           )}
-          <Button
-            onClick={() => { setShowLayers(!showLayers) }}
-            className="flex-1"
-            variant="outline"
-          >
-            {showLayers ? <EyeOff size={16} className="mr-2" /> : <Layers size={16} className="mr-2" />}
-            {showLayers ? 'Hide' : 'Show'} Layers
-          </Button>
-        </div>
 
-        <Separator className="my-3" />
-
-        <div className="text-xs text-muted-foreground space-y-1">
-          <div className="flex items-center gap-2">
-            <Move size={14} />
-            <span>W/S - Forward/Back</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-3.5" />
-            <span>A/D - Left/Right</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-3.5" />
-            <span>Space/Shift - Up/Down</span>
-          </div>
-        </div>
-      </Card>
-
-      {showLayers && (
-        <div className="absolute top-6 left-1/2 -translate-x-1/2 pointer-events-auto">
-          <LayerPreview 
-            layers={layers}
-            onToggleVisibility={handleToggleLayerVisibility}
-          />
-        </div>
-      )}
-
-      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none">
-        <Crosshair size={24} className="text-primary/50" />
+          {showLayers && (
+            <LayerPreview layers={layers} onToggleVisibility={handleToggleLayerVisibility} />
+          )}
+        </aside>
       </div>
+    </div>
+  )
+}
+
+function Panel({ icon, title, action, children }: {
+  icon: ReactNode
+  title: string
+  action?: ReactNode
+  children: ReactNode
+}) {
+  return (
+    <Card className="pointer-events-auto gap-3 bg-card/80 p-4 backdrop-blur-md">
+      <div className="flex items-center justify-between">
+        <h2 className="flex items-center gap-2 text-sm font-semibold">
+          <span className="text-primary">{icon}</span>
+          {title}
+        </h2>
+        {action}
+      </div>
+      {children}
+    </Card>
+  )
+}
+
+function StatRow({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex justify-between font-mono text-xs">
+      <span className="text-muted-foreground">{label}</span>
+      <span>{children}</span>
+    </div>
+  )
+}
+
+function SliderRow({ label, value, min, max, step, onChange }: {
+  label: string
+  value: number
+  min: number
+  max: number
+  step: number
+  onChange: (value: number[]) => void
+}) {
+  return (
+    <div className="space-y-2">
+      <label className="block text-xs text-muted-foreground">{label}</label>
+      <Slider value={[value]} onValueChange={onChange} min={min} max={max} step={step} />
     </div>
   )
 }

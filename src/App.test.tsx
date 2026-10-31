@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import App from './App'
+import { DEFAULT_CAMERA } from './lib/renderer'
 
-const cameraPosition = () => screen.getByText('Position').nextElementSibling?.textContent
+const cameraPosition = () =>
+  (screen.getByText('Position').nextElementSibling?.textContent ?? '').split(',').map(Number)
 
 describe('App', () => {
   it('renders the title and control panels', () => {
@@ -38,23 +40,29 @@ describe('App', () => {
   })
 
   it.each([
-    ['w', '0.0, 15.0, -30.0', /^0\.0, 15\.0, -2\d\.\d$/],
-    ['d', '0.0, 15.0, -30.0', /^[1-9]\d*\.\d, 15\.0, -30\.0$/],
-    [' ', '0.0, 15.0, -30.0', /^0\.0, (1[6-9]|[2-9]\d)\.\d, -30\.0$/],
-  ])('moves the camera while %j is held', async (key, before, after) => {
+    ['w', 2],
+    ['s', 2],
+    ['d', 0],
+    ['a', 0],
+    [' ', 1],
+    ['Shift', 1],
+  ])('moves the camera along one axis while %j is held', async (key, axis) => {
+    const sign = ['s', 'a', 'Shift'].includes(key) ? -1 : 1
     render(<App />)
-    expect(cameraPosition()).toBe(before)
+    const start = cameraPosition()
+    expect(start).toEqual([DEFAULT_CAMERA.x, DEFAULT_CAMERA.y, DEFAULT_CAMERA.z])
 
     fireEvent.keyDown(window, { key })
-    await waitFor(() => { expect(cameraPosition()).toMatch(after) })
+    await waitFor(() => { expect(sign * (cameraPosition()[axis] - start[axis])).toBeGreaterThanOrEqual(1) })
     fireEvent.keyUp(window, { key })
 
     // Let React flush the state from the last frame, then check movement stopped.
     const settle = () => new Promise(resolve => setTimeout(resolve, 50))
     await settle()
-    const stopped = cameraPosition()
+    const moved = cameraPosition()
+    expect(moved.filter((_, i) => i !== axis)).toEqual(start.filter((_, i) => i !== axis))
     await settle()
-    expect(cameraPosition()).toBe(stopped)
+    expect(cameraPosition()).toEqual(moved)
   })
 
   it('ignores unrelated keys', async () => {
@@ -62,7 +70,7 @@ describe('App', () => {
     fireEvent.keyDown(window, { key: 'q' })
     await new Promise(resolve => setTimeout(resolve, 50))
     fireEvent.keyUp(window, { key: 'q' })
-    expect(cameraPosition()).toBe('0.0, 15.0, -30.0')
+    expect(cameraPosition()).toEqual([DEFAULT_CAMERA.x, DEFAULT_CAMERA.y, DEFAULT_CAMERA.z])
   })
 
   it('lists movement controls', () => {

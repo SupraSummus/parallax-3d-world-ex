@@ -12,7 +12,7 @@ pnpm exec vitest -t "cache"     # filter by test name
 
 | File | Covers |
 |------|--------|
-| `src/lib/slice-selection.test.ts` | Slice math: documented examples plus invariants (contiguous, aligned, logarithmic) over a grid of camera positions and multipliers |
+| `src/lib/slice-selection.test.ts` | Slice math: documented examples plus invariants (contiguous, aligned, logarithmic) over a grid of camera positions and detail levels |
 | `src/lib/world.test.ts` | Procedural generation: determinism, world types, z-range queries |
 | `src/lib/renderer.test.ts` | Layer contents, DOM z-order, perspective/parallax transforms, cache reuse and invalidation, stats |
 | `src/lib/renderer-regressions.test.ts` | Previously fixed rendering bugs, checked through a recording canvas context |

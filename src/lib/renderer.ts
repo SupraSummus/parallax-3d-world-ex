@@ -1,4 +1,4 @@
-import { selectSlices, clampDepthMultiplier, DEFAULT_DEPTH_MULTIPLIER } from './slice-selection'
+import { selectSlices, clampDetail, DEFAULT_DETAIL } from './slice-selection'
 import { World, type Voxel, type WorldType } from './world'
 
 export interface Camera {
@@ -7,15 +7,22 @@ export interface Camera {
   z: number
 }
 
-export const DEFAULT_CAMERA: Readonly<Camera> = { x: 0, y: 15, z: -30 }
+export const DEFAULT_CAMERA: Readonly<Camera> = { x: 0, y: 20, z: -70 }
 
 export interface Layer {
   /** First world z covered by this slice. */
   depth: number
   /** Thickness in z units; the slice covers [depth, depth + size). */
   size: number
+  /** All voxels in the slice (most are hidden behind nearer ones). */
   voxels: Voxel[]
+  /** Number of voxel faces actually drawn on the canvas. */
+  facesDrawn: number
+  /** Cropped to the slice's content; see originX/originY. */
   canvas: HTMLCanvasElement
+  /** World x, y of the canvas's top-left corner. */
+  originX: number
+  originY: number
   visible: boolean
 }
 
@@ -24,6 +31,7 @@ export interface UpdateStats {
   layerCount: number
   layersReused: number
   layersRegenerated: number
+  /** Voxel faces drawn into newly rasterised layers. */
   voxelsRendered: number
   /** Percentage of visible layers served from the cache. */
   cacheEfficiency: number
@@ -54,14 +62,18 @@ const FAR_DEPTH = 200
 
 // Maximum number of layers retained in the cache. Slices outside the
 // currently-visible range are kept around (without DOM elements) so that
-// reversing direction reuses their canvases instead of re-rendering. Each
-// retained canvas holds a viewport-sized bitmap, so this bounds memory use
-// (~30 MB at a 1080p viewport, which is ample for direction-reversal reuse
-// given the slice algorithm only emits ~10 visible layers per frame).
+// reversing direction reuses their canvases instead of re-rendering. A canvas
+// is at most the world's extent at RENDER_SCALE (~1 MB), so this bounds
+// memory to a few tens of MB.
 const MAX_CACHED_LAYERS = 32
 
-const BACKGROUND_COLOR = '#0a0a15'
-const FOG_RGB = '10, 10, 21'
+// Sky gradient; the horizon sits at eye level (screen centre).
+const SKY_TOP = '#3f73b8'
+const SKY_HORIZON = '#b9d3e8'
+// Exponential distance fog towards the horizon colour: at viewing distance d
+// a voxel keeps exp(-d / FOG_DISTANCE) of its own colour.
+const FOG_RGB = '185, 211, 232'
+const FOG_DISTANCE = 140
 
 interface LayerElements {
   canvas: HTMLCanvasElement
@@ -80,7 +92,7 @@ export class ParallaxRenderer {
   private container: HTMLElement
   private world: World
   private camera: Camera = { ...DEFAULT_CAMERA }
-  private depthMultiplier = DEFAULT_DEPTH_MULTIPLIER
+  private detail = DEFAULT_DETAIL
   private width: number
   private height: number
 
@@ -102,7 +114,7 @@ export class ParallaxRenderer {
 
   constructor(container: HTMLElement, world: World) {
     this.container = container
-    this.container.style.backgroundColor = BACKGROUND_COLOR
+    this.container.style.background = `linear-gradient(${SKY_TOP}, ${SKY_HORIZON} 50%)`
     this.width = container.clientWidth
     this.height = container.clientHeight
     this.world = world
@@ -112,7 +124,7 @@ export class ParallaxRenderer {
     const startTime = performance.now()
 
     // Far to near, so nearer layers stack on top.
-    const slices = selectSlices(this.camera.z, NEAR_DEPTH, FAR_DEPTH, this.depthMultiplier).reverse()
+    const slices = selectSlices(this.camera.z, NEAR_DEPTH, FAR_DEPTH, this.detail).reverse()
     const requiredKeys = new Set(slices.map(s => layerKey(s.depth, s.size)))
 
     // Hide layers that left the view; their canvases stay cached.
@@ -124,6 +136,12 @@ export class ParallaxRenderer {
     let layersReused = 0
     let voxelsRendered = 0
 
+    // Fog overlays stack: the overlay above slice k also tints every slice
+    // behind it. Give each overlay the fog of the depth interval between the
+    // previous (nearer) slice and its own, so the accumulated fog at any
+    // slice is exactly 1 - exp(-d / FOG_DISTANCE).
+    const distances = slices.map(s => s.depth + s.size / 2 - this.camera.z)
+
     slices.forEach((slice, index) => {
       const key = layerKey(slice.depth, slice.size)
       let layer = this.layers.get(key)
@@ -133,7 +151,7 @@ export class ParallaxRenderer {
         layersReused++
       } else {
         layer = this.createLayer(slice.depth, slice.size)
-        voxelsRendered += layer.voxels.length
+        voxelsRendered += layer.facesDrawn
         layersRegenerated++
       }
       this.layers.set(key, layer)
@@ -143,7 +161,9 @@ export class ParallaxRenderer {
         elements = this.createLayerElements(layer)
         this.layerElements.set(key, elements)
       }
-      this.composite(layer, elements, index)
+      const nearerDistance = index + 1 < distances.length ? distances[index + 1] : 0
+      const fogAlpha = 1 - Math.exp(-(distances[index] - nearerDistance) / FOG_DISTANCE)
+      this.composite(layer, elements, index, distances[index], fogAlpha)
     })
 
     this.evictLeastRecentlyUsed()
@@ -178,11 +198,10 @@ export class ParallaxRenderer {
     return { ...this.stats }
   }
 
+  /** Sets the viewport size. Cached layers stay valid; call render() to reposition them. */
   resize(width: number, height: number) {
     this.width = width
     this.height = height
-    // Canvas dimensions are baked into each layer, so rebuild everything.
-    this.clearAllLayers()
   }
 
   regenerateWorld(seed?: number, worldType?: WorldType) {
@@ -190,10 +209,9 @@ export class ParallaxRenderer {
     this.clearAllLayers()
   }
 
-  setDepthMultiplier(multiplier: number) {
-    this.depthMultiplier = clampDepthMultiplier(multiplier)
-    // Slice boundaries depend on the multiplier, so cached keys are stale.
-    this.clearAllLayers()
+  /** Sets slice detail (see slice-selection.ts). Slices are keyed by depth and size, so the cache stays valid. */
+  setDetail(detail: number) {
+    this.detail = clampDetail(detail)
   }
 
   /** Layers visible in the most recent render, sorted near to far. */
@@ -219,29 +237,72 @@ export class ParallaxRenderer {
     this.layers.clear()
   }
 
-  /** Creates a slice canvas and rasterises its voxels at RENDER_SCALE. */
+  /**
+   * Creates a slice canvas and rasterises its voxels at RENDER_SCALE.
+   *
+   * The projection within a slice is orthographic, so for each (x, y) cell
+   * only the nearest voxel can be seen; only that one is drawn. Voxel
+   * (x, y) covers [x - 0.5, x + 0.5] × [y - 0.5, y + 0.5].
+   */
   private createLayer(depth: number, size: number): Layer {
-    const canvas = document.createElement('canvas')
-    canvas.width = this.width
-    canvas.height = this.height
     const voxels = this.world.getVoxelsInZRange(depth, depth + size)
 
+    const front = new Map<number, Voxel>()
+    let minX = Infinity
+    let maxX = -Infinity
+    let minY = Infinity
+    let maxY = -Infinity
+    for (const v of voxels) {
+      const key = (v.x + 512) * 1024 + (v.y + 512)
+      const current = front.get(key)
+      if (!current || v.z < current.z) front.set(key, v)
+      minX = Math.min(minX, v.x)
+      maxX = Math.max(maxX, v.x)
+      minY = Math.min(minY, v.y)
+      maxY = Math.max(maxY, v.y)
+    }
+
+    const canvas = document.createElement('canvas')
+    const empty = front.size === 0
+    const layer: Layer = {
+      depth,
+      size,
+      voxels,
+      facesDrawn: front.size,
+      canvas,
+      originX: empty ? 0 : minX - 0.5,
+      originY: empty ? 0 : maxY + 0.5,
+      visible: true,
+    }
+    if (empty) {
+      canvas.width = canvas.height = 0
+      return layer
+    }
+
+    canvas.width = (maxX - minX + 1) * RENDER_SCALE
+    canvas.height = (maxY - minY + 1) * RENDER_SCALE
     const ctx = canvas.getContext('2d')
-    if (ctx) {
-      // World origin maps to the canvas centre. Squares are drawn slightly
-      // oversized so adjacent voxels don't leave hairline seams.
-      const cx = canvas.width / 2
-      const cy = canvas.height / 2
-      const px = RENDER_SCALE * 1.1
-      // Back to front within the slice.
-      const sorted = voxels.slice().sort((a, b) => b.z - a.z)
-      for (const v of sorted) {
-        ctx.fillStyle = v.color
-        ctx.fillRect(cx + v.x * RENDER_SCALE - px / 2, cy - v.y * RENDER_SCALE - px / 2, px, px)
+    if (!ctx) return layer
+
+    const edge = Math.max(1, Math.round(RENDER_SCALE / 10))
+    for (const v of front.values()) {
+      const px = (v.x - minX) * RENDER_SCALE
+      const py = (maxY - v.y) * RENDER_SCALE
+      const shades = shadesOf(v.color)
+      ctx.fillStyle = shades.base
+      ctx.fillRect(px, py, RENDER_SCALE, RENDER_SCALE)
+      // Darker bottom/right edges outline individual voxels.
+      ctx.fillStyle = shades.dark
+      ctx.fillRect(px, py + RENDER_SCALE - edge, RENDER_SCALE, edge)
+      ctx.fillRect(px + RENDER_SCALE - edge, py, edge, RENDER_SCALE)
+      // Lit top edge where the voxel's top face is exposed to the sky.
+      if (!this.world.has(v.x, v.y + 1, v.z)) {
+        ctx.fillStyle = shades.light
+        ctx.fillRect(px, py, RENDER_SCALE, edge * 2)
       }
     }
 
-    return { depth, size, voxels, canvas, visible: true }
+    return layer
   }
 
   /** Attaches a layer's canvas plus a fog overlay to the container. */
@@ -251,7 +312,7 @@ export class ParallaxRenderer {
       position: 'absolute',
       left: '0',
       top: '0',
-      transformOrigin: '50% 50%',
+      transformOrigin: '0 0',
       willChange: 'transform',
       pointerEvents: 'none',
     })
@@ -275,32 +336,32 @@ export class ParallaxRenderer {
    * Positions a cached canvas for the current camera: scale for perspective
    * and translate for parallax. Only CSS changes here, never pixels.
    */
-  private composite(layer: Layer, { canvas, fog }: LayerElements, stackIndex: number) {
+  private composite(
+    layer: Layer,
+    { canvas, fog }: LayerElements,
+    stackIndex: number,
+    viewingDistance: number,
+    fogAlpha: number,
+  ) {
     canvas.style.zIndex = String(stackIndex * 2)
     fog.style.zIndex = String(stackIndex * 2 + 1)
+    // Fog stays even for hidden layers so the slices behind keep their haze.
+    fog.style.backgroundColor = `rgba(${FOG_RGB}, ${fogAlpha.toFixed(4)})`
 
-    if (!layer.visible) {
+    if (!layer.visible || layer.facesDrawn === 0) {
       canvas.style.display = 'none'
-      fog.style.display = 'none'
       return
     }
-
-    // Slices start at least NEAR_DEPTH ahead of the camera, so this is > 0.
-    const viewingDistance = layer.depth + layer.size / 2 - this.camera.z
-    const perspectiveScale = PROJECTION_SCALE_FACTOR / viewingDistance
-    const offsetX = -this.camera.x * perspectiveScale
-    const offsetY = this.camera.y * perspectiveScale
-    canvas.style.transform =
-      `translate3d(${String(offsetX)}px, ${String(offsetY)}px, 0) scale(${String(perspectiveScale / RENDER_SCALE)})`
     canvas.style.display = ''
 
-    const fogIntensity = Math.min(0.15, viewingDistance / 500)
-    if (fogIntensity > 0.01) {
-      fog.style.backgroundColor = `rgba(${FOG_RGB}, ${String(fogIntensity)})`
-      fog.style.display = ''
-    } else {
-      fog.style.display = 'none'
-    }
+    // Slices start at least NEAR_DEPTH ahead of the camera, so this is > 0.
+    const scale = PROJECTION_SCALE_FACTOR / viewingDistance
+    const left = this.width / 2 + (layer.originX - this.camera.x) * scale
+    const top = this.height / 2 - (layer.originY - this.camera.y) * scale
+    canvas.style.transform =
+      `translate3d(${String(left)}px, ${String(top)}px, 0) scale(${String(scale / RENDER_SCALE)})`
+    // Keep voxel edges crisp when magnified; smooth when minified.
+    canvas.style.imageRendering = scale > RENDER_SCALE ? 'pixelated' : 'auto'
   }
 
   /**
@@ -313,4 +374,25 @@ export class ParallaxRenderer {
       if (!this.layerElements.has(key)) this.layers.delete(key)
     }
   }
+}
+
+interface Shades {
+  base: string
+  light: string
+  dark: string
+}
+
+const shadeCache = new Map<string, Shades>()
+
+/** Base, lit and shadowed variants of a '#rrggbb' colour. */
+function shadesOf(color: string): Shades {
+  let shades = shadeCache.get(color)
+  if (!shades) {
+    const rgb = [1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16))
+    const mix = (target: number, amount: number) =>
+      `rgb(${rgb.map(c => String(Math.round(c + (target - c) * amount))).join(', ')})`
+    shades = { base: color, light: mix(255, 0.3), dark: mix(0, 0.25) }
+    shadeCache.set(color, shades)
+  }
+  return shades
 }

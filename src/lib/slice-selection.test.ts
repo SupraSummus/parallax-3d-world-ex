@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { selectSlices, getSliceAtDepth, clampDepthMultiplier } from './slice-selection'
+import { selectSlices, getSliceAtDepth, clampDetail, DEFAULT_DETAIL } from './slice-selection'
 
 const sizes = (slices: { size: number }[]) => slices.map(s => s.size)
 
@@ -24,9 +24,9 @@ describe('getSliceAtDepth', () => {
 })
 
 describe('selectSlices', () => {
-  // DESIGN.md "Slice Progression Example" tables.
+  // DESIGN.md tables (detail 1).
   it('matches the documented progression for camera z=0', () => {
-    expect(selectSlices(0, 1, 200)).toEqual([
+    expect(selectSlices(0, 1, 200, 1)).toEqual([
       { depth: 1, size: 1 },
       { depth: 2, size: 2 },
       { depth: 4, size: 4 },
@@ -40,7 +40,7 @@ describe('selectSlices', () => {
   })
 
   it('matches the documented progression for camera z=-67', () => {
-    const slices = selectSlices(-67, 1, 200)
+    const slices = selectSlices(-67, 1, 200, 1)
     expect(slices.map(s => s.depth)).toEqual([-66, -65, -64, -62, -60, -56, -48, -32, 0, 64, 128])
     expect(sizes(slices)).toEqual([1, 1, 2, 2, 4, 8, 16, 32, 64, 64, 64])
   })
@@ -50,15 +50,21 @@ describe('selectSlices', () => {
     expect(selectSlices(0.5, 10, 10)).toEqual([])
   })
 
-  it('defaults to multiplier 2', () => {
-    expect(selectSlices(-30, 1, 200)).toEqual(selectSlices(-30, 1, 200, 2))
+  it('defaults to DEFAULT_DETAIL', () => {
+    expect(selectSlices(-30, 1, 200)).toEqual(selectSlices(-30, 1, 200, DEFAULT_DETAIL))
   })
 
-  describe.each([1.5, 2, 3, 4])('invariants with multiplier %s', multiplier => {
+  it('makes slices thinner as detail increases', () => {
+    const counts = [1, 2, 4, 8, 16].map(detail => selectSlices(-30, 1, 200, detail).length)
+    expect(counts).toEqual([...counts].sort((a, b) => a - b))
+    expect(new Set(counts).size).toBe(counts.length)
+  })
+
+  describe.each([1, 2, 4, 8, 16])('invariants with detail %s', detail => {
     const cameras = Array.from({ length: 81 }, (_, i) => -200 + i * 5.13)
 
     it.each(cameras)('camera z=%s', cameraZ => {
-      const slices = selectSlices(cameraZ, 1, 200, multiplier)
+      const slices = selectSlices(cameraZ, 1, 200, detail)
 
       // Covers [cameraZ + 1, cameraZ + 200) contiguously.
       expect(slices[0].depth).toBeLessThanOrEqual(cameraZ + 1)
@@ -70,20 +76,23 @@ describe('selectSlices', () => {
       }
 
       for (const s of slices) {
-        // Aligned, so a (depth, size) slice is camera-independent and cacheable.
+        // Aligned powers of two, so a (depth, size) slice is camera-independent and cacheable.
         expect(Math.abs(s.depth % s.size)).toBe(0)
+        expect([1, 2, 4, 8, 16, 32, 64]).toContain(s.size)
+        // Never thicker than distance / detail.
+        expect(s.size).toBeLessThanOrEqual(Math.max(1, (s.depth - cameraZ) / detail))
         // Every slice is in front of the camera.
         expect(s.depth + s.size / 2).toBeGreaterThan(cameraZ)
       }
 
       // Logarithmic, not linear, in the view distance.
-      expect(slices.length).toBeLessThan(25)
+      expect(slices.length).toBeLessThan(6 * detail + 10)
     })
   })
 
   it('uses thicker slices farther from the camera', () => {
     for (const cameraZ of [-100, -67, -30, 0, 17]) {
-      const slices = selectSlices(cameraZ, 1, 200)
+      const slices = selectSlices(cameraZ, 1, 200, 1)
       expect(slices[0].size).toBeLessThanOrEqual(2)
       for (const s of slices) {
         if (s.depth - cameraZ > 50) expect(s.size).toBeGreaterThan(1)
@@ -93,10 +102,10 @@ describe('selectSlices', () => {
   })
 })
 
-describe('clampDepthMultiplier', () => {
+describe('clampDetail', () => {
   it('clamps to the supported range', () => {
-    expect(clampDepthMultiplier(0.5)).toBe(1.2)
-    expect(clampDepthMultiplier(2.5)).toBe(2.5)
-    expect(clampDepthMultiplier(10)).toBe(4)
+    expect(clampDetail(0.5)).toBe(1)
+    expect(clampDetail(3)).toBe(3)
+    expect(clampDetail(100)).toBe(16)
   })
 })
