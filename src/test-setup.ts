@@ -12,27 +12,31 @@ globalThis.ResizeObserver = vi.fn(function(this: ResizeObserver) {
   this.disconnect = vi.fn()
 }) as unknown as typeof ResizeObserver
 
+// Plain no-ops, not vi.fn(): mocks record every call, and rendering a
+// scene makes millions of them.
+const noop = () => undefined
+
 HTMLCanvasElement.prototype.getContext = vi.fn(function() {
   return {
     fillStyle: '',
     strokeStyle: '',
     lineWidth: 1,
-    fillRect: vi.fn(),
-    strokeRect: vi.fn(),
-    clearRect: vi.fn(),
-    drawImage: vi.fn(),
-    beginPath: vi.fn(),
-    closePath: vi.fn(),
-    moveTo: vi.fn(),
-    lineTo: vi.fn(),
-    arc: vi.fn(),
-    fill: vi.fn(),
-    stroke: vi.fn(),
-    save: vi.fn(),
-    restore: vi.fn(),
-    translate: vi.fn(),
-    rotate: vi.fn(),
-    scale: vi.fn(),
+    fillRect: noop,
+    strokeRect: noop,
+    clearRect: noop,
+    drawImage: noop,
+    beginPath: noop,
+    closePath: noop,
+    moveTo: noop,
+    lineTo: noop,
+    arc: noop,
+    fill: noop,
+    stroke: noop,
+    save: noop,
+    restore: noop,
+    translate: noop,
+    rotate: noop,
+    scale: noop,
     globalAlpha: 1,
     canvas: document.createElement('canvas'),
   }

@@ -1,16 +1,20 @@
 /**
  * Reference viewer: renders a World as an ordinary triangle mesh with
  * three.js, to check what the scene looks like independently of the slice
- * renderer. Opened from the app with ?seed=&world=&camera=x,y,z.
+ * renderer. Opened from the app with ?seed=&world=&camera=x,y,z&fov=&distance=.
  */
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { World, WORLD_TYPES, type Vec3, type WorldType } from '@/lib/world'
-import { FOG_DISTANCE, PROJECTION_SCALE_FACTOR, SKY_HORIZON, SKY_TOP } from '@/lib/renderer'
+import {
+  DEFAULT_FOV, DEFAULT_RENDER_DISTANCE, FOG_PER_RENDER_DISTANCE, SKY_HORIZON, SKY_TOP, focalLength,
+} from '@/lib/renderer'
 import { buildVoxelMesh } from './mesh'
 
 const params = new URLSearchParams(location.search)
 const seed = Number(params.get('seed') ?? 1)
+const fov = Number(params.get('fov') ?? DEFAULT_FOV)
+const renderDistance = Number(params.get('distance') ?? DEFAULT_RENDER_DISTANCE)
 const worldParam = params.get('world')
 const worldType: WorldType = WORLD_TYPES.find(t => t.value === worldParam)?.value ?? 'forest'
 
@@ -32,7 +36,7 @@ geometry.setIndex(new THREE.BufferAttribute(mesh.indices, 1))
 const scene = new THREE.Scene()
 scene.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ vertexColors: true })))
 // Linear stand-in for the slice renderer's exponential fog.
-const fog = new THREE.Fog(SKY_HORIZON, 0, FOG_DISTANCE * 2.5)
+const fog = new THREE.Fog(SKY_HORIZON, 0, renderDistance * FOG_PER_RENDER_DISTANCE * 2.5)
 scene.fog = fog
 
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true })
@@ -60,8 +64,8 @@ function resize() {
   const { innerWidth: w, innerHeight: h } = window
   renderer.setSize(w, h)
   camera.aspect = w / h
-  // Same perspective as the slice renderer: PROJECTION_SCALE_FACTOR px per unit at distance 1.
-  camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(h / 2 / PROJECTION_SCALE_FACTOR))
+  // Same perspective as the slice renderer (three.js takes the vertical field of view).
+  camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(h / 2 / focalLength(fov, w, h)))
   camera.updateProjectionMatrix()
   draw()
 }

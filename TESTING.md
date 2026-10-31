@@ -12,7 +12,7 @@ pnpm exec vitest -t "cache"     # filter by test name
 
 | File | Covers |
 |------|--------|
-| `src/lib/slice-selection.test.ts` | Slice math: documented examples plus invariants (contiguous, aligned, logarithmic) over a grid of camera positions and detail levels |
+| `src/lib/slice-selection.test.ts` | Slice math: documented examples plus invariants (contiguous, aligned, logarithmic) over a grid of camera positions and detail levels; occlusion leak bound (in screen pixels) against a 2D ray-cast perspective reference |
 | `src/lib/world.test.ts` | Toy world types: determinism, bounds, z-range queries |
 | `src/lib/forest.test.ts` | Forest: determinism, coverage, voxel budget, tree heights in metres, clear spawn |
 | `src/viewer/mesh.test.ts` | Reference viewer mesh: face culling, coordinates, winding, shading |

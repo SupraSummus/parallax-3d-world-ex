@@ -1,4 +1,4 @@
-import { selectSlices, clampDetail, DEFAULT_DETAIL } from './slice-selection'
+import { selectSlices, leakFreeDetail } from './slice-selection'
 import { World, type Vec3, type Voxel, type WorldType } from './world'
 
 export type Camera = Vec3
@@ -22,6 +22,8 @@ export interface Layer {
 
 export interface UpdateStats {
   renderTime: number
+  /** Distance / max slice thickness, from the leak tolerance (see leakFreeDetail). */
+  detail: number
   layerCount: number
   layersReused: number
   layersRegenerated: number
@@ -40,9 +42,17 @@ export interface SessionStats {
   lastUpdate: UpdateStats | null
 }
 
-// Perspective: pixels per world unit at viewing distance d is
-// PROJECTION_SCALE_FACTOR / d (i.e. the focal length in pixels).
-export const PROJECTION_SCALE_FACTOR = 600
+// Field of view across the longer viewport side, in degrees. Pixels per
+// world unit at viewing distance d are focalLength / d, where the focal
+// length (in pixels) puts the longer side's edges at ±fov / 2.
+export const DEFAULT_FOV = 90
+export const MIN_FOV = 5
+export const MAX_FOV = 120
+
+/** Focal length in pixels: the longer viewport side spans `fov` degrees. */
+export function focalLength(fov: number, width: number, height: number): number {
+  return Math.max(width, height) / 2 / Math.tan((fov * Math.PI) / 360)
+}
 
 // Pixels per world unit used when rasterising a slice canvas. The canvas is
 // rendered camera-independently at this fixed scale so its content can be
@@ -50,9 +60,18 @@ export const PROJECTION_SCALE_FACTOR = 600
 // via a CSS transform at composite time.
 const RENDER_SCALE = 10
 
-// Visible depth range, relative to the camera.
+// How many screen pixels of geometry that perspective would hide may show
+// through the gaps between slices. Larger means thicker slices, fewer layers.
+export const DEFAULT_MAX_LEAK = 16
+export const MIN_MAX_LEAK = 1
+export const MAX_MAX_LEAK = 64
+
+// Visible depth range, relative to the camera: from NEAR_DEPTH to the render
+// distance.
 const NEAR_DEPTH = 1
-const FAR_DEPTH = 200
+export const DEFAULT_RENDER_DISTANCE = 200
+export const MIN_RENDER_DISTANCE = 20
+export const MAX_RENDER_DISTANCE = 400
 
 // Maximum number of layers retained in the cache. Slices outside the
 // currently-visible range are kept around (without DOM elements) so that
@@ -65,9 +84,14 @@ const MAX_CACHED_LAYERS = 32
 export const SKY_TOP = '#3f73b8'
 export const SKY_HORIZON = '#b9d3e8'
 // Exponential distance fog towards the horizon colour: at viewing distance d
-// a voxel keeps exp(-d / FOG_DISTANCE) of its own colour.
+// a voxel keeps exp(-d / fogDistance) of its own colour. The fog distance
+// scales with the render distance so the far cut-off stays hazy.
 const FOG_RGB = '185, 211, 232'
-export const FOG_DISTANCE = 140
+export const FOG_PER_RENDER_DISTANCE = 0.7
+// Minimum opacity of one fog overlay. Each overlay is blended in 8 bits, so
+// hundreds of nearly transparent overlays (one per thin slice) round every
+// channel differently and tint the scene; fewer, stronger steps don't.
+const MIN_FOG_STEP = 0.05
 
 interface LayerElements {
   canvas: HTMLCanvasElement
@@ -86,7 +110,9 @@ export class ParallaxRenderer {
   private container: HTMLElement
   private world: World
   private camera: Camera
-  private detail = DEFAULT_DETAIL
+  private fov = DEFAULT_FOV
+  private maxLeak = DEFAULT_MAX_LEAK
+  private renderDistance = DEFAULT_RENDER_DISTANCE
   private width: number
   private height: number
 
@@ -119,7 +145,8 @@ export class ParallaxRenderer {
     const startTime = performance.now()
 
     // Far to near, so nearer layers stack on top.
-    const slices = selectSlices(this.camera.z, NEAR_DEPTH, FAR_DEPTH, this.detail).reverse()
+    const detail = this.getDetail()
+    const slices = selectSlices(this.camera.z, NEAR_DEPTH, this.renderDistance, detail).reverse()
     const requiredKeys = new Set(slices.map(s => layerKey(s.depth, s.size)))
 
     // Hide layers that left the view; their canvases stay cached.
@@ -132,10 +159,21 @@ export class ParallaxRenderer {
     let voxelsRendered = 0
 
     // Fog overlays stack: the overlay above slice k also tints every slice
-    // behind it. Give each overlay the fog of the depth interval between the
-    // previous (nearer) slice and its own, so the accumulated fog at any
-    // slice is exactly 1 - exp(-d / FOG_DISTANCE).
+    // behind it. Walking near to far, an overlay gets the fog of the depth
+    // interval since the previous overlay once that reaches MIN_FOG_STEP, so
+    // the accumulated fog at slice d is 1 - exp(-d / fogDistance), rounded
+    // down to the last step.
+    const fogDistance = this.renderDistance * FOG_PER_RENDER_DISTANCE
     const distances = slices.map(s => s.depth + s.size / 2 - this.camera.z)
+    const fogAlphas = distances.map(() => 0)
+    let foggedDistance = 0
+    for (let i = slices.length - 1; i >= 0; i--) {
+      const alpha = 1 - Math.exp(-(distances[i] - foggedDistance) / fogDistance)
+      if (alpha >= MIN_FOG_STEP) {
+        fogAlphas[i] = alpha
+        foggedDistance = distances[i]
+      }
+    }
 
     slices.forEach((slice, index) => {
       const key = layerKey(slice.depth, slice.size)
@@ -156,9 +194,7 @@ export class ParallaxRenderer {
         elements = this.createLayerElements(layer)
         this.layerElements.set(key, elements)
       }
-      const nearerDistance = index + 1 < distances.length ? distances[index + 1] : 0
-      const fogAlpha = 1 - Math.exp(-(distances[index] - nearerDistance) / FOG_DISTANCE)
-      this.composite(layer, elements, index, distances[index], fogAlpha)
+      this.composite(layer, elements, index, distances[index], fogAlphas[index])
     })
 
     this.evictLeastRecentlyUsed()
@@ -173,6 +209,7 @@ export class ParallaxRenderer {
     s.averageCacheEfficiency += (cacheEfficiency - s.averageCacheEfficiency) / s.totalUpdates
     s.lastUpdate = {
       renderTime,
+      detail,
       layerCount: slices.length,
       layersReused,
       layersRegenerated,
@@ -210,9 +247,44 @@ export class ParallaxRenderer {
     this.clearAllLayers()
   }
 
-  /** Sets slice detail (see slice-selection.ts). Slices are keyed by depth and size, so the cache stays valid. */
-  setDetail(detail: number) {
-    this.detail = clampDetail(detail)
+  getFov(): number {
+    return this.fov
+  }
+
+  /**
+   * Sets the field of view in degrees (clamped to [MIN_FOV, MAX_FOV]). It
+   * only zooms: the slicing depends on the leak tolerance in pixels, which
+   * does not depend on the field of view.
+   */
+  setFov(fov: number) {
+    this.fov = Math.min(MAX_FOV, Math.max(MIN_FOV, fov))
+  }
+
+  getRenderDistance(): number {
+    return this.renderDistance
+  }
+
+  /** Sets how far ahead slices are drawn (clamped to [MIN_RENDER_DISTANCE, MAX_RENDER_DISTANCE]). */
+  setRenderDistance(distance: number) {
+    this.renderDistance = Math.min(MAX_RENDER_DISTANCE, Math.max(MIN_RENDER_DISTANCE, distance))
+  }
+
+  getMaxLeak(): number {
+    return this.maxLeak
+  }
+
+  /**
+   * Sets how many screen pixels of hidden geometry may show between slices
+   * (clamped to [MIN_MAX_LEAK, MAX_MAX_LEAK]). Slices are keyed by depth and
+   * size, so the ones still needed stay cached.
+   */
+  setMaxLeak(pixels: number) {
+    this.maxLeak = Math.min(MAX_MAX_LEAK, Math.max(MIN_MAX_LEAK, pixels))
+  }
+
+  /** Slice detail that keeps occlusion leaks within the tolerance on the current viewport. */
+  getDetail(): number {
+    return leakFreeDetail(Math.max(this.width, this.height), this.maxLeak)
   }
 
   /** Layers visible in the most recent render, sorted near to far. */
@@ -348,6 +420,7 @@ export class ParallaxRenderer {
     fog.style.zIndex = String(stackIndex * 2 + 1)
     // Fog stays even for hidden layers so the slices behind keep their haze.
     fog.style.backgroundColor = `rgba(${FOG_RGB}, ${fogAlpha.toFixed(4)})`
+    fog.style.display = fogAlpha > 0 ? '' : 'none'
 
     if (!layer.visible || layer.facesDrawn === 0) {
       canvas.style.display = 'none'
@@ -356,7 +429,7 @@ export class ParallaxRenderer {
     canvas.style.display = ''
 
     // Slices start at least NEAR_DEPTH ahead of the camera, so this is > 0.
-    const scale = PROJECTION_SCALE_FACTOR / viewingDistance
+    const scale = focalLength(this.fov, this.width, this.height) / viewingDistance
     const left = this.width / 2 + (layer.originX - this.camera.x) * scale
     const top = this.height / 2 - (layer.originY - this.camera.y) * scale
     canvas.style.transform =

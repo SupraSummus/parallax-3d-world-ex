@@ -1,7 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { ParallaxRenderer } from './renderer'
+import {
+  ParallaxRenderer, DEFAULT_FOV, MAX_FOV, MIN_FOV,
+  DEFAULT_RENDER_DISTANCE, MAX_RENDER_DISTANCE, MIN_RENDER_DISTANCE,
+  DEFAULT_MAX_LEAK, MAX_MAX_LEAK, MIN_MAX_LEAK,
+} from './renderer'
 import { World } from './world'
-import { selectSlices } from './slice-selection'
+import { selectSlices, leakFreeDetail } from './slice-selection'
 
 // Generating the forest takes a while; the renderer never modifies its world.
 const world = new World(12345)
@@ -43,7 +47,7 @@ describe('ParallaxRenderer', () => {
     it('renders one layer per selected slice, near to far', () => {
       renderer.render()
       const camera = renderer.getCamera()
-      const expected = selectSlices(camera.z, 1, 200)
+      const expected = selectSlices(camera.z, 1, DEFAULT_RENDER_DISTANCE, renderer.getDetail())
       expect(renderer.getLayers().map(l => ({ depth: l.depth, size: l.size }))).toEqual(expected)
       expect(lastUpdate().layerCount).toBe(expected.length)
     })
@@ -145,15 +149,27 @@ describe('ParallaxRenderer', () => {
       expect(shifts).toEqual([...shifts].sort((a, b) => b - a))
     })
 
+    it.each([90, 45])('puts the longer viewport side at the edge of a %s° field of view', fov => {
+      renderer.setFov(fov)
+      renderer.render()
+      const camera = renderer.getCamera()
+      for (const layer of drawnLayers()) {
+        const distance = layer.depth + layer.size / 2 - camera.z
+        const focalLength = transformOf(layer.canvas).scale * 10 * distance
+        expect(focalLength).toBeCloseTo(400 / Math.tan((fov * Math.PI) / 360))
+      }
+    })
+
     it('keeps world points at their projected position across a resize', () => {
       renderer.render()
-      renderer.resize(1000, 500)
+      // Same longer side, so the same detail and slices.
+      renderer.resize(600, 800)
       renderer.render()
       expect(lastUpdate().layersRegenerated).toBe(0)
       for (const layer of drawnLayers()) {
         const { sx, sy } = project(layer, 0, 15)
-        expect(sx).toBeCloseTo(500)
-        expect(sy).toBeCloseTo(250)
+        expect(sx).toBeCloseTo(300)
+        expect(sy).toBeCloseTo(400)
       }
     })
 
@@ -171,6 +187,10 @@ describe('ParallaxRenderer', () => {
         const fog = l.canvas.nextElementSibling as HTMLElement
         return Number(/rgba\([^)]*, ([\d.]+)\)/.exec(fog.style.backgroundColor)?.[1])
       })
+      // Few, visible steps rather than one nearly transparent overlay per slice.
+      const steps = fogAlphas.filter(a => a > 0)
+      expect(steps.every(a => a >= 0.05)).toBe(true)
+      expect(steps.length).toBeLessThan(layers.length / 2)
       let transmittance = 1
       const accumulated = fogAlphas.map(a => (transmittance *= 1 - a))
       expect(accumulated).toEqual([...accumulated].sort((a, b) => b - a))
@@ -207,13 +227,73 @@ describe('ParallaxRenderer', () => {
     })
   })
 
-  it('keeps cached slices that are still needed when detail changes', () => {
-    renderer.setDetail(1)
-    renderer.render()
-    renderer.setDetail(2)
-    renderer.render()
-    expect(lastUpdate().layersReused).toBeGreaterThan(0)
-    expect(lastUpdate().layerCount).toBe(selectSlices(world.spawn.z, 1, 200, 2).length)
+  describe('field of view', () => {
+    it('clamps the field of view', () => {
+      expect(renderer.getFov()).toBe(DEFAULT_FOV)
+      renderer.setFov(1)
+      expect(renderer.getFov()).toBe(MIN_FOV)
+      renderer.setFov(500)
+      expect(renderer.getFov()).toBe(MAX_FOV)
+    })
+
+    it('only zooms: the slicing does not depend on it', () => {
+      renderer.render()
+      const slices = renderer.getLayers()
+      renderer.setFov(20)
+      renderer.render()
+      expect(lastUpdate().layersRegenerated).toBe(0)
+      expect(renderer.getLayers()).toEqual(slices)
+    })
+  })
+
+  describe('leak tolerance', () => {
+    it('derives detail from the tolerance and the longer viewport side', () => {
+      expect(renderer.getMaxLeak()).toBe(DEFAULT_MAX_LEAK)
+      for (const pixels of [1, 4, 32]) {
+        renderer.setMaxLeak(pixels)
+        expect(renderer.getDetail()).toBe(leakFreeDetail(800, pixels))
+      }
+    })
+
+    it('clamps the tolerance', () => {
+      renderer.setMaxLeak(0)
+      expect(renderer.getMaxLeak()).toBe(MIN_MAX_LEAK)
+      renderer.setMaxLeak(1000)
+      expect(renderer.getMaxLeak()).toBe(MAX_MAX_LEAK)
+    })
+
+    it('uses fewer, thicker slices for a larger tolerance', () => {
+      renderer.setMaxLeak(1)
+      renderer.render()
+      const strict = lastUpdate()
+      renderer.setMaxLeak(64)
+      renderer.render()
+      expect(lastUpdate().detail).toBeLessThan(strict.detail)
+      expect(lastUpdate().layerCount).toBeLessThan(strict.layerCount)
+      expect(lastUpdate().layerCount).toBe(selectSlices(world.spawn.z, 1, 200, lastUpdate().detail).length)
+    })
+  })
+
+  describe('render distance', () => {
+    it('covers exactly the render distance', () => {
+      renderer.setRenderDistance(50)
+      renderer.render()
+      const camera = renderer.getCamera()
+      const layers = renderer.getLayers()
+      expect(layers.map(l => ({ depth: l.depth, size: l.size })))
+        .toEqual(selectSlices(camera.z, 1, 50, renderer.getDetail()))
+      const last = layers[layers.length - 1]
+      expect(last.depth + last.size).toBeGreaterThanOrEqual(camera.z + 50)
+      expect(last.depth).toBeLessThan(camera.z + 50)
+    })
+
+    it('clamps the render distance', () => {
+      expect(renderer.getRenderDistance()).toBe(DEFAULT_RENDER_DISTANCE)
+      renderer.setRenderDistance(1)
+      expect(renderer.getRenderDistance()).toBe(MIN_RENDER_DISTANCE)
+      renderer.setRenderDistance(1e6)
+      expect(renderer.getRenderDistance()).toBe(MAX_RENDER_DISTANCE)
+    })
   })
 
   describe('stats', () => {
