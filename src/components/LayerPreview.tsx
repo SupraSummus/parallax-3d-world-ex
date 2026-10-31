@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react'
-import { Layer } from '@/lib/renderer'
+import type { Layer } from '@/lib/renderer'
 import { Card } from '@/components/ui/card'
 import { Switch } from '@/components/ui/switch'
 import { Badge } from '@/components/ui/badge'
@@ -32,7 +32,7 @@ function LayerItem({ layer, onToggleVisibility }: LayerItemProps) {
     canvas.height = layer.canvas.height * scale
 
     ctx.drawImage(layer.canvas, 0, 0, canvas.width, canvas.height)
-  }, [layer.canvas, layer.dirty])
+  }, [layer.canvas])
 
   const depthRange = layer.size === 1
     ? String(layer.depth)

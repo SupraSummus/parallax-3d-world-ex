@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
-import { ParallaxRenderer, World, Camera, SessionStats, Layer, WorldType, WORLD_TYPES } from '@/lib/renderer'
+import { ParallaxRenderer, DEFAULT_CAMERA, type Camera, type Layer, type SessionStats } from '@/lib/renderer'
+import { World, WORLD_TYPES, type WorldType } from '@/lib/world'
+import { DEFAULT_DEPTH_MULTIPLIER, MAX_DEPTH_MULTIPLIER, MIN_DEPTH_MULTIPLIER } from '@/lib/slice-selection'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -9,224 +11,144 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { LayerPreview } from '@/components/LayerPreview'
 import { Box, ChartLine, Crosshair, Eye, EyeOff, History, Layers, Move, RefreshCw } from 'lucide-react'
 
+/** Key -> movement direction (x, y, z) for held keys. Keys are lower-cased. */
+const MOVEMENT_KEYS: Record<string, [number, number, number]> = {
+  w: [0, 0, 1],
+  s: [0, 0, -1],
+  a: [-1, 0, 0],
+  d: [1, 0, 0],
+  ' ': [0, 1, 0],
+  shift: [0, -1, 0],
+}
+
 function App() {
   const containerRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<ParallaxRenderer | null>(null)
-  const keysPressed = useRef<Set<string>>(new Set())
-  const movementInterval = useRef<number | undefined>(undefined)
 
-  const [sessionStats, setSessionStats] = useState<SessionStats>({
-    totalUpdates: 0,
-    totalRenderTime: 0,
-    totalLayersRegenerated: 0,
-    totalVoxelsRendered: 0,
-    averageCacheEfficiency: 0,
-    lastUpdate: null,
-    layerCount: 0,
-    voxelsRendered: 0,
-    cacheHits: 0,
-    cacheMisses: 0,
-    fps: 0,
-    frameTime: 0
-  })
-  const [camera, setCamera] = useState<Camera>({ x: 0, y: 15, z: -30 })
+  const [sessionStats, setSessionStats] = useState<SessionStats | null>(null)
+  const [camera, setCamera] = useState<Camera>(DEFAULT_CAMERA)
   const [showStats, setShowStats] = useState(true)
   const [showLayers, setShowLayers] = useState(true)
   const [layers, setLayers] = useState<Layer[]>([])
   const [moveSpeed, setMoveSpeed] = useState(0.5)
   const [worldType, setWorldType] = useState<WorldType>('forest')
-  const [depthMultiplier, setDepthMultiplier] = useState(2)
+  const [depthMultiplier, setDepthMultiplier] = useState(DEFAULT_DEPTH_MULTIPLIER)
+
+  // Read from the movement loop without restarting it.
+  const moveSpeedRef = useRef(moveSpeed)
+  moveSpeedRef.current = moveSpeed
 
   const requestRender = useCallback(() => {
-    if (rendererRef.current) {
-      rendererRef.current.render()
-      setSessionStats(rendererRef.current.getSessionStats())
-      setLayers(rendererRef.current.getLayers())
-    }
+    const renderer = rendererRef.current
+    if (!renderer) return
+    renderer.render()
+    setSessionStats(renderer.getStats())
+    setLayers(renderer.getLayers())
+    setCamera(renderer.getCamera())
   }, [])
 
+  // Renderer lifecycle.
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
 
-    const resizeCanvas = () => {
-      if (rendererRef.current) {
-        rendererRef.current.resize(window.innerWidth, window.innerHeight)
-        requestRender()
-      }
-    }
-
-    const world = new World()
-    const renderer = new ParallaxRenderer(container, world)
+    const renderer = new ParallaxRenderer(container, new World(Date.now(), 'forest'))
     rendererRef.current = renderer
-    renderer.resize(window.innerWidth, window.innerHeight)
 
-    requestRender()
+    const handleResize = () => {
+      renderer.resize(window.innerWidth, window.innerHeight)
+      requestRender()
+    }
+    handleResize()
 
-    window.addEventListener('resize', resizeCanvas)
-
+    window.addEventListener('resize', handleResize)
     return () => {
-      window.removeEventListener('resize', resizeCanvas)
+      window.removeEventListener('resize', handleResize)
+      rendererRef.current = null
     }
   }, [requestRender])
 
+  // Keyboard movement: one animation-frame loop runs while any movement key is held.
   useEffect(() => {
-    const updateCamera = () => {
-      if (!rendererRef.current) return
+    const held = new Set<string>()
+    let frame: number | undefined
 
-      const currentCamera = rendererRef.current.getCamera()
-      const newCamera = { ...currentCamera }
-      let moved = false
-
-      if (keysPressed.current.has('w')) {
-        newCamera.z += moveSpeed
-        moved = true
+    const tick = () => {
+      if (held.size === 0) {
+        frame = undefined
+        return
       }
-      if (keysPressed.current.has('s')) {
-        newCamera.z -= moveSpeed
-        moved = true
-      }
-      if (keysPressed.current.has('a')) {
-        newCamera.x -= moveSpeed
-        moved = true
-      }
-      if (keysPressed.current.has('d')) {
-        newCamera.x += moveSpeed
-        moved = true
-      }
-      if (keysPressed.current.has(' ')) {
-        newCamera.y += moveSpeed
-        moved = true
-      }
-      if (keysPressed.current.has('shift')) {
-        newCamera.y -= moveSpeed
-        moved = true
-      }
-
-      if (moved) {
-        rendererRef.current.setCamera(newCamera)
-        setCamera(newCamera)
+      const renderer = rendererRef.current
+      if (renderer) {
+        const speed = moveSpeedRef.current
+        const cam = renderer.getCamera()
+        for (const key of held) {
+          const [dx, dy, dz] = MOVEMENT_KEYS[key]
+          cam.x += dx * speed
+          cam.y += dy * speed
+          cam.z += dz * speed
+        }
+        renderer.setCamera(cam)
         requestRender()
       }
+      frame = requestAnimationFrame(tick)
     }
 
-    if (keysPressed.current.size > 0) {
-      movementInterval.current = window.setInterval(updateCamera, 16)
+    const stop = () => {
+      held.clear()
+      if (frame !== undefined) cancelAnimationFrame(frame)
+      frame = undefined
     }
 
-    return () => {
-      if (movementInterval.current) {
-        clearInterval(movementInterval.current)
-      }
-    }
-  }, [moveSpeed, requestRender])
-
-  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
-      const wasEmpty = keysPressed.current.size === 0
-      keysPressed.current.add(key)
-      
-      if (wasEmpty && keysPressed.current.size > 0) {
-        const updateCamera = () => {
-          if (!rendererRef.current) return
-
-          const currentCamera = rendererRef.current.getCamera()
-          const newCamera = { ...currentCamera }
-          let moved = false
-
-          if (keysPressed.current.has('w')) {
-            newCamera.z += moveSpeed
-            moved = true
-          }
-          if (keysPressed.current.has('s')) {
-            newCamera.z -= moveSpeed
-            moved = true
-          }
-          if (keysPressed.current.has('a')) {
-            newCamera.x -= moveSpeed
-            moved = true
-          }
-          if (keysPressed.current.has('d')) {
-            newCamera.x += moveSpeed
-            moved = true
-          }
-          if (keysPressed.current.has(' ')) {
-            newCamera.y += moveSpeed
-            moved = true
-          }
-          if (keysPressed.current.has('shift')) {
-            newCamera.y -= moveSpeed
-            moved = true
-          }
-
-          if (moved) {
-            rendererRef.current.setCamera(newCamera)
-            setCamera(newCamera)
-            requestRender()
-          }
-        }
-
-        movementInterval.current = window.setInterval(updateCamera, 16)
-      }
+      if (!(key in MOVEMENT_KEYS)) return
+      // Don't hijack typing/space activation inside form controls.
+      if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [role="combobox"]')) return
+      e.preventDefault()
+      held.add(key)
+      frame ??= requestAnimationFrame(tick)
     }
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      const key = e.key.toLowerCase()
-      keysPressed.current.delete(key)
-      
-      if (keysPressed.current.size === 0 && movementInterval.current) {
-        clearInterval(movementInterval.current)
-        movementInterval.current = undefined
-      }
+      held.delete(e.key.toLowerCase())
+      if (held.size === 0) stop()
     }
 
     window.addEventListener('keydown', handleKeyDown)
     window.addEventListener('keyup', handleKeyUp)
-
+    // Releasing keys while the window is unfocused never fires keyup.
+    window.addEventListener('blur', stop)
     return () => {
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
-      if (movementInterval.current) {
-        clearInterval(movementInterval.current)
-      }
+      window.removeEventListener('blur', stop)
+      stop()
     }
-  }, [moveSpeed, requestRender])
+  }, [requestRender])
 
-  const handleRegenerateWorld = () => {
-    if (rendererRef.current) {
-      rendererRef.current.regenerateWorld(Date.now(), worldType)
-      requestRender()
-    }
-  }
-
-  const handleWorldTypeChange = (newWorldType: WorldType) => {
-    setWorldType(newWorldType)
-    if (rendererRef.current) {
-      rendererRef.current.regenerateWorld(Date.now(), newWorldType)
-      requestRender()
-    }
+  const handleRegenerateWorld = (type: WorldType = worldType) => {
+    setWorldType(type)
+    rendererRef.current?.regenerateWorld(Date.now(), type)
+    requestRender()
   }
 
   const handleToggleLayerVisibility = (depth: number) => {
-    if (rendererRef.current) {
-      rendererRef.current.toggleLayerVisibility(depth)
-      requestRender()
-    }
+    rendererRef.current?.toggleLayerVisibility(depth)
+    requestRender()
   }
 
-  const handleDepthMultiplierChange = (value: number[]) => {
-    const newMultiplier = value[0]
-    setDepthMultiplier(newMultiplier)
-    if (rendererRef.current) {
-      rendererRef.current.setDepthMultiplier(newMultiplier)
-      requestRender()
-    }
+  const handleDepthMultiplierChange = ([value]: number[]) => {
+    setDepthMultiplier(value)
+    rendererRef.current?.setDepthMultiplier(value)
+    requestRender()
   }
 
-  const lastUpdate = sessionStats.lastUpdate
-  const avgRenderTime = sessionStats.totalUpdates > 0 
-    ? (sessionStats.totalRenderTime / sessionStats.totalUpdates).toFixed(2)
+  const totalUpdates = sessionStats?.totalUpdates ?? 0
+  const averageCacheEfficiency = sessionStats?.averageCacheEfficiency ?? 0
+  const lastUpdate = sessionStats?.lastUpdate
+  const avgRenderTime = totalUpdates > 0 && sessionStats
+    ? (sessionStats.totalRenderTime / totalUpdates).toFixed(2)
     : '0.00'
 
   return (
@@ -272,7 +194,7 @@ function App() {
               <div className="space-y-1.5 font-mono text-xs pl-6">
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Total Updates</span>
-                  <span className="text-primary font-bold">{sessionStats.totalUpdates}</span>
+                  <span className="text-primary font-bold">{totalUpdates}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Avg Render Time</span>
@@ -280,13 +202,13 @@ function App() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Avg Cache Efficiency</span>
-                  <Badge variant={sessionStats.averageCacheEfficiency > 70 ? 'default' : 'secondary'}>
-                    {sessionStats.averageCacheEfficiency.toFixed(1)}%
+                  <Badge variant={averageCacheEfficiency > 70 ? 'default' : 'secondary'}>
+                    {averageCacheEfficiency.toFixed(1)}%
                   </Badge>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Total Voxels</span>
-                  <span className="text-foreground">{sessionStats.totalVoxelsRendered.toLocaleString()}</span>
+                  <span className="text-foreground">{(sessionStats?.totalVoxelsRendered ?? 0).toLocaleString()}</span>
                 </div>
               </div>
             </div>
@@ -371,8 +293,8 @@ function App() {
             <Slider
               value={[depthMultiplier]}
               onValueChange={handleDepthMultiplierChange}
-              min={1.2}
-              max={4}
+              min={MIN_DEPTH_MULTIPLIER}
+              max={MAX_DEPTH_MULTIPLIER}
               step={0.1}
               className="w-full"
             />
@@ -390,7 +312,7 @@ function App() {
           <label className="text-xs text-muted-foreground mb-2 block">
             World Type
           </label>
-          <Select value={worldType} onValueChange={handleWorldTypeChange}>
+          <Select value={worldType} onValueChange={(v) => { handleRegenerateWorld(v as WorldType) }}>
             <SelectTrigger className="w-full">
               <SelectValue placeholder="Select world type" />
             </SelectTrigger>
@@ -405,7 +327,7 @@ function App() {
         </div>
 
         <Button
-          onClick={handleRegenerateWorld}
+          onClick={() => { handleRegenerateWorld() }}
           className="w-full mb-3"
           variant="default"
         >
@@ -439,15 +361,15 @@ function App() {
         <div className="text-xs text-muted-foreground space-y-1">
           <div className="flex items-center gap-2">
             <Move size={14} />
-            <span>WASD - Move Horizontally</span>
+            <span>W/S - Forward/Back</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-3.5" />
+            <span>A/D - Left/Right</span>
           </div>
           <div className="flex items-center gap-2">
             <span className="w-3.5" />
             <span>Space/Shift - Up/Down</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <span className="w-3.5" />
-            <span>W/S also moves In/Out</span>
           </div>
         </div>
       </Card>
