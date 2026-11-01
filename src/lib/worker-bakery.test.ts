@@ -133,6 +133,20 @@ describe('WorkerBakery', () => {
     expect(standsIn.lastIndexOf(false)).toBeLessThan(standsIn.indexOf(true))
   })
 
+  it('stops baking once settled, though the cache is past its cap', async () => {
+    // The city at full HD: its chunks with fill gaps on and off pass the cap
+    // on hidden chunks, so eviction reaches the slices in view.
+    const renderer = new ParallaxRenderer(new World(12345, 'city'), { bakery: new WorkerBakery([new FakeWorker()]) })
+    renderer.resize(1920, 1080)
+    await settle(renderer)
+    renderer.setFillGaps(false)
+    await settle(renderer)
+    expect(renderer.getStats().lastUpdate?.cachedPixels).toBeGreaterThan(32_000_000)
+    // settle()'s last render evicted; did it drop chunks the view wants but does not draw?
+    renderer.render()
+    expect(pending(renderer)).toBe(0)
+  })
+
   it('drops chunks baked from a replaced world', async () => {
     const request = { face: '+z', depth: 0, size: 64, x: 0, y: 0, tanX: 0, tanY: 0, fillDetail: 0 }
     expect(new ChunkBaker(world.grid).bake(request).facesDrawn).toBeGreaterThan(0)
