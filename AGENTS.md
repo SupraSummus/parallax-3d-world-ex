@@ -79,3 +79,8 @@ at the result in the browser (`pnpm dev`); unit tests can't see pixels.
    tests.
 4. **TypeScript strict** (`strictTypeChecked` ESLint rules). Follow existing
    patterns in neighbouring files.
+5. **Semantic line breaks in Markdown** ([sembr.org](https://sembr.org/)).
+   One sentence per line,
+   and break after a clause where it helps (comma, semicolon, colon, dash).
+   Keep lines under about 80 characters, except for links and code.
+   Apply it lazily: to paragraphs you write or edit, no mass reformatting.
