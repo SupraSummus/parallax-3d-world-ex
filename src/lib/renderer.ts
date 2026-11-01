@@ -2,7 +2,8 @@ import { selectSlices, leakFreeDetail, directionStep, nearestDirection, sliceCen
 import { ChunkBaker, type ChunkImage, type ChunkRequest } from './chunk-baker'
 import { World, type Vec3, type WorldType } from './world'
 import type { VoxelData } from './voxel-grid'
-import { FACES, faceTangents, focalLength, rectangleTest, toLocal, type Face, type Orientation, type View } from './view'
+import { Coverage } from './occlusion'
+import { FACES, faceTangents, focalLength, onScreen, screenBox, toLocal, type Face, type Orientation, type ScreenBox, type View } from './view'
 
 export type Camera = Vec3
 
@@ -71,6 +72,8 @@ export interface UpdateStats {
   chunksRegenerated: number
   /** Chunks in view still baking (with a Bakery); an older bake of the same cell, if any, stands in. */
   chunksPending: number
+  /** Cells and chunks in view covered by nearer layers, so not drawn (see Coverage). */
+  chunksCovered: number
   /** Voxel faces drawn into chunks baked since the previous render (including any whose content turned out to be off screen). */
   voxelsRendered: number
   /** Percentage of chunks in view served from the cache. */
@@ -174,6 +177,7 @@ export class ParallaxRenderer {
   private maxLeak = DEFAULT_MAX_LEAK
   private renderDistance = DEFAULT_RENDER_DISTANCE
   private fillGaps = true
+  private skipCovered = true
   private width = 0
   private height = 0
 
@@ -230,16 +234,27 @@ export class ParallaxRenderer {
     // time and would keep the workers from ever reaching them.
     const uncovered: { request: ChunkRequest; distance: number }[] = []
     const stale: { request: ChunkRequest; distance: number }[] = []
+    // Never baked and covered by nearer layers: baked last, so it is there
+    // when a nearer slice re-tiles and has nothing to show for a while.
+    const behind: { request: ChunkRequest; distance: number }[] = []
     const inView = new Set<Chunk>()
     const slicesInView: Slice[] = []
+    let chunksCovered = 0
     const frame: Frame = { ...view, fog: 0, layers: [] }
+    const coverage = this.skipCovered ? new Coverage(view) : null
 
     for (const face of FACES) {
       // The face's part of the screen, on a plane at distance d: tangents · d around the camera.
       const tangents = faceTangents(view, face)
       if (!tangents) continue
-      const onScreen = rectangleTest(view, face)
+      const boxOf = screenBox(view, face)
+      const covered = (box: ScreenBox) => {
+        const c = coverage?.hides(box) ?? false
+        if (c) chunksCovered++
+        return c
+      }
       const camera = toLocal(face, this.camera)
+      coverage?.setFace(face)
 
       for (const { depth, size } of selectSlices(camera.z, NEAR_DEPTH, this.renderDistance, detail)) {
         const slice = this.getSlice(face, depth, size)
@@ -265,12 +280,20 @@ export class ParallaxRenderer {
         for (let x = firstX; x - 0.5 < right; x += w) {
           for (let y = firstY; y - 0.5 < top; y += w) {
             // The screen shows a quadrilateral of the plane, less than its bounding box.
-            if (!onScreen(x - 0.5 - camera.x, x + w - 0.5 - camera.x, y - 0.5 - camera.y, y + w - 0.5 - camera.y, distance)) continue
+            const cellBox = boxOf(x - 0.5 - camera.x, x + w - 0.5 - camera.x, y - 0.5 - camera.y, y + w - 0.5 - camera.y, distance)
+            if (!onScreen(view, cellBox)) continue
             // Bake along the grid direction nearest to the ray through the cell's centre.
             const tanX = nearestDirection((x + w / 2 - 0.5 - camera.x) / distance, step)
             const tanY = nearestDirection((y + w / 2 - 0.5 - camera.y) / distance, step)
             const request = { face: face.name, depth, size, x, y, tanX, tanY, fillDetail }
             let chunk = slice.chunks.get(chunkKey(request))
+            if (covered(cellBox)) {
+              // Not drawn, but kept; a cell never baked is baked last.
+              const kept = chunk ?? slice.latest.get(cellKey(x, y))
+              if (kept) inView.add(kept)
+              else if (!this.baker) behind.push({ request, distance })
+              continue
+            }
             if (!chunk) {
               if (this.baker) {
                 chunk = this.store(request, this.baker.bake(request))
@@ -287,7 +310,8 @@ export class ParallaxRenderer {
             // The chunk's content, not just its cell, must reach the screen.
             const contentLeft = chunk.originX - camera.x
             const contentTop = chunk.originY - camera.y
-            if (!onScreen(contentLeft, contentLeft + chunk.width / chunk.scale, contentTop - chunk.height / chunk.scale, contentTop, distance)) continue
+            const box = boxOf(contentLeft, contentLeft + chunk.width / chunk.scale, contentTop - chunk.height / chunk.scale, contentTop, distance)
+            if (!onScreen(view, box) || covered(box)) continue
             if (this.fresh.has(chunk)) {
               this.fresh.delete(chunk)
               chunksRegenerated++
@@ -298,6 +322,7 @@ export class ParallaxRenderer {
             placements.push({ chunk, x: contentLeft, y: contentTop })
           }
         }
+        coverage?.cover(placements, distance, w, camera)
       }
     }
     // The last slice may reach past the render distance; the sky is behind it.
@@ -308,7 +333,7 @@ export class ParallaxRenderer {
     this.evict()
     const nearFirst = (missing: { request: ChunkRequest; distance: number }[]) =>
       missing.sort((a, b) => a.distance - b.distance).map(m => m.request)
-    this.bakery?.want([...nearFirst(uncovered), ...nearFirst(stale)])
+    this.bakery?.want([...nearFirst(uncovered), ...nearFirst(stale), ...nearFirst(behind)])
     const voxelsRendered = this.facesBaked
     this.facesBaked = 0
 
@@ -329,6 +354,7 @@ export class ParallaxRenderer {
       chunksReused,
       chunksRegenerated,
       chunksPending,
+      chunksCovered,
       voxelsRendered,
       cacheEfficiency,
       cachedPixels: this.cachedPixels(() => true),
@@ -422,6 +448,11 @@ export class ParallaxRenderer {
   /** Whether faces are grown to fill the gaps between slices (see chunkFaces). */
   setFillGaps(fill: boolean) {
     this.fillGaps = fill
+  }
+
+  /** Whether chunks covered by nearer layers are skipped: not drawn, and baked last (see Coverage). */
+  setSkipCovered(skip: boolean) {
+    this.skipCovered = skip
   }
 
   /**

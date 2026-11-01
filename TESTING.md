@@ -22,7 +22,8 @@ pnpm exec vitest -t "cache"     # filter by test name
 | `src/lib/view.test.ts` | Camera basis, faces are rotations, projection against screen rays, faces cover every ray on screen, culling |
 | `src/lib/voxel-grid.test.ts` | Turned copies put every voxel at its face coordinates; counting a face's slice without turning |
 | `src/lib/renderer.test.ts` | Layer and chunk contents, culling to the view, baking directions, frame order and fog, perspective/parallax placement (straight ahead and turned, across faces), looking all around, cache reuse and invalidation, stats (on a small world: the forest is slow in jsdom) |
-| `src/lib/worker-bakery.test.ts` | Baking in workers (simulated in microtasks): same frames as baking on the main thread (straight ahead and across faces), older bakes standing in, cells showing nothing baked first, no backlog after the camera moves, no rebaking once settled (cache past its cap), stale worlds dropped |
+| `src/lib/occlusion.test.ts` | Skipping covered chunks leaves the picture (a software compositor's) unchanged |
+| `src/lib/worker-bakery.test.ts` | Baking in workers (simulated in microtasks): same frames as baking on the main thread (straight ahead and across faces), older bakes standing in, cells showing nothing baked first, covered cells baked last (no gaps when near slices re-tile), no backlog after the camera moves, no rebaking once settled (cache past its cap), stale worlds dropped |
 | `src/lib/renderer-regressions.test.ts` | Previously fixed rendering bugs, checked on chunk pixels and their placement |
 | `src/App.test.tsx` | UI panels, keyboard movement and turning (with a stub forest, for speed) |
 

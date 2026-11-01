@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { FACES, faceTangents, projector, rectangleTest, screenRay, toLocal, viewBasis, type Face, type View } from './view'
+import { FACES, faceTangents, onScreen, projector, screenBox, screenRay, toLocal, viewBasis, type Face, type View } from './view'
 import type { Vec3 } from './world'
 
 /** Seeded uniform samples in [lo, hi), so failures reproduce. */
@@ -86,17 +86,19 @@ describe('faceTangents', () => {
   })
 })
 
-describe('rectangleTest', () => {
-  it('passes a rectangle around the view direction and fails one to the side or behind', () => {
-    const onScreen = rectangleTest(view(10, -10), FACES[0])
+describe('screenBox', () => {
+  const visible = (v: View, left: number, right: number, bottom: number, top: number, distance: number) =>
+    onScreen(v, screenBox(v, FACES[0])(left, right, bottom, top, distance))
+
+  it('shows a rectangle around the view direction, not one to the side or behind', () => {
     // The view direction meets z = 10 at about (1.76, -1.79).
-    expect(onScreen(1, 2, -2, -1, 10)).toBe(true)
-    expect(onScreen(-30, -20, -2, -1, 10)).toBe(false)
-    expect(rectangleTest(view(180, 0), FACES[0])(1, 2, -2, -1, 10)).toBe(false)
+    expect(visible(view(10, -10), 1, 2, -2, -1, 10)).toBe(true)
+    expect(visible(view(10, -10), -30, -20, -2, -1, 10)).toBe(false)
+    expect(visible(view(180, 0), 1, 2, -2, -1, 10)).toBe(false)
   })
 
-  it('passes a rectangle reaching from behind the camera into view', () => {
+  it('shows a rectangle reaching from behind the camera into view', () => {
     // Looking along +x; the rectangle on z = 10 spans x from -50 to 50.
-    expect(rectangleTest(view(90, 0), FACES[0])(-50, 50, -1, 1, 10)).toBe(true)
+    expect(visible(view(90, 0), -50, 50, -1, 1, 10)).toBe(true)
   })
 })

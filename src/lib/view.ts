@@ -153,21 +153,34 @@ export function projector(view: View, face: Face): (p: Vec3) => { x: number; y: 
 /** Points nearer the camera plane than this are cut off before projecting. */
 const NEAR_PLANE = 1e-3
 
+/** A rectangle on screen, CSS pixels from the top-left. */
+export interface ScreenBox {
+  minX: number
+  maxX: number
+  minY: number
+  maxY: number
+}
+
 /**
- * Whether a camera-relative rectangle [left, right] × [bottom, top] on a
- * face's plane z = distance (face coordinates) may show on screen: whether
- * the bounding box of its part in front of the camera, projected,
- * overlaps the viewport.
+ * For one view and face: the screen bounding box of the part in front of
+ * the camera of a camera-relative rectangle [left, right] × [bottom, top]
+ * on the face's plane z = distance (face coordinates), or null if none of
+ * it is in front.
  */
-export function rectangleTest(view: View, face: Face): (left: number, right: number, bottom: number, top: number, distance: number) => boolean {
+export function screenBox(view: View, face: Face): (left: number, right: number, bottom: number, top: number, distance: number) => ScreenBox | null {
   const { forward } = faceBasis(face, view.orientation)
   const to = projector(view, face)
   return (left, right, bottom, top, distance) => {
     const corners = [[left, bottom], [right, bottom], [right, top], [left, top]].map(([x, y]) => ({ x, y, z: distance }))
     const points = clip(corners, p => dot(p, forward) - NEAR_PLANE).flatMap(p => to(p) ?? [])
-    if (points.length === 0) return false
+    if (points.length === 0) return null
     const xs = points.map(p => p.x)
     const ys = points.map(p => p.y)
-    return Math.min(...xs) < view.width && Math.max(...xs) > 0 && Math.min(...ys) < view.height && Math.max(...ys) > 0
+    return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) }
   }
+}
+
+/** Whether a screen box overlaps the viewport. */
+export function onScreen(view: View, box: ScreenBox | null): box is ScreenBox {
+  return box !== null && box.minX < view.width && box.maxX > 0 && box.minY < view.height && box.maxY > 0
 }

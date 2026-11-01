@@ -63,6 +63,7 @@ function App() {
   const [renderDistance, setRenderDistance] = useState(DEFAULT_RENDER_DISTANCE)
   const [maxLeak, setMaxLeak] = useState(DEFAULT_MAX_LEAK)
   const [fillGaps, setFillGaps] = useState(true)
+  const [skipCovered, setSkipCovered] = useState(true)
 
   // Read from the movement loop without restarting it.
   const getMoveSpeed = useEffectEvent(() => moveSpeed)
@@ -248,6 +249,12 @@ function App() {
     requestRender()
   }
 
+  const handleSkipCoveredChange = (value: boolean) => {
+    setSkipCovered(value)
+    rendererRef.current?.setSkipCovered(value)
+    requestRender()
+  }
+
   const handleFillGapsChange = (value: boolean) => {
     setFillGaps(value)
     rendererRef.current?.setFillGaps(value)
@@ -328,6 +335,10 @@ function App() {
             <label className="flex items-center justify-between text-xs text-muted-foreground">
               Fill Gaps
               <Switch checked={fillGaps} onCheckedChange={handleFillGapsChange} aria-label="Fill gaps" />
+            </label>
+            <label className="flex items-center justify-between text-xs text-muted-foreground">
+              Skip Covered Chunks
+              <Switch checked={skipCovered} onCheckedChange={handleSkipCoveredChange} aria-label="Skip covered chunks" />
             </label>
             <div className="space-y-0.5 text-xs text-muted-foreground">
               <div className="flex items-center gap-2"><Move size={14} /><span>W/S - Forward/Back</span></div>
@@ -413,6 +424,7 @@ function App() {
                       <span className="text-destructive">{lastUpdate.chunksRegenerated}</span>
                     </StatRow>
                     <StatRow label="Chunks Baking">{lastUpdate.chunksPending}</StatRow>
+                    <StatRow label="Chunks Covered">{lastUpdate.chunksCovered}</StatRow>
                     <StatRow label="Cache Efficiency">{lastUpdate.cacheEfficiency.toFixed(1)}%</StatRow>
                     <StatRow label="Voxels Rendered">{lastUpdate.voxelsRendered.toLocaleString()}</StatRow>
                     <StatRow label="Cached Pixels">{(lastUpdate.cachedPixels / 1e6).toFixed(1)} Mpx</StatRow>
