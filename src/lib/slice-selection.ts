@@ -59,6 +59,23 @@ export function chunkCell(size: number): { columns: number; rows: number; width:
 }
 
 /**
+ * How far gap filling may grow a face, as a tangent times the distance
+ * from the slice's centre plane (MAX_REACH in bake/src/surface.rs).
+ */
+const MAX_REACH = 1
+
+/**
+ * How far around its cell a chunk of a slice of `size` may draw voxels
+ * from, in lattice units: `columns` along a, `rows` along b (cell_margin in
+ * bake/src/surface.rs). `rows` also bounds how far from a voxel's b its
+ * faces may be drawn, with faces grown by at most MAX_REACH.
+ */
+export function cellMargin(size: number): { columns: number; rows: number } {
+  const half = ((size + 1) / 2) * LAYER
+  return { columns: Math.ceil(((1 + MAX_REACH) * half + 1.5) / LAYER), rows: Math.ceil((LAYER + MAX_REACH) * half + 1.5) }
+}
+
+/**
  * The largest angle error (as a tangent) between a ray and the direction its
  * chunk is baked along, given the focal length in pixels, the largest
  * tangent of a ray the slices are drawn for (1 for a face, see inFace) and the
@@ -147,4 +164,34 @@ export function selectSlices(
     z = slice.depth + slice.size
   }
   return slices
+}
+
+/**
+ * Pairs up two tilings of a face's layers (contiguous slices, near to far,
+ * as selectSlices returns them): segments of consecutive `wanted` slices,
+ * each with the `previous` slices holding exactly its layers (the first
+ * may start nearer), split wherever both tilings have a boundary. Where
+ * `previous` has no such slices, a segment gets none.
+ */
+export function matchTilings(wanted: SliceBoundary[], previous: SliceBoundary[]): { wanted: SliceBoundary[]; previous: SliceBoundary[] }[] {
+  const starts = new Map(previous.map((s, k) => [s.depth, k]))
+  const ends = new Map(previous.map((s, k) => [s.depth + s.size, k]))
+  const segments: { wanted: SliceBoundary[]; previous: SliceBoundary[] }[] = []
+  let current: SliceBoundary[] = []
+  for (const slice of wanted) {
+    current.push(slice)
+    const end = ends.get(slice.depth + slice.size)
+    if (end === undefined) continue
+    const from = current[0].depth
+    let start = starts.get(from)
+    // The first segment may start within a previous slice.
+    if (start === undefined && segments.length === 0) {
+      const k = previous.findIndex(s => s.depth < from && from < s.depth + s.size)
+      if (k >= 0) start = k
+    }
+    segments.push({ wanted: current, previous: start === undefined || start > end ? [] : previous.slice(start, end + 1) })
+    current = []
+  }
+  if (current.length > 0) segments.push({ wanted: current, previous: [] })
+  return segments
 }

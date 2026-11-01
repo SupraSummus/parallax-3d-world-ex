@@ -118,6 +118,27 @@ describe('screenBox', () => {
     expect(visible(view(180, 0), 1, 2, -2, -1, 10)).toBe(false)
   })
 
+  it('bounds the projected corners of a rectangle in front of the camera', () => {
+    const random = sampler(5)
+    let checked = 0
+    for (let n = 0; n < 300; n++) {
+      const v = view(random(-180, 180), random(-90, 90))
+      const f = FACES[Math.floor(random(0, 12))]
+      const [x, y, d] = [random(-20, 20), random(-20, 20), random(1, 30)]
+      const corners = [[x, y], [x + 3, y], [x + 3, y + 2], [x, y + 2]].map(([cx, cy]) => projector(v, f)({ x: cx, y: cy, z: d }))
+      if (corners.some(c => !c)) continue
+      const box = screenBox(v, f)(x, x + 3, y, y + 2, d)
+      const xs = corners.map(c => c?.x ?? 0)
+      const ys = corners.map(c => c?.y ?? 0)
+      expect(box?.minX).toBeCloseTo(Math.min(...xs), 6)
+      expect(box?.maxX).toBeCloseTo(Math.max(...xs), 6)
+      expect(box?.minY).toBeCloseTo(Math.min(...ys), 6)
+      expect(box?.maxY).toBeCloseTo(Math.max(...ys), 6)
+      checked++
+    }
+    expect(checked).toBeGreaterThan(50)
+  })
+
   it('shows a rectangle reaching from behind the camera into view', () => {
     // Looking along +x; the rectangle on z = 10 spans x from -50 to 50.
     expect(visible(view(90, 0), -50, 50, -1, 1, 10)).toBe(true)
