@@ -15,7 +15,7 @@ pnpm exec vitest -t "cache"     # filter by test name
 | `src/lib/slice-selection.test.ts` | Slice math: documented examples plus invariants (contiguous, aligned, logarithmic) over a grid of camera positions and detail levels; the two cases of leak-free detail |
 | `src/lib/leak-bound.test.ts` | The occlusion-leak bound as a step-by-step derivation, each step checked on seeded random samples, ending in a 2D ray-cast comparison (on the lattice's cross-section) of chunked, directed baking against true perspective |
 | `src/lib/fcc.test.ts` | Voxel geometry: 12 rhombic faces towards the nearest sites, on the voxel's boundary, wound outwards, volume 2 |
-| `src/lib/bake.test.ts` | Slice surfaces (open and cut faces) against a brute-force reference; chunks pixel by pixel against rays cast through the slice's voxels (painting order, faces, rasterisation); only open faces crossing a slice plane grow; shared edges filled without overlap or gaps; grown faces equal to the face swept over its growth, painted only into empty pixels; shading by world direction |
+| `src/lib/bake.test.ts` | Cell surfaces (open and cut faces) against a brute-force reference; chunks pixel by pixel against rays cast through the slice's voxels (painting order, faces, rasterisation); only open faces crossing a slice plane grow; shared edges filled without overlap or gaps; grown faces equal to the face swept over its growth, painted only into empty pixels; shading by world direction |
 | `src/lib/world.test.ts` | Toy world types: determinism, bounds in blocks |
 | `src/lib/city.test.ts` | City: determinism, voxel budget, spawn looking through an open entrance |
 | `src/lib/forest.test.ts` | Forest: determinism, coverage, voxel budget, tree heights in metres, clear spawn |

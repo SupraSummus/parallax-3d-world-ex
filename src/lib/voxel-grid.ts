@@ -99,24 +99,29 @@ export class VoxelGrid {
   }
 
   /**
-   * Number of voxels whose coordinate along `axis` (a unit vector along a
-   * world axis) is in [from, to): a slice of the face looking along it.
+   * Number of voxels with p · F in [from, to), for an integer vector F with
+   * two components ±1 and one 0 (a face's lattice.forward): the layers of
+   * a slice, see view.ts.
    */
-  countAlong(axis: Vec3, from: number, to: number): number {
-    const lo = [this.minX, this.minY, this.minZ]
-    const hi = [this.minX + this.nx, this.minY + this.ny, this.minZ + this.nz]
-    // Clip the box along the axis's dimension k, counting from the far end for a negative axis.
-    const k = axis.x !== 0 ? 0 : axis.y !== 0 ? 1 : 2
-    const sign = [axis.x, axis.y, axis.z][k]
-    lo[k] = Math.max(lo[k], sign > 0 ? from : 1 - to)
-    hi[k] = Math.min(hi[k], sign > 0 ? to : 1 - from)
+  countAlong({ x: fx, y: fy, z: fz }: Vec3, from: number, to: number): number {
+    const { minX, minY, minZ, nx, ny, nz, cells } = this
+    // [lo, hi) clipped to the v with f · v in [a, b), for f in -1, 0, 1.
+    const clip = (f: number, lo: number, hi: number, a: number, b: number) =>
+      f > 0 ? [Math.max(lo, a), Math.min(hi, b)] : f < 0 ? [Math.max(lo, 1 - b), Math.min(hi, 1 - a)] : a <= 0 && 0 < b ? [lo, hi] : [lo, lo]
+    // The extremes of f · v over the box's x and y.
+    const extremes = (f: number, lo: number, n: number) => [Math.min(f * lo, f * (lo + n - 1)), Math.max(f * lo, f * (lo + n - 1))]
+    const [x0, x1] = extremes(fx, minX, nx)
+    const [y0, y1] = extremes(fy, minY, ny)
     let count = 0
-    for (let z = lo[2]; z < hi[2]; z++) {
-      for (let y = lo[1]; y < hi[1]; y++) {
-        const row = ((z - this.minZ) * this.ny + (y - this.minY)) * (this.nx / 2)
-        // The row's first site at or after lo[0].
-        for (let x = lo[0] + ((lo[0] + y + z) & 1); x < hi[0]; x += 2) {
-          if (this.cells[row + ((x - this.minX) >> 1)] !== 0) count++
+    const [zFrom, zTo] = clip(fz, minZ, minZ + nz, from - y1 - x1, to - y0 - x0)
+    for (let z = zFrom; z < zTo; z++) {
+      const [yFrom, yTo] = clip(fy, minY, minY + ny, from - fz * z - x1, to - fz * z - x0)
+      for (let y = yFrom; y < yTo; y++) {
+        const along = fy * y + fz * z
+        const [lo, hi] = clip(fx, minX, minX + nx, from - along, to - along)
+        const row = ((z - minZ) * ny + (y - minY)) * (nx / 2)
+        for (let x = lo + ((lo + y + z) & 1); x < hi; x += 2) {
+          if (cells[row + ((x - minX) >> 1)] !== 0) count++
         }
       }
     }
@@ -180,43 +185,33 @@ export class VoxelGrid {
 }
 
 /**
- * The sites of `grid` in the coordinates of `axes`, unit vectors along
- * world axes (a face, see view.ts): local site (u, v, w) is world site
- * u · right + v · up + w · forward. The lattice is symmetric under these
- * turns, so local sites are sites too. `min` and `max` bound them
- * (inclusive); `at` reads a material id, 0 if empty, outside or not a site.
+ * The sites of `grid` in a face's lattice coordinates (a, b, c) (see Face
+ * in view.ts). `min` and `max` bound them (inclusive); `at` reads a
+ * material id, 0 if empty, outside or not a site.
  */
-export function faceReader(grid: VoxelData, { right, up, forward }: Basis): {
+export function faceReader(grid: VoxelData, { right: R, up: U, forward: F }: Basis): {
   min: Vec3
   max: Vec3
-  at: (u: number, v: number, w: number) => number
+  at: (a: number, b: number, c: number) => number
 } {
   const { minX, minY, minZ, nx, ny, nz, cells } = grid
-  const lo = [minX, minY, minZ]
-  const size = [nx, ny, nz]
-  // Each local axis is ±1 along one world axis k.
-  const axisOf = (a: Vec3) => {
-    const k = a.x !== 0 ? 0 : a.y !== 0 ? 1 : 2
-    return { k, sign: [a.x, a.y, a.z][k] }
-  }
-  const [au, av, aw] = [axisOf(right), axisOf(up), axisOf(forward)]
-  const range = ({ k, sign }: { k: number; sign: number }) =>
-    sign > 0 ? { min: lo[k], max: lo[k] + size[k] - 1 } : { min: 1 - lo[k] - size[k], max: -lo[k] }
-  const [ru, rv, rw] = [range(au), range(av), range(aw)]
+  // A linear map is extreme at the box's corners.
+  const corners = [minX, minX + nx - 1].flatMap(x => [minY, minY + ny - 1].flatMap(y => [minZ, minZ + nz - 1].map(z => ({ x, y, z }))))
+  const dot = (p: Vec3, v: Vec3) => p.x * v.x + p.y * v.y + p.z * v.z
+  const range = (v: Vec3) => corners.map(p => dot(p, v))
+  const [as, bs, cs] = [range(R), range(U), range(F)]
   const half = nx / 2
-  // Offsets from the grid's corner along x, y, z; reused.
-  const p = [0, 0, 0]
-  const at = (u: number, v: number, w: number): number => {
-    if (((u + v + w) & 1) !== 0) return 0
-    p[au.k] = au.sign * u - lo[au.k]
-    p[av.k] = av.sign * v - lo[av.k]
-    p[aw.k] = aw.sign * w - lo[aw.k]
-    if (p[0] < 0 || p[0] >= nx || p[1] < 0 || p[1] >= ny || p[2] < 0 || p[2] >= nz) return 0
-    return cells[(p[2] * ny + p[1]) * half + (p[0] >> 1)]
+  const at = (a: number, b: number, c: number): number => {
+    if (((a ^ c) | (b ^ c)) & 1) return 0
+    const x = (a * R.x + c * F.x) / 2 + b * U.x - minX
+    const y = (a * R.y + c * F.y) / 2 + b * U.y - minY
+    const z = (a * R.z + c * F.z) / 2 + b * U.z - minZ
+    if (x < 0 || x >= nx || y < 0 || y >= ny || z < 0 || z >= nz) return 0
+    return cells[(z * ny + y) * half + (x >> 1)]
   }
   return {
-    min: { x: ru.min, y: rv.min, z: rw.min },
-    max: { x: ru.max, y: rv.max, z: rw.max },
+    min: { x: Math.min(...as), y: Math.min(...bs), z: Math.min(...cs) },
+    max: { x: Math.max(...as), y: Math.max(...bs), z: Math.max(...cs) },
     at,
   }
 }

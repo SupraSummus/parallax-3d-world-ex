@@ -24,10 +24,11 @@ rectangular buildings), only their surfaces are made of rhombi.
 where it looks (level), Space/Shift up/down, adjustable move speed, field
 of view
 (5°–120° across the longer screen side) and render distance (40–800
-lattice units; a voxel's neighbours are √2 units away).
+units; a voxel's neighbours are √2 units away).
 
-**Slicing** – Six stacks of slices, one per face of a cube around the
-camera, each cut along its face's axis. Slices are aligned powers of two
+**Slicing** – Twelve stacks of slices, one per direction to a voxel's
+nearest neighbours (the faces of a rhombic dodecahedron around the
+camera), each cut along the lattice's layers across it. Slices are aligned powers of two
 thick and grow with viewing distance; each is split into chunks, rasterised only in view and as seen
 from a direction close to the camera's. Slices are thin enough that
 geometry perspective would hide (e.g. stone under the lake's water
@@ -84,20 +85,21 @@ waits for them; meanwhile a cell shows an older bake, or nothing.
 - Measure the seams between faces against ray-cast perspective.
 - Generate geometry on demand (chunks) instead of one fixed world.
 - Bake FCC voxels faster: a first bake is ~5× slower than it was with
-  cubes (more voxels, four faces towards the camera instead of one).
+  cubes (more voxels, up to six faces towards the camera instead of three).
 - Hold less of the world: every worker has its own 35–50 MB copy;
   a shared buffer or only the voxels with an open face would do.
 - Describe the city in metres, like the forest, instead of boxes on its
   0.25 m plan.
-- Slice along the FCC lattice instead of the cube's axes: treat voxels
-  as points (parts poking out of a slice don't matter) and cut the view
-  by lattice directions.
+- Make the 12 stacks cheaper: with four or more faces in view, each
+  with its own near slices, a first bake looking along an axis takes
+  ~2.5× as long as with a cube's six stacks.
 - Port the toy worlds to the forest's metric scale, or drop them.
 - Port baking (`bake.ts`, DOM-free) to Rust/WASM, if it becomes the bottleneck.
 - Fill cells that have never been baked from the slices a re-tiled slice
   replaces, instead of showing nothing until they arrive. Covered cells
   would then not need baking at all.
-- Find covered chunks faster: it adds 4–7 ms to a render.
+- Find covered chunks faster: it adds ~30 ms to a render with 12 faces,
+  mostly in `Coverage.cover`.
 - Generate the world in a worker: the forest takes ~0.5 s on the main
   thread at start.
 - Measure the WebGL compositor on real GPUs (headless Chromium only has a
