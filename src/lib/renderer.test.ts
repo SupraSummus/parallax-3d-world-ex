@@ -185,6 +185,8 @@ describe('ParallaxRenderer', () => {
 
     beforeEach(() => {
       renderer.setCamera({ x: 0, y: 15, z: -30 })
+      // Near layers hide most of the view; keep chunks of many layers to compare.
+      renderer.setSkipCovered(false)
     })
 
     it('scales nearer layers up more than farther ones', () => {

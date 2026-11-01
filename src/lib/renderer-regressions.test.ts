@@ -90,9 +90,12 @@ describe('Renderer regressions', () => {
   // Small z moves used to invalidate every layer, including distant ones
   // whose content had not changed.
   describe('z-movement cache churn', () => {
+    // Near layers, which change as the camera moves, hide most of the view
+    // here; these tests are about the distant ones, so nothing is skipped.
     it('reuses most chunks after a 1-unit Z move from the initial camera position', () => {
       const renderer = new ParallaxRenderer(world)
       renderer.resize(800, 600)
+      renderer.setSkipCovered(false)
       renderer.setCamera({ x: 0, y: 15, z: -30 })
 
       renderer.render() // initial: everything dirty, regenerated once
@@ -111,6 +114,7 @@ describe('Renderer regressions', () => {
     it('does not re-render every chunk on every keypress when moving along Z', () => {
       const renderer = new ParallaxRenderer(world)
       renderer.resize(800, 600)
+      renderer.setSkipCovered(false)
       renderer.setCamera({ x: 0, y: 15, z: -30 })
 
       renderer.render()
@@ -138,6 +142,7 @@ describe('Renderer regressions', () => {
     it('reuses chunks when the camera returns to an already-visited Z position', () => {
       const renderer = new ParallaxRenderer(world)
       renderer.resize(800, 600)
+      renderer.setSkipCovered(false)
       renderer.setCamera({ x: 0, y: 15, z: -30 })
 
       renderer.render() // warm cache at z=-30

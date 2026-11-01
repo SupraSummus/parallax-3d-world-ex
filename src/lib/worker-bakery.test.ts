@@ -122,6 +122,8 @@ describe('WorkerBakery', () => {
     const bakery = new RecordingBakery([new FakeWorker(), new FakeWorker()])
     const renderer = new ParallaxRenderer(world, { bakery })
     renderer.resize(800, 600)
+    // Covered cells are baked last of all.
+    renderer.setSkipCovered(false)
     await settle(renderer)
     const baked = new Set(bakery.all.map(cell))
     // Forward and sideways: near slices re-tile, and the other chunks change direction.
@@ -145,6 +147,32 @@ describe('WorkerBakery', () => {
     // settle()'s last render evicted; did it drop chunks the view wants but does not draw?
     renderer.render()
     expect(pending(renderer)).toBe(0)
+  })
+
+  it('bakes covered cells too, so a nearer slice re-tiling uncovers no gap', async () => {
+    const bakery = new RecordingBakery([new FakeWorker(), new FakeWorker()])
+    const renderer = new ParallaxRenderer(world, { bakery })
+    renderer.resize(800, 600)
+    await settle(renderer)
+    // Forward and sideways: cells come into view behind the near slices.
+    const { x, z } = renderer.getCamera()
+    renderer.setCamera({ x: x + 3, z: z + 3 })
+    renderer.render()
+    while (bakery.latest.length > 0) {
+      await tick()
+      renderer.render()
+    }
+    expect(renderer.getStats().lastUpdate?.chunksCovered).toBeGreaterThan(0)
+
+    // Every cell in view has a bake, if only an older one.
+    renderer.setSkipCovered(false)
+    const cells = (frame: Frame) => frame.layers.flatMap((l, i) => l.placements.map(({ chunk }) => `${String(i)}:${String(chunk.x)},${String(chunk.y)}`))
+    const showing = new Set(cells(renderer.render()))
+    const target = new ParallaxRenderer(world)
+    target.resize(800, 600)
+    target.setCamera(renderer.getCamera())
+    target.setSkipCovered(false)
+    expect(cells(target.render()).filter(c => !showing.has(c))).toEqual([])
   })
 
   it('drops chunks baked from a replaced world', async () => {

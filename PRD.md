@@ -31,7 +31,10 @@ surface) never shows by more than a set number of screen pixels ("Max
 Occlusion Leak", 1–64 px, default 16); the derived slice detail is shown in
 the statistics. "Fill Gaps" (on by default) grows faces that run from one
 slice into the next, where nothing else is drawn in their chunk, so thin
-things like a floor seen from above don't show sky between slices. See [DESIGN.md](DESIGN.md).
+things like a floor seen from above don't show sky between slices.
+"Skip Covered Chunks" (on by default) doesn't draw chunks that nearer
+ones cover, and bakes them last; the picture is the same, it is there to
+compare. See [DESIGN.md](DESIGN.md).
 
 **Worlds** – Procedurally generated, regenerable with a new seed; the camera
 moves to the world's spawn point.
@@ -59,7 +62,7 @@ per slice.
 **Statistics panel** – Session totals (updates, average render time, average
 cache efficiency, voxels rendered) and details of the last update (layers,
 slice detail, chunks in view reused vs newly baked, chunks still baking,
-cached chunk pixels). Chunks bake in background workers, so moving never
+chunks covered, cached chunk pixels). Chunks bake in background workers, so moving never
 waits for them; meanwhile a cell shows an older bake, or nothing.
 
 ## Non-goals (for the POC)
@@ -78,7 +81,9 @@ waits for them; meanwhile a cell shows an older bake, or nothing.
 - Port the toy worlds to the forest's metric scale, or drop them.
 - Port baking (`bake.ts`, DOM-free) to Rust/WASM, if it becomes the bottleneck.
 - Fill cells that have never been baked from the slices a re-tiled slice
-  replaces, instead of showing nothing until they arrive.
+  replaces, instead of showing nothing until they arrive. Covered cells
+  would then not need baking at all.
+- Find covered chunks faster: it adds 4–7 ms to a render.
 - Generate the world in a worker: the forest takes ~0.5 s on the main
   thread at start.
 - Measure the WebGL compositor on real GPUs (headless Chromium only has a

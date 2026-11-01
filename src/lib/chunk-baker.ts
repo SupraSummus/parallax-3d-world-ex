@@ -4,6 +4,7 @@
  * message protocol below. No DOM.
  */
 import { sliceSurface, chunkFaces, fillFaces, shadedPalette, type SliceSurface } from './bake'
+import { solidBlocks, type Solid } from './occlusion'
 import { FACES } from './view'
 import { rotateGrid, type VoxelData } from './voxel-grid'
 
@@ -31,6 +32,8 @@ export interface ChunkImage {
   height: number
   /** RGBA, rows top to bottom; transparent where nothing is drawn. */
   pixels: Uint32Array
+  /** Which blocks of pixels are all drawn, for finding what the chunk hides. */
+  solid: Solid
   /** World x, y of the top-left pixel's corner. */
   originX: number
   originY: number
@@ -100,7 +103,7 @@ export class ChunkBaker {
     // Without antialiasing: magnified many times on screen, a soft 1-pixel
     // edge would become a wide blur.
     const facesDrawn = fillFaces(faces, palette, pixels, width, height, minX, maxY, scale)
-    return { width, height, pixels, originX: minX, originY: maxY, scale, facesDrawn }
+    return { width, height, pixels, solid: solidBlocks(pixels, width, height), originX: minX, originY: maxY, scale, facesDrawn }
   }
 
   private face(name: string): { grid: VoxelData; palette: Uint32Array } {
@@ -155,7 +158,7 @@ export function bakeHandler(post: (result: BakeResult, transfer: Transferable[])
     } else if (baker) {
       const { generation, request } = message
       const image = baker.bake(request)
-      post({ generation, request, image }, [image.pixels.buffer])
+      post({ generation, request, image }, [image.pixels.buffer, image.solid.blocks.buffer])
     }
   }
 }

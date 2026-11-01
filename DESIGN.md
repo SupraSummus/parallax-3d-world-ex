@@ -274,7 +274,25 @@ A face is skipped if the screen shows none of its pyramid.
 Chunk cells are searched in the bounding box of the part it shows
 (`faceTangents`);
 a cell, then its chunk's content, is kept
-if its projected corners' bounding box overlaps the viewport (`rectangleTest`).
+if its projected corners' bounding box (`screenBox`) overlaps the viewport.
+
+**Covered chunks.** Near layers cover most of what is behind them
+(from the forest's spawn, about 70% of the chunks in view).
+`Coverage` marks which 16 × 16 pixel cells of the screen
+the layers drawn so far cover,
+and a cell or chunk whose bounding box, plus 8 pixels around it,
+lies on covered cells is not drawn.
+A screen cell is covered once the layer's chunks draw all of its part of the plane:
+bakers record which 4 × 4 pixel blocks of a chunk are all drawn (`solidBlocks`),
+and the blocks under a screen cell, plus a pixel around for smoothing, must be.
+Covered cells never baked are still baked, last:
+when the camera moves, a near slice re-tiles and shows nothing until baked,
+and what it covered must be there
+(without them, up to half of a frame went empty).
+Only chunks already baked cover anything.
+On the city at 1600 × 900, the view finishes baking ~7× sooner after start
+(the forest: ~1.5×), with a third of the chunks drawn;
+render() takes 4–7 ms more.
 
 The `Compositor` draws a frame onto one opaque WebGL 2 canvas, one
 textured rectangle per chunk, then the sky behind them. Chunk pixels are
