@@ -21,11 +21,12 @@ function makeWorldWithVoxels(voxels: World['voxels']): World {
 
 /** Screen positions (CSS pixels) of the centres of all drawn chunk pixels. */
 function drawnPixels(frame: Frame): { x: number; y: number }[] {
-  return frame.layers.flatMap(({ distance, placements }) => placements.flatMap(({ chunk, x, y }) => {
+  return frame.layers.flatMap(({ face, distance, placements }) => placements.flatMap(({ chunk, x, y }) => {
     const points: { x: number; y: number }[] = []
+    const project = projector(frame, face)
     chunk.pixels.forEach((pixel, i) => {
       if (pixel === 0) return
-      const point = projector(frame)({
+      const point = project({
         x: x + ((i % chunk.width) + 0.5) / chunk.scale,
         y: y - (Math.floor(i / chunk.width) + 0.5) / chunk.scale,
         z: distance,
@@ -43,9 +44,9 @@ function drawnPixels(frame: Frame): { x: number; y: number }[] {
 function gapPixels(frame: Frame, fromX: number, toX: number): number {
   const { width, height, focal } = frame
   const covered = new Uint8Array(width * height)
-  for (const { distance, placements } of frame.layers) {
+  for (const { face, distance, placements } of frame.layers) {
     for (const { chunk, x, y } of placements) {
-      const corner = projector(frame)({ x, y, z: distance })
+      const corner = projector(frame, face)({ x, y, z: distance })
       if (!corner) continue
       // Screen pixels per chunk pixel.
       const scale = focal / distance / chunk.scale

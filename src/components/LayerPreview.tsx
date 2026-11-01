@@ -9,7 +9,7 @@ import { Layers } from 'lucide-react'
 
 interface LayerPreviewProps {
   layers: Layer[]
-  onToggleVisibility: (depth: number) => void
+  onToggleVisibility: (face: string, depth: number) => void
 }
 
 /** Fits the chunks' world extent into the thumbnail, centred, sampling the nearest chunk pixel. */
@@ -39,7 +39,7 @@ function drawThumbnail(chunks: Chunk[], out: Uint32Array, width: number, height:
 
 interface LayerItemProps {
   layer: Layer
-  onToggleVisibility: (depth: number) => void
+  onToggleVisibility: (face: string, depth: number) => void
 }
 
 function LayerItem({ layer, onToggleVisibility }: LayerItemProps) {
@@ -74,7 +74,7 @@ function LayerItem({ layer, onToggleVisibility }: LayerItemProps) {
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-1.5">
           <h3 className="font-mono text-xs font-bold text-foreground truncate">
-            z {depthRange}
+            {layer.face} {depthRange}
           </h3>
           {layer.size > 1 && (
             <Badge variant="outline" className="text-xs font-mono px-1 py-0 h-4 leading-none">
@@ -89,7 +89,7 @@ function LayerItem({ layer, onToggleVisibility }: LayerItemProps) {
 
       <Switch
         checked={layer.visible}
-        onCheckedChange={() => { onToggleVisibility(layer.depth) }}
+        onCheckedChange={() => { onToggleVisibility(layer.face, layer.depth) }}
         className="data-[state=checked]:bg-primary flex-shrink-0"
       />
     </div>
@@ -128,7 +128,7 @@ export function LayerPreview({ layers, onToggleVisibility }: LayerPreviewProps) 
           ) : (
             drawn.map(layer => (
               <LayerItem
-                key={layer.depth}
+                key={`${layer.face}:${String(layer.depth)}`}
                 layer={layer}
                 onToggleVisibility={onToggleVisibility}
               />

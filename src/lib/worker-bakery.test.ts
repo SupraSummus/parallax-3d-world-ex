@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { bakeHandler, ChunkBaker, type BakeMessage, type BakeResult, type ChunkRequest } from './chunk-baker'
 import { ParallaxRenderer, type Camera, type Frame } from './renderer'
+import type { Orientation } from './view'
 import { VoxelGrid } from './voxel-grid'
 import { WorkerBakery, type BakeWorker } from './worker-bakery'
 import { World } from './world'
@@ -69,18 +70,25 @@ const shown = (frame: Frame) => frame.layers.map(l => l.placements.map(({ chunk,
   ({ cellX: chunk.x, cellY: chunk.y, tanX: chunk.tanX, tanY: chunk.tanY, pixels: checksum(chunk.pixels), x, y })))
 
 /** What baking on the main thread shows. */
-function reference(camera?: Camera, from = world) {
+function reference(camera?: Camera, from = world, orientation?: Orientation) {
   const renderer = new ParallaxRenderer(from)
   renderer.resize(800, 600)
   if (camera) renderer.setCamera(camera)
+  if (orientation) renderer.setOrientation(orientation)
   return shown(renderer.render())
 }
 
 describe('WorkerBakery', () => {
-  it('ends up showing what baking on the main thread shows', async () => {
+  it.each([[0, 0], [135, 30]])('ends up showing what baking on the main thread shows (yaw %s°, pitch %s°)', async (yaw, pitch) => {
+    // In the middle of the world, so there is something in every direction.
+    const camera = { x: 0, y: 15, z: 0 }
     const renderer = workerRenderer()
+    renderer.setCamera(camera)
+    renderer.setOrientation({ yaw, pitch })
     expect(shown(renderer.render()).flat()).toEqual([])
-    expect(shown(await settle(renderer))).toEqual(reference())
+    expect(shown(await settle(renderer))).toEqual(reference(camera, world, { yaw, pitch }))
+    const faces = new Set(renderer.getLayers().filter(l => l.chunks.length > 0).map(l => l.face))
+    expect(faces.size).toBe(yaw === 0 ? 1 : 3)
   })
 
   it("shows a cell's older bake while its new direction is baking", async () => {
@@ -126,7 +134,7 @@ describe('WorkerBakery', () => {
   })
 
   it('drops chunks baked from a replaced world', async () => {
-    const request = { depth: 0, size: 64, x: 0, y: 0, tanX: 0, tanY: 0, spread: 0 }
+    const request = { face: '+z', depth: 0, size: 64, x: 0, y: 0, tanX: 0, tanY: 0, spread: 0 }
     expect(new ChunkBaker(world.grid).bake(request).facesDrawn).toBeGreaterThan(0)
 
     const bakery = new WorkerBakery([new FakeWorker()])

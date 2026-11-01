@@ -27,11 +27,11 @@ src/
 │   ├── LayerPreview.tsx     # Layers panel
 │   └── ui/                  # shadcn/ui primitives (generated; CLI config in components.json)
 └── lib/
-    ├── voxel-grid.ts        # Dense voxel storage (typed arrays)
+    ├── voxel-grid.ts        # Dense voxel storage (typed arrays), turned copies
     ├── world.ts             # World: voxel grid, spawn, toy world types
     ├── forest.ts            # Forest scene generator (VOXEL_SIZE lives here)
     ├── slice-selection.ts   # Slices, chunks and baking directions (pure functions)
-    ├── view.ts              # Camera orientation, projection, how far it may turn
+    ├── view.ts              # Camera orientation, cube faces, projection
     ├── renderer.ts          # Slices and chunks in view, caching, screen placement (no DOM)
     ├── chunk-baker.ts       # Bakes whole chunks; the bake worker's message protocol
     ├── worker-bakery.ts     # Pool of bake workers the renderer sends missing chunks to

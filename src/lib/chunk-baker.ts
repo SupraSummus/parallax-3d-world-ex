@@ -4,14 +4,17 @@
  * message protocol below. No DOM.
  */
 import { sliceSurface, chunkFaces, fillFaces, shadedPalette, type SliceSurface } from './bake'
-import type { VoxelData } from './voxel-grid'
+import { FACES } from './view'
+import { rotateGrid, type VoxelData } from './voxel-grid'
 
 /**
- * A chunk to bake: corner (x, y) of the slice [depth, depth + size), seen
- * along (tanX, tanY, 1), with faces grown for rays up to `spread` off it
- * (see chunkFaces).
+ * A chunk to bake: corner (x, y) of the slice [depth, depth + size) of a
+ * face (by name, see FACES), seen along (tanX, tanY, 1), in the face's
+ * coordinates, with faces grown for rays up to `spread` off it (see
+ * chunkFaces).
  */
 export interface ChunkRequest {
+  face: string
   depth: number
   size: number
   x: number
@@ -57,16 +60,19 @@ function renderScale(size: number): number {
 // Slice surfaces kept for baking more chunks of the same slice, least recently used dropped first.
 const MAX_SURFACES = 64
 
-/** Bakes chunks of one world, keeping the surfaces of recently used slices. */
+/**
+ * Bakes chunks of one world, keeping the surfaces of recently used slices
+ * and, for each face baked so far, the world turned so the face looks
+ * along +z.
+ */
 export class ChunkBaker {
   private grid: VoxelData
-  private palette: Uint32Array
-  // Keyed by `depth:size`; insertion order is LRU order.
+  private faces = new Map<string, { grid: VoxelData; palette: Uint32Array }>()
+  // Keyed by `face:depth:size`; insertion order is LRU order.
   private surfaces = new Map<string, SliceSurface>()
 
   constructor(grid: VoxelData) {
     this.grid = grid
-    this.palette = shadedPalette(grid.materials)
   }
 
   /**
@@ -74,8 +80,9 @@ export class ChunkBaker {
    * centre plane (see bake.ts), clipped to the chunk's cell and cropped to
    * what is drawn there. A chunk no face reaches has no pixels.
    */
-  bake({ depth, size, x: x0, y: y0, tanX, tanY, spread }: ChunkRequest): ChunkImage {
-    const surface = this.surface(depth, size)
+  bake({ face, depth, size, x: x0, y: y0, tanX, tanY, spread }: ChunkRequest): ChunkImage {
+    const { grid, palette } = this.face(face)
+    const surface = this.surface(face, grid, depth, size)
     const faces = chunkFaces(surface, x0, y0, tanX, tanY, spread)
 
     // Drawn extent, clipped to the cell [x0 - 0.5, x0 + w - 0.5) × [y0 - 0.5, y0 + w - 0.5).
@@ -92,15 +99,26 @@ export class ChunkBaker {
     const pixels = new Uint32Array(width * height)
     // Without antialiasing: magnified many times on screen, a soft 1-pixel
     // edge would become a wide blur.
-    const facesDrawn = fillFaces(faces, this.palette, pixels, width, height, minX, maxY, scale)
+    const facesDrawn = fillFaces(faces, palette, pixels, width, height, minX, maxY, scale)
     return { width, height, pixels, originX: minX, originY: maxY, scale, facesDrawn }
   }
 
-  private surface(depth: number, size: number): SliceSurface {
-    const key = `${String(depth)}:${String(size)}`
+  private face(name: string): { grid: VoxelData; palette: Uint32Array } {
+    let face = this.faces.get(name)
+    if (!face) {
+      const axes = FACES.find(f => f.name === name)
+      if (!axes) throw new Error(`no face ${name}`)
+      face = { grid: rotateGrid(this.grid, axes), palette: shadedPalette(this.grid.materials, axes) }
+      this.faces.set(name, face)
+    }
+    return face
+  }
+
+  private surface(face: string, grid: VoxelData, depth: number, size: number): SliceSurface {
+    const key = `${face}:${String(depth)}:${String(size)}`
     let surface = this.surfaces.get(key)
     if (surface) this.surfaces.delete(key)
-    else surface = sliceSurface(this.grid, depth, size)
+    else surface = sliceSurface(grid, depth, size)
     this.surfaces.set(key, surface)
     for (const old of this.surfaces.keys()) {
       if (this.surfaces.size <= MAX_SURFACES) break
