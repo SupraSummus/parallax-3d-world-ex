@@ -29,9 +29,9 @@ from a direction close to the camera's. Slices are thin enough that
 geometry perspective would hide (e.g. stone under the lake's water
 surface) never shows by more than a set number of screen pixels ("Max
 Occlusion Leak", 1–64 px, default 16); the derived slice detail is shown in
-the statistics. "Fill Gaps" (on by default) draws faces larger where their
-chunk is empty, so slices don't show sky between them, at the cost of
-objects looking a little fatter. See [DESIGN.md](DESIGN.md).
+the statistics. "Fill Gaps" (on by default) grows faces that run from one
+slice into the next, where nothing else is drawn in their chunk, so thin
+things like a floor seen from above don't show sky between slices. See [DESIGN.md](DESIGN.md).
 
 **Worlds** – Procedurally generated, regenerable with a new seed; the camera
 moves to the world's spawn point.
@@ -85,6 +85,6 @@ waits for them; meanwhile a cell shows an older bake, or nothing.
   software one); if draw calls matter, pack chunks into a texture atlas.
 - Paint cut cross-sections with the colour of the surface above them: a 2D
   prototype allowed slices twice as thick at the same leak.
-- Fill gaps in screen space instead (only pixels no layer covers), so
-  objects don't get fatter. Seen steeply from above, chunks baked straight
-  show a floor only as its cut, and the grown faces draw most of it.
+- Fill gaps in screen space (only pixels no layer covers) instead of
+  growing faces: seen steeply from above, chunks baked straight show a
+  floor only as its cut, and grown faces draw most of it.

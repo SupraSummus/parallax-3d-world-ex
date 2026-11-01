@@ -134,7 +134,7 @@ describe('WorkerBakery', () => {
   })
 
   it('drops chunks baked from a replaced world', async () => {
-    const request = { face: '+z', depth: 0, size: 64, x: 0, y: 0, tanX: 0, tanY: 0, spread: 0 }
+    const request = { face: '+z', depth: 0, size: 64, x: 0, y: 0, tanX: 0, tanY: 0, fillDetail: 0 }
     expect(new ChunkBaker(world.grid).bake(request).facesDrawn).toBeGreaterThan(0)
 
     const bakery = new WorkerBakery([new FakeWorker()])
