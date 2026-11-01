@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { bakeHandler, ChunkBaker, type BakeMessage, type BakeResult } from './chunk-baker'
+import { bakeHandler, ChunkBaker, type BakeMessage, type BakeResult, type ChunkRequest } from './chunk-baker'
 import { ParallaxRenderer, type Camera, type Frame } from './renderer'
 import { VoxelGrid } from './voxel-grid'
 import { WorkerBakery, type BakeWorker } from './worker-bakery'
@@ -31,6 +31,20 @@ function workerRenderer(workers = [new FakeWorker(), new FakeWorker()]) {
   renderer.resize(800, 600)
   return renderer
 }
+
+/** Remembers the chunks wanted: all of them, and the latest list. */
+class RecordingBakery extends WorkerBakery {
+  all: ChunkRequest[] = []
+  latest: ChunkRequest[] = []
+  override want(requests: ChunkRequest[]) {
+    this.all.push(...requests)
+    this.latest = requests
+    super.want(requests)
+  }
+}
+
+/** A chunk's cell: its slice and corner. */
+const cell = ({ depth, size, x, y }: ChunkRequest) => [depth, size, x, y].join()
 
 const pending = (renderer: ParallaxRenderer) => renderer.getStats().lastUpdate?.chunksPending ?? 0
 
@@ -92,8 +106,23 @@ describe('WorkerBakery', () => {
     const needed = pending(renderer)
     await settle(renderer)
     const wasted = workers[0].bakes + workers[1].bakes - needed
-    // A few, out of ~1700.
-    expect(wasted).toBeLessThan(leftBehind / 50)
+    // At most what was in flight, out of ~1700.
+    expect(wasted).toBeLessThan(leftBehind / 20)
+  })
+
+  it('bakes cells that show nothing before rebaking cells an older bake stands in for', async () => {
+    const bakery = new RecordingBakery([new FakeWorker(), new FakeWorker()])
+    const renderer = new ParallaxRenderer(world, { bakery })
+    renderer.resize(800, 600)
+    await settle(renderer)
+    const baked = new Set(bakery.all.map(cell))
+    // Forward and sideways: near slices re-tile, and the other chunks change direction.
+    const { x, z } = renderer.getCamera()
+    renderer.setCamera({ x: x + 3, z: z + 3 })
+    renderer.render()
+    const standsIn = bakery.latest.map(r => baked.has(cell(r)))
+    expect(standsIn.indexOf(false)).toBe(0)
+    expect(standsIn.lastIndexOf(false)).toBeLessThan(standsIn.indexOf(true))
   })
 
   it('drops chunks baked from a replaced world', async () => {

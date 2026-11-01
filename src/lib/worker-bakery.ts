@@ -9,10 +9,11 @@ export interface BakeWorker {
   terminate(): void
 }
 
-// Requests sent to a worker and not answered yet. A few keep it busy while
-// its results travel back; more would bake chunks the camera has already
-// left behind.
-const MAX_IN_FLIGHT = 4
+// Requests sent to a worker and not answered yet. A worker gets more only
+// when the main thread is free to take its answers, so this must cover
+// a busy frame (4 was too few to keep up with a moving camera);
+// what is in flight when the camera moves on is wasted.
+const MAX_IN_FLIGHT = 32
 
 const requestKey = ({ depth, size, x, y, tanX, tanY }: ChunkRequest) => [depth, size, x, y, tanX, tanY].join()
 
