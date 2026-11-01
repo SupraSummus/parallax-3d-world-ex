@@ -7,8 +7,8 @@ vi.mock('./lib/forest', async () => {
   const { VoxelGrid } = await import('./lib/voxel-grid')
   return {
     generateForest: () => ({
-      grid: VoxelGrid.fromVoxels(Array.from({ length: 50 }, (_, i) => ({ x: i % 5, y: 0, z: i, color: '#4f7a2a', type: 1 }))),
-      spawn: { x: 0, y: 3, z: -2 },
+      grid: VoxelGrid.fromVoxels(Array.from({ length: 50 }, (_, i) => ({ x: 2 * (i % 5), y: 0, z: 2 * i, color: '#4f7a2a', type: 1 }))),
+      spawn: { x: 0, y: 6, z: -4 },
     }),
   }
 })
@@ -86,8 +86,8 @@ describe('App', () => {
       fireEvent.keyDown(window, { key: 'w' })
       act(() => { vi.advanceTimersByTime(1000) })
       fireEvent.keyUp(window, { key: 'w' })
-      // 30 voxels per second, less the first frame, which only starts the clock.
-      expect(cameraPosition()[2] - start[2]).toBeCloseTo(27)
+      // 60 units per second, less the first frame, which only starts the clock.
+      expect(cameraPosition()[2] - start[2]).toBeCloseTo(54)
     } finally {
       vi.useRealTimers()
       vi.restoreAllMocks()

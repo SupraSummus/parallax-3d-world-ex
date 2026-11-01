@@ -6,8 +6,9 @@ close to the camera's, into a pixel buffer, and WebGL draws the buffers
 on their slices' planes in perspective.
 Sections 1–3 describe one such stack, looking along +z;
 the camera looks all around with six, one per face of a cube (section 4).
-Voxel (x, y, z) is the unit cube centred on
-(x, y, z).
+Voxels are rhombic dodecahedra on the face-centred cubic (FCC) lattice
+(section 6): voxel (x, y, z), with x + y + z even, reaches 1 from its site
+along each axis, so a layer of voxels (z fixed) interlocks with the next.
 
 ```
 World (voxels) ──selectSlices──▶ slices ──chunks in view──▶ cached pixels ──Frame──▶ WebGL ──▶ screen
@@ -43,34 +44,37 @@ and the walk jumps to huge slices.
 
 ### Camera selection
 
-`selectSlices(cameraZ, near, far, detail)` walks from the first voxel at
+`selectSlices(cameraZ, near, far, detail)` walks from the first layer at
 least `near` ahead (a nearer slice, scaled by focal / d, could fill the
-screen) to `cameraZ + far`. At each step it requests `minSize` = the
-largest power of two ≤ a / detail, where a is the distance to the
-slice's near face (depth − 0.5), takes what the world provides (never more than requested),
+screen) to `cameraZ + far`. A slice of size s holds s layers but is s + 1
+thick: its voxels reach from depth − 1 to depth + s. At each step it
+requests `minSize` = the largest power of two ≤ a / detail − 1, where a is
+the distance to the slice's near side (depth − 1), so that its thickness is
+at most a / detail; it takes what the world provides (never more than requested),
 and continues from the end of that slice. The result tiles the range with
 no gaps or overlaps. `detail` comes from the leak tolerance (section 2);
 thinner slices are always allowed, so alignment never breaks the bound.
 
-From camera z=0 with detail 1, sizes go 1, 1, 1, 2, 2, 4, 4, 8, …: measured
-to the near face, a power of two is reached one step after it is requested.
+From camera z=0 with detail 1, sizes go 1, 1, 1, 2, 2, 4, 4, 8, …: a power
+of two is reached one step after it is requested.
 
 Camera at z=-67: alignment forces some slices smaller than requested
 (e.g. at -62 only sizes 1, 2 are aligned), then sizes catch up:
 
 | a | minSize | Depth | Aligned sizes | Size |
 |---|---|---|---|---|
-| 0.5 | 1 | -66 | 1, 2 | 1 |
-| 1.5 | 1 | -65 | 1 | 1 |
-| 2.5 | 2 | -64 | 1–64 | 2 |
-| 4.5 | 4 | -62 | 1, 2 | 2 |
-| 6.5 | 4 | -60 | 1, 2, 4 | 4 |
-| 10.5 | 8 | -56 | 1–8 | 8 |
-| 18.5 | 16 | -48 | 1–16 | 16 |
-| 34.5 | 32 | -32 | 1–32 | 32 |
-| 66.5 | 64 | 0 | 1–64 | 64 |
-| 130.5 | 64 | 64 | 1–64 | 64 |
-| 194.5 | 64 | 128 | 1–64 | 64 |
+| 0 | 1 | -66 | 1, 2 | 1 |
+| 1 | 1 | -65 | 1 | 1 |
+| 2 | 1 | -64 | 1–64 | 1 |
+| 3 | 2 | -63 | 1 | 1 |
+| 4 | 2 | -62 | 1, 2 | 2 |
+| 6 | 4 | -60 | 1, 2, 4 | 4 |
+| 10 | 8 | -56 | 1–8 | 8 |
+| 18 | 16 | -48 | 1–16 | 16 |
+| 34 | 32 | -32 | 1–32 | 32 |
+| 66 | 64 | 0 | 1–64 | 64 |
+| 130 | 64 | 64 | 1–64 | 64 |
+| 194 | 64 | 128 | 1–64 | 64 |
 
 Covering distance n takes O(detail · log n) slices. Slices are keyed by
 depth and size only, so after a detail change the slices still needed stay
@@ -86,7 +90,7 @@ hides, e.g. stone under the lake's water surface.
 
 Bound, with ε = the "max occlusion leak" setting in screen pixels (default
 16): **geometry that perspective hides never shows by more than ε pixels**
-(or, closer than `detail`, by more than T voxels; see below).
+(or, closer than 2 · `detail`, by more than 2T units; see below).
 T = 1: a stack only draws rays within 45° of its axis, in x and in y
 (section 4).
 
@@ -94,8 +98,8 @@ T = 1: a stack only draws rays within 45° of its axis, in x and in y
 plus end to end against ray-cast perspective, in
 [`src/lib/leak-bound.test.ts`](src/lib/leak-bound.test.ts); read it to
 follow or change the reasoning. In short, for one lateral axis, a slice
-with near face at distance a, thickness s, centre plane at D, baked along
-tangent τ_b (section 3):
+with near side at distance a, thickness s (size + 1, as voxels reach 1
+past their layer), centre plane at D, baked along tangent τ_b (section 3):
 
 1. A point seen along tangent τ at depth z is drawn off by
    (τ − τ_b)·(z − D) world units at the plane.
@@ -118,23 +122,23 @@ tangent τ_b (section 3):
 detail = √(C·focal / ε)        (straight baking, not turned: tan(fov/2)·focal/ε = L/(2ε))
 ```
 
-Measured in voxels instead of pixels, the bound would be τ_err·s ≤ ε: the
+Measured in world units instead of pixels, the bound would be τ_err·s ≤ ε: the
 same thickness at every distance and a slice count linear in the range.
 Pixels are what matters on screen, and far voxels are small, so slices
-grow with distance. Slices are at least one voxel thick, though, so closer
-than `detail` the leak is bounded by τ ≤ T voxels instead, which
-can be more than ε pixels.
+grow with distance. Slices are at least one layer (two units) thick, though,
+so closer than 2 · `detail` the leak is bounded by 2τ ≤ 2T units instead,
+which can be more than ε pixels.
 
 These are pixels of the view straight along the stack's axis.
 A turned view draws a plane larger towards the screen's edges
 (by 1 / cos² of the angle from the screen centre),
 so leaks there can be up to 2× larger in a 90° view.
 
-Slices for range 200, 1280-pixel-wide viewport, 90° (focal 640):
+Slices for range 400, 1280-pixel-wide viewport, 90° (focal 640):
 
 | ε | Straight baking: detail | Slices | Directed baking: detail | Slices |
 |---|---|---|---|---|
-| 16 px | 45.3 | 141 | 26.9 | 105 |
+| 16 px | 45.3 | 224 | 26.9 | 154 |
 
 The bound is nearly tight; the ray-cast check also shows directed baking
 leaking about half as much as straight baking at the same detail. It
@@ -144,9 +148,11 @@ because the back faces and the inside of the slab are flattened.
 ## 3. Chunks and rasterisation (`renderer.ts`, `chunk-baker.ts`, `bake.ts`)
 
 When a slice's first chunk is baked, its voxels with a face that is not covered
-by a neighbour (or a front face on the slice's near plane) are indexed by
-chunk, with a bitmask of their open faces; buried voxels are dropped
-(`sliceSurface`). Nothing is drawn yet.
+by a neighbour, or a front face whose neighbour is in the previous slice
+(the slice is cut there, and the cut must show), are indexed by chunk,
+with a bitmask of their open and cut faces; buried voxels are dropped
+(`sliceSurface`). Nothing is drawn yet. The slice is read layer by layer
+from the world's grid in the face's coordinates (section 4).
 
 **Chunks.** A slice of size s is split in x and y into aligned squares of
 width `chunkWidth(s)` = 16·s: chunk (x0, y0) is the cell
@@ -163,20 +169,28 @@ the cell's centre (section 2): point (x, y, z) goes to
 (x − τx·(z − c), y − τy·(z − c)) on the centre plane z = c, clipped to the
 cell. A cached chunk is keyed by its cell and its direction, so it does
 not depend on where the camera is; moving the camera sideways or forward
-rebakes a chunk only when its nearest grid direction changes. Drawn are
-the faces a ray along the direction can reach: front faces not covered
-by a voxel in front (except on the near plane, where the cut must show)
-and open side faces facing the camera (−x when τx > 0, the top when
-τy < 0, ...), painted far to near, side faces before front faces of the
-same z (`chunkFaces`). Shading is shared with the reference viewer
-(`FACE_SHADE`).
+rebakes a chunk only when its nearest grid direction changes.
+Directions are clamped to |τ| ≤ 1, the rays a face draws.
+Drawn are the open (and cut) faces facing against the direction,
+normal · (τx, τy, 1) < 0 (`chunkFaces`):
+of a voxel's 12 faces, the 4 whose normals lean towards −z always,
+the 4 around z depending on τ, never the 4 towards +z.
+Shading, by the axes a face's normal leans towards, is shared with the
+reference viewer (`faceShade`).
 
-Faces are drawn as axis-aligned rectangles.
-A side face is a parallelogram sheared along the direction;
-its bounding rectangle covers a little more
-(past the voxel's outline, a triangle of |τx| × |τy| / 2),
-so nothing leaks (section 2).
-A pixel is filled when its centre is inside, with half-open edges,
+**Painting order.** Far to near, layer by layer:
+along a ray each voxel is followed by one across a face with
+normal · (τx, τy, 1) > 0, so with |τ| ≤ 1 in the same layer or the next.
+Within a layer, voxels are painted by τx·x + τy·y, largest first,
+which grows along a ray too
+(sorting by the site's distance along the direction orders any Voronoi
+tiling like this). A voxel's faces facing the ray never overlap.
+`src/lib/bake.test.ts` checks chunks pixel by pixel against rays cast
+through the slice's voxels.
+
+A face, a rhombus, projects to a parallelogram, filled exactly:
+a pixel is filled when its centre is inside, with half-open edges,
+each evaluated from its upper end,
 so neighbours meet without gaps or overlap (`fillFaces`).
 No antialiasing: a soft 1-pixel edge magnified 20× on screen is a blur.
 
@@ -189,39 +203,44 @@ the nearer one draws its far edge (σ − τ_k)·s_k/2 off
 and the farther one its near edge −(σ − τ_{k+1})·s_{k+1}/2 off,
 so on screen they are apart by
 J = (σ − τ_k)·s_k/(2D_k) + (σ − τ_{k+1})·s_{k+1}/(2D_{k+1}).
-Side faces run along z, and their image moves towards the screen centre
+(s is the slice's thickness, size + 1.)
+A surface running along z moves towards the screen centre
 with depth: J opens a gap where σ is farther from the centre than τ,
 and makes the slices overlap (the leak of section 2) where it is nearer.
-A gap is |J| − t/D_{k+1}, as the cut of a solid t voxels thick covers t/D:
-only thin things tear, e.g. a one-voxel floor seen from high above.
+A gap is |J| − t/D_{k+1}, as the cut of a solid t units thick covers t/D:
+only thin things tear, e.g. a one-layer floor seen from high above.
 So each slice closes its share:
-side faces on its near or far plane, of voxels that go on past it,
+the open faces of voxels with a neighbour in the next or previous slice
 grow towards where they belong, by (σ − τ)·s/2 for the σ that open a gap
 (`chunkFaces`; σ − τ is bounded from the face's offset from its cell's
-centre, over the distance ≥ s · detail, plus half a direction step).
-Grown faces are painted nearest first into pixels the chunk left empty
-(`fillFaces`). Front faces and the inside of slices don't grow.
+centre, over the distance ≥ size · detail, plus half a direction step).
+A grown face is its parallelogram swept over the rectangle of its growth,
+a convex polygon of up to 8 corners;
+grown faces are painted nearest first into pixels the chunk left empty
+(`fillFaces`). Cut faces and the inside of slices don't grow.
 "Fill Gaps" turns it off.
 
 `bake.ts` has no DOM and works on flat typed arrays,
 ready for a Rust/WASM port.
-A cell's surface records are stored far to near,
-so painting order needs no sort:
-the cell and its eight neighbours are walked one z at a time.
+A cell's surface records are stored far to near:
+the cell and its eight neighbours are walked one z at a time,
+each layer sorted for painting.
 
 **Resolution.** A chunk of a size-s slice is drawn at `renderScale(s)`
-pixels per world unit: 24 / s, between 2 and 10. A slice of size s ≥ 2
-lies at distance ≥ s · detail, where a voxel is at most focal / (s ·
-detail) ≈ 24 / s screen pixels with the defaults, so more pixels would not
-show. Other settings scale the chunk on screen.
+pixels per world unit: 24 / s, between 1 and 10 (2 to 20 pixels across a
+voxel). A slice of size s lies at distance ≥ (s + 1) · detail, where a
+unit is at most focal / ((s + 1) · detail) < 24 / s screen pixels with the
+defaults, so more pixels would not show. The nearest slices get 10, so
+magnified rhombi keep their slanted edges. Other settings scale the chunk
+on screen.
 
 Each chunk is cropped to what is drawn; `originX`/`originY` record
 the world position of its top-left corner on the centre plane. The image
 doesn't depend on the camera's position, so a chunk is drawn once when it
 first comes into view (with its direction) and is never redrawn.
 
-On the forest at 1280 × 800, 90°: 105 slices, ~1300 chunks, ~43 Mpx
-(straight-baked, unchunked slices: 141 slices, ~235 Mpx).
+On the forest at 1280 × 800, 90°: 154 slices, ~1700 chunks drawn
+(~2600 more covered), ~100 Mpx cached.
 
 **Workers.** In the app, a frame never waits for chunks:
 each render lists the missing chunks in view,
@@ -240,9 +259,10 @@ Without a bakery (tests), `render()` bakes missing chunks itself.
 To look all around, the world gets six slice stacks,
 one per face of a cube around the camera (`FACES`: ±x, ±y, ±z).
 A face is a rotation:
-its stack is sections 1–3 on a copy of the world turned so the face
-looks along +z (`rotateGrid`, made by a baker when it first bakes the face),
-with faces shaded by the way they face in the world (`shadedPalette`).
+its stack is sections 1–3 on the world read in the face's coordinates
+(`faceReader`: the world axes are the lattice's 4-fold axes, so the turned
+sites are sites), with faces shaded by the way they face in the world
+(`shadedPalette`).
 Each face draws only the rays within 45° of its axis,
 so the faces tile the screen;
 the fragment shader discards the rest of its chunks.
@@ -290,9 +310,9 @@ when the camera moves, a near slice re-tiles and shows nothing until baked,
 and what it covered must be there
 (without them, up to half of a frame went empty).
 Only chunks already baked cover anything.
-On the city at 1600 × 900, the view finishes baking ~7× sooner after start
+With cube voxels, on the city at 1600 × 900, the view finished baking ~7× sooner after start
 (the forest: ~1.5×), with a third of the chunks drawn;
-render() takes 4–7 ms more.
+render() took 4–7 ms more.
 
 The `Compositor` draws a frame onto one opaque WebGL 2 canvas, one
 textured rectangle per chunk, then the sky behind them. Chunk pixels are
@@ -327,7 +347,7 @@ baked again on every render.
 | Event | Effect |
 |---|---|
 | x/y movement | Chunks still in view reused unless their baking direction changes; chunks entering the view rasterised; placements update |
-| turning | Slices and chunks reused; chunks entering the view baked; a face baked for the first time turns the baker's copy of the world (forest: ~35 ms, in the workers) |
+| turning | Slices and chunks reused; chunks entering the view baked |
 | field of view change | Focal length, hence detail and directions, change: slices still needed are reused, chunks rebaked |
 | leak tolerance change | Slices still needed are reused |
 | small z movement | Far slices reused; a few near slices re-tile |
@@ -343,25 +363,47 @@ excludes baking in workers.
 
 ## 6. Worlds (`world.ts`, `forest.ts`, `city.ts`)
 
-A world is a dense voxel grid plus a spawn point (`voxel-grid.ts`):
-one material id byte per cell of a box, 0 for empty.
-Cells are z-major, so a slice is one contiguous range.
-Each baker (one per worker) keeps a turned copy for each other face it has baked
-(forest: ~9 MB each).
-A list of voxel objects is built only on request (reference viewer, tests).
-Renderer distances are in voxels.
-The forest's `VOXEL_SIZE` is 0.5 m,
-so the default render distance (200) is 100 m and the fog distance 70 m.
-The city's `CITY_VOXEL_SIZE` is 0.25 m (render distance 50 m):
-each world picks its own scale, the renderer assumes none.
+**The lattice** (`fcc.ts`). Voxels sit on the face-centred cubic lattice:
+the integer points (x, y, z) with x + y + z even.
+A voxel is a site's Voronoi cell, a rhombic dodecahedron,
+the points within |dx| + |dy|, |dy| + |dz| and |dx| + |dz| ≤ 1 of it,
+with 12 rhombic faces, one towards each nearest neighbour,
+(±1, ±1, 0) and permutations, √2 away; its volume is 2.
+It is the lattice of [complex-life](https://github.com/SupraSummus/complex-life),
+whose coordinates (q, v, w) stack close-packed layers along one axis,
+turned so that the world axes are its 4-fold axes:
+x = q + w, y = q + v, z = v + w.
+So walls and floors along the axes look alike in every direction,
+and the six cube faces (section 4) map sites to sites.
 
-Ground columns are filled a few voxels deep;
+**Storage** (`voxel-grid.ts`). A world is a dense voxel grid plus a spawn
+point: one material id byte per site of a box, 0 for empty.
+Sites are z-major, and a row (y, z) holds every other x,
+so a slice is one contiguous range.
+A worker reads its copy of the grid for every face (`faceReader`),
+without turned copies (forest: ~35 MB, city: ~50 MB).
+A list of voxel objects is built only on request (tests).
+Renderer distances are in lattice units: render distance 40–800, default 400.
+
+**Scenes** describe shapes in metres and fill the sites inside them;
+each world picks its own scale, the renderer assumes none.
+The forest's `UNIT_SIZE` is 0.25 m per unit (neighbours 0.35 m apart),
+so the default render distance is 100 m and the fog distance 70 m.
+Its ground is a heightfield sampled per column of sites;
+trunks are columns at least 2 units square, crowns balls, branches and
+fallen logs capsules, so thin parts stay one piece on the lattice
+(a single column of sites only touches at corners).
+The city is planned on a 0.25 m grid (`PLAN_CELL_SIZE`):
+each plan cell is a box holding four sites, lattice units of 0.125 m
+(render distance 50 m), so walls stay flat and frames one piece.
+The toy worlds are built of blocks 2 units wide in the same way.
+Columns of ground are filled a few units deep;
 the renderer only draws faces that no neighbour covers.
 
 ## 7. Reference viewer (`src/viewer`)
 
 `viewer.html` rebuilds the world from its seed
-and draws every exposed voxel face with three.js.
+and draws every exposed voxel face, a rhombus, with three.js.
 World (x, y, z) maps to three.js (x, y, −z),
 so the default camera, looking down −z, looks along world +z.
 The app passes its orientation, field of view and render distance in the URL,
@@ -374,8 +416,6 @@ so from the parallax camera's position both renderers should agree.
   error.
 - Faces seen from one direction per chunk: a face nearly parallel to the
   rays may be missing or slightly too wide.
-- Side faces are drawn as rectangles: near the camera, towards the
-  screen's corners, voxels lose their slanted edges.
 - Near slices are heavily upscaled from `RENDER_SCALE`.
 - Within `NEAR_DEPTH` of the camera along a face's axis nothing is
   drawn, and near voxels seen at a steep angle are the least accurate.
@@ -383,5 +423,12 @@ so from the parallax camera's position both renderers should agree.
   nearest slices fill the screen.
 - At a seam, the two faces slice the world differently: geometry
   crossing it can be off by up to the leak bound on each side.
-- Closer than `detail`, slices are nearer than s · detail,
+- Closer than 2 · `detail`, slices are nearer than (size + 1) · detail,
   so gap filling may leave gaps there.
+- Rhombic dodecahedra have jagged outlines: a flat wall or floor is a
+  surface of pyramids, and a silhouette along an axis is a zigzag.
+- Four voxels per old cube, each showing up to six faces towards the
+  camera instead of up to three: a first bake of the toy world in the tests takes
+  ~1.4 s on one thread (0.26 s with cubes). The forest has ~2.8 M voxels
+  (35 MB) and the city ~3 M (50 MB), held by the main thread and each
+  worker; the reference viewer's mesh has ~10 M faces (~850 MB of buffers).

@@ -1,15 +1,21 @@
 import type { Vec3 } from './world'
-import { VoxelGrid, type Material } from './voxel-grid'
+import { VOXEL_FACES } from './fcc'
+import { VoxelGrid, isSite, type Material } from './voxel-grid'
 import { fbm, hash, rng, smoothstep, valueNoise } from './noise'
 
 /**
- * Metres per voxel. Terrain and plant sizes below are in metres, converted
- * with vox(), so the scene keeps its proportions if this changes.
+ * Metres per lattice unit: voxels are FCC sites (voxel-grid.ts), nearest
+ * neighbours √2 units (0.35 m) apart. Terrain and plant sizes below are in
+ * metres, converted with vox(), so the scene keeps its proportions if this
+ * changes. Shapes (the ground's height, trunks, balls, branches) are
+ * sampled at the lattice's sites.
  */
-export const VOXEL_SIZE = 0.5
-const vox = (metres: number) => Math.round(metres / VOXEL_SIZE)
+export const UNIT_SIZE = 0.25
+const vox = (metres: number) => Math.round(metres / UNIT_SIZE)
+/** Radius of branches and fallen logs, in units: thick enough to stay one piece on the lattice. */
+const BRANCH_RADIUS = 0.3 / UNIT_SIZE
 
-// Extent in voxels: 96 m wide, 160 m deep, heights from -8 m to 64 m.
+// Extent in units: 96 m wide, 160 m deep, heights from -8 m to 64 m.
 const MIN_X = vox(-48)
 const MAX_X = vox(48)
 const MIN_Z = vox(-32)
@@ -71,7 +77,7 @@ class Grid {
     return this.voxels.get(x, y, z)
   }
 
-  /** Places a shade of `kind`; keeps an existing voxel unless `replace`. Out-of-range cells are ignored. */
+  /** Places a shade of `kind` at a site; keeps an existing voxel unless `replace`. Points that are not sites, or out of range, are ignored. */
   put(x: number, y: number, z: number, kind: Kind, replace = false) {
     const i = this.voxels.index(x, y, z)
     const { cells } = this.voxels
@@ -80,26 +86,35 @@ class Grid {
     cells[i] = shades[Math.floor(hash(this.shadeSeed, x, y, z) * shades.length)]
   }
 
-  /** Fills a ball, keeping each cell with probability `fill`. */
+  /** Fills the sites in a ball, keeping each with probability `fill`. */
   ball(cx: number, cy: number, cz: number, radius: number, kind: Kind, fill: number, random: () => number) {
-    const r = Math.ceil(radius)
-    for (let dx = -r; dx <= r; dx++) {
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dz = -r; dz <= r; dz++) {
-          if (dx * dx + dy * dy + dz * dz <= radius * radius && random() < fill) {
-            this.put(Math.round(cx + dx), Math.round(cy + dy), Math.round(cz + dz), kind)
-          }
+    const r2 = radius * radius
+    for (let y = Math.ceil(cy - radius); y <= cy + radius; y++) {
+      for (let z = Math.ceil(cz - radius); z <= cz + radius; z++) {
+        const rest = r2 - (y - cy) ** 2 - (z - cz) ** 2
+        if (rest < 0) continue
+        const half = Math.sqrt(rest)
+        const x0 = Math.ceil(cx - half)
+        // Sites only: x + y + z even.
+        for (let x = x0 + ((x0 + y + z) & 1); x <= cx + half; x += 2) {
+          if (random() < fill) this.put(x, y, z, kind)
         }
       }
     }
   }
 
-  /** Draws a 1-voxel line (branches, fallen logs). */
-  line(x0: number, y0: number, z0: number, x1: number, y1: number, z1: number, kind: Kind) {
-    const steps = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0), Math.abs(z1 - z0), 1)
-    for (let i = 0; i <= steps; i++) {
-      const t = i / steps
-      this.put(Math.round(x0 + (x1 - x0) * t), Math.round(y0 + (y1 - y0) * t), Math.round(z0 + (z1 - z0) * t), kind, true)
+  /** Fills the sites within `radius` of the segment from p to q (branches, fallen logs). */
+  capsule(px: number, py: number, pz: number, qx: number, qy: number, qz: number, radius: number, kind: Kind) {
+    const [dx, dy, dz] = [qx - px, qy - py, qz - pz]
+    const length2 = dx * dx + dy * dy + dz * dz
+    for (let x = Math.ceil(Math.min(px, qx) - radius); x <= Math.max(px, qx) + radius; x++) {
+      for (let y = Math.ceil(Math.min(py, qy) - radius); y <= Math.max(py, qy) + radius; y++) {
+        for (let z = Math.ceil(Math.min(pz, qz) - radius); z <= Math.max(pz, qz) + radius; z++) {
+          if (!isSite(x, y, z)) continue
+          const t = length2 === 0 ? 0 : Math.max(0, Math.min(1, ((x - px) * dx + (y - py) * dy + (z - pz) * dz) / length2))
+          if ((x - px - t * dx) ** 2 + (y - py - t * dy) ** 2 + (z - pz - t * dz) ** 2 <= radius * radius) this.put(x, y, z, kind, true)
+        }
+      }
     }
   }
 }
@@ -136,8 +151,16 @@ export function generateForest(seed: number): { grid: VoxelGrid; spawn: Vec3 } {
     const pathDip = (1 - smoothstep(1, 2.2, fromPath)) * 0.3
     return hills + valley + ridge - pathDip
   }
-  /** Ground height in voxels; also defined outside the extent. */
-  const ground = (x: number, z: number) => vox(groundMetres(x * VOXEL_SIZE, z * VOXEL_SIZE))
+  // Ground heights of the extent and a border of one unit around it, computed once.
+  const heights = new Int32Array((NX + 2) * (NZ + 2))
+  for (let x = MIN_X - 1; x <= MAX_X; x++) {
+    for (let z = MIN_Z - 1; z <= MAX_Z; z++) heights[(x - MIN_X + 1) * (NZ + 2) + z - MIN_Z + 1] = vox(groundMetres(x * UNIT_SIZE, z * UNIT_SIZE))
+  }
+  /** Ground height in units; also defined outside the extent. */
+  const ground = (x: number, z: number) =>
+    x >= MIN_X - 1 && x <= MAX_X && z >= MIN_Z - 1 && z <= MAX_Z
+      ? heights[(x - MIN_X + 1) * (NZ + 2) + z - MIN_Z + 1]
+      : vox(groundMetres(x * UNIT_SIZE, z * UNIT_SIZE))
 
   const grid = new Grid(s(4))
   const columns: Column[] = new Array<Column>(NX * NZ)
@@ -146,12 +169,12 @@ export function generateForest(seed: number): { grid: VoxelGrid; spawn: Vec3 } {
   // Terrain.
   for (let x = MIN_X; x < MAX_X; x++) {
     for (let z = MIN_Z; z < MAX_Z; z++) {
-      const xm = x * VOXEL_SIZE
-      const zm = z * VOXEL_SIZE
+      const xm = x * UNIT_SIZE
+      const zm = z * UNIT_SIZE
       const h = ground(x, z)
       const neighbours = [ground(x - 1, z), ground(x + 1, z), ground(x, z - 1), ground(x, z + 1)]
       const slope = Math.max(...neighbours.map(n => Math.abs(n - h)))
-      const conifer = smoothstep(0.4, 0.6, fbm(s(5), xm / 40, zm / 40)) * 0.75 + smoothstep(6, 16, h * VOXEL_SIZE) * 0.25
+      const conifer = smoothstep(0.4, 0.6, fbm(s(5), xm / 40, zm / 40)) * 0.75 + smoothstep(6, 16, h * UNIT_SIZE) * 0.25
       const density = smoothstep(0.3, 0.48, fbm(s(6), xm / 22, zm / 22))
       const onPath = Math.abs(xm - pathX(zm)) < 1.1 + valueNoise(s(7), zm / 3, 0) * 0.5
       const floor = valueNoise(s(8), xm / 2.5, zm / 2.5)
@@ -165,18 +188,20 @@ export function generateForest(seed: number): { grid: VoxelGrid; spawn: Vec3 } {
       columns[(x - MIN_X) * NZ + (z - MIN_Z)] = { height: h, surface, conifer, density, onPath }
 
       // Fill deep enough that no gaps open between slices or on slopes.
-      const bottom = Math.min(h - 3, ...neighbours)
+      const bottom = Math.min(h - vox(1.5), ...neighbours)
       const rock = surface === 'stone' || surface === 'mossyStone'
-      for (let y = bottom; y <= h; y++) {
-        grid.put(x, y, z, y >= h - 1 ? surface : rock ? 'stone' : 'soil')
+      for (let y = bottom + ((x + bottom + z) & 1); y <= h; y += 2) {
+        grid.put(x, y, z, y > h - vox(1) ? surface : rock ? 'stone' : 'soil')
       }
     }
   }
 
   // Start on the path at the near end, at about the height of a tall shrub.
-  const spawnZ = MIN_Z + 2
-  const spawnX = Math.round(pathX(spawnZ * VOXEL_SIZE) / VOXEL_SIZE)
-  const spawn = { x: spawnX, y: column(spawnX, spawnZ).height + vox(3), z: spawnZ }
+  const spawnZ = MIN_Z + vox(1)
+  const spawnX = Math.round(pathX(spawnZ * UNIT_SIZE) / UNIT_SIZE)
+  // On a site, so it is in a voxel's cell, which is empty.
+  const spawnY = column(spawnX, spawnZ).height + vox(3)
+  const spawn = { x: spawnX, y: spawnY + ((spawnX + spawnY + spawnZ) & 1), z: spawnZ }
 
   const random = rng(s(9))
 
@@ -189,7 +214,7 @@ export function generateForest(seed: number): { grid: VoxelGrid; spawn: Vec3 } {
       if (x >= MAX_X || z >= MAX_Z) continue
       const c = column(x, z)
       if (random() > 0.15 + c.density * 0.75 || c.surface === 'stone') continue
-      if (Math.abs(x * VOXEL_SIZE - pathX(z * VOXEL_SIZE)) < 2.8) continue
+      if (Math.abs(x * UNIT_SIZE - pathX(z * UNIT_SIZE)) < 2.8) continue
       // Keep the view from the spawn point clear of low branches.
       if (Math.hypot(x - spawn.x, z - spawn.z) < vox(7)) continue
       const species = random()
@@ -200,42 +225,43 @@ export function generateForest(seed: number): { grid: VoxelGrid; spawn: Vec3 } {
     }
   }
 
-  // Undergrowth, boulders and fallen logs.
+  // Undergrowth, boulders and fallen logs, per column of units: (0.25 m)².
   for (let x = MIN_X; x < MAX_X; x++) {
     for (let z = MIN_Z; z < MAX_Z; z++) {
       const c = column(x, z)
       const y = c.height + 1
       const roll = random()
-      if (roll < 0.0006) boulder(grid, x, c.height, z, random)
-      else if (roll < 0.0009 && !c.onPath) fallenLog(grid, x, z, ground, random)
-      if (c.onPath || grid.get(x, y, z) !== 0) continue
+      if (roll < 0.00015) boulder(grid, x, c.height, z, random)
+      else if (roll < 0.000225 && !c.onPath) fallenLog(grid, x, z, ground, random)
+      if (c.onPath || grid.get(x, y, z) !== 0 || !isSite(x, y, z)) continue
       const r = random()
       if (c.surface === 'grass') {
-        if (r < 0.08) grid.put(x, y, z, 'tallGrass')
-        else if (r < 0.11) grid.put(x, y, z, 'flower')
+        if (r < 0.04) grid.put(x, y, z, 'tallGrass')
+        else if (r < 0.055) grid.put(x, y, z, 'flower')
       } else if (c.surface !== 'stone' && c.surface !== 'mossyStone') {
-        if (r < 0.025) fern(grid, x, y, z, c.conifer > 0.5 ? 'fern' : 'bracken', random)
-        else if (r < 0.032) grid.ball(x, y, z, vox(0.5 + random() * 0.5), 'bush', 0.8, random)
-        else if (r < 0.034) grid.put(x, y, z, 'flower')
+        if (r < 0.0125) fern(grid, x, y, z, c.conifer > 0.5 ? 'fern' : 'bracken', random)
+        else if (r < 0.016) grid.ball(x, y, z, vox(0.5 + random() * 0.5), 'bush', 0.8, random)
+        else if (r < 0.017) grid.put(x, y, z, 'flower')
       }
     }
   }
 
-  // Drop leaves enclosed on all six sides: crowns become shells, which keeps
-  // the reference viewer's voxel list small.
+  // Drop leaves enclosed on all twelve sides: crowns become shells, which
+  // keeps the reference viewer's voxel count down.
   const { voxels } = grid
-  const { cells, nx, ny } = voxels
+  const { cells, minX, minY, minZ, nx, ny, nz } = voxels
+  const half = nx / 2
+  const leaves = MATERIALS.map(m => m.type === LEAVES_TYPE)
+  // A neighbour (a, b, c) of the site at index i, whose x - minX has parity p, is at i + offset[p][k].
+  const offsets = [0, 1].map(p => VOXEL_FACES.map(({ normal: [a, b, c] }) => (c * ny + b) * half + ((p + a) >> 1)))
   const enclosed: number[] = []
-  for (let z = MIN_Z; z < MAX_Z; z++) {
-    for (let y = MIN_Y; y < MAX_Y; y++) {
-      for (let x = MIN_X; x < MAX_X; x++) {
-        const i = voxels.index(x, y, z)
-        const id = cells[i]
-        if (id === 0 || MATERIALS[id].type !== LEAVES_TYPE) continue
-        if (
-          x > MIN_X && x < MAX_X - 1 && y > MIN_Y && y < MAX_Y - 1 && z > MIN_Z && z < MAX_Z - 1 &&
-          cells[i - 1] && cells[i + 1] && cells[i - nx] && cells[i + nx] && cells[i - nx * ny] && cells[i + nx * ny]
-        ) enclosed.push(i)
+  for (let z = minZ + 1; z < minZ + nz - 1; z++) {
+    for (let y = minY + 1; y < minY + ny - 1; y++) {
+      const row = ((z - minZ) * ny + (y - minY)) * half
+      for (let x = minX + 2 + ((minX + y + z) & 1); x < minX + nx - 2; x += 2) {
+        const i = row + ((x - minX) >> 1)
+        if (!leaves[cells[i]]) continue
+        if (offsets[(x - minX) & 1].every(o => cells[i + o] !== 0)) enclosed.push(i)
       }
     }
   }
@@ -244,7 +270,7 @@ export function generateForest(seed: number): { grid: VoxelGrid; spawn: Vec3 } {
   return { grid: voxels, spawn }
 }
 
-/** A vertical trunk, `width` voxels square, from just below `ground` up to `top`. */
+/** A vertical trunk, `width` units square (at least 2, to stay one piece on the lattice), from just below `ground` up to `top`. */
 function trunk(grid: Grid, x: number, ground: number, z: number, top: number, width: number, kind: Kind) {
   for (let y = ground - 1; y <= top; y++) {
     for (let dx = 0; dx < width; dx++) {
@@ -256,21 +282,22 @@ function trunk(grid: Grid, x: number, ground: number, z: number, top: number, wi
 /** Conical spruce with drooping whorls of branches. */
 function spruceTree(grid: Grid, x: number, ground: number, z: number, random: () => number) {
   const height = vox(14 + random() * 10)
-  const width = height >= vox(20) ? 2 : 1
+  const width = height >= vox(20) ? vox(1) : vox(0.5)
   const top = ground + height
-  trunk(grid, x, ground, z, top - 2, width, 'spruceBark')
+  trunk(grid, x, ground, z, top - vox(1), width, 'spruceBark')
   const base = ground + Math.round(height * (0.15 + random() * 0.15))
   const radius = height * (0.17 + random() * 0.05)
   const whorl = vox(1.5 + random() * 0.6)
   const centre = (width - 1) / 2
-  for (let y = base; y <= top + 1; y++) {
-    const t = (y - base) / (top + 1 - base)
+  for (let y = base; y <= top + vox(0.5); y++) {
+    const t = (y - base) / (top + vox(0.5) - base)
     // Each whorl is widest at its bottom, giving the layered silhouette.
     const phase = ((top - y) % whorl) / whorl
-    const r = radius * (1 - t) * (0.5 + 0.5 * phase) + 0.7
+    const r = radius * (1 - t) * (0.5 + 0.5 * phase) + vox(0.35)
     const ri = Math.ceil(r)
-    for (let dx = -ri; dx <= ri + width - 1; dx++) {
-      for (let dz = -ri; dz <= ri + width - 1; dz++) {
+    for (let dz = -ri; dz <= ri + width - 1; dz++) {
+      // Sites only: x + y + z even.
+      for (let dx = -ri + ((x - ri + y + z + dz) & 1); dx <= ri + width - 1; dx += 2) {
         const d = Math.hypot(dx - centre, dz - centre)
         if (d <= r && random() < 0.95 - 0.35 * (d / r) ** 3) grid.put(x + dx, y, z + dz, 'spruce')
       }
@@ -283,12 +310,16 @@ function birchTree(grid: Grid, x: number, ground: number, z: number, random: () 
   const height = vox(12 + random() * 7)
   let tx = x
   let tz = z
+  let bark: Kind = 'birchBark'
   for (let y = ground - 1; y <= ground + height; y++) {
     if ((y - ground) % vox(3) === 0 && y - ground > vox(4) && random() < 0.35) {
       if (random() < 0.5) tx += random() < 0.5 ? -1 : 1
       else tz += random() < 0.5 ? -1 : 1
     }
-    grid.put(tx, y, tz, random() < 0.18 ? 'birchMark' : 'birchBark', true)
+    // Bark in bands half a metre tall, some with a black mark.
+    if ((y - ground) % vox(0.5) === 0) bark = random() < 0.18 ? 'birchMark' : 'birchBark'
+    // Two units square, so the trunk stays one piece on the lattice.
+    for (let dx = 0; dx < 2; dx++) for (let dz = 0; dz < 2; dz++) grid.put(tx + dx, y, tz + dz, bark, true)
   }
   const foliage: Kind = random() < 0.65 ? 'birchGold' : 'birchGreen'
   const crownBottom = ground + height * 0.45
@@ -308,7 +339,7 @@ function birchTree(grid: Grid, x: number, ground: number, z: number, random: () 
     const px = tx + ox * rx
     const py = cy + oy * ry
     const pz = tz + oz * rx
-    grid.line(tx, Math.round(py - 1), tz, Math.round(px), Math.round(py), Math.round(pz), 'birchBark')
+    grid.capsule(tx + 0.5, py - vox(0.5), tz + 0.5, px, py, pz, BRANCH_RADIUS, 'birchBark')
     grid.ball(px, py, pz, vox(0.8 + random() * 0.6), foliage, 0.7, random)
   }
 }
@@ -317,11 +348,12 @@ function birchTree(grid: Grid, x: number, ground: number, z: number, random: () 
 function oakTree(grid: Grid, x: number, ground: number, z: number, random: () => number) {
   const height = vox(12 + random() * 8)
   const trunkTop = ground + Math.round(height * (0.45 + random() * 0.1))
-  trunk(grid, x, ground, z, trunkTop, 2, 'bark')
+  const width = vox(1)
+  trunk(grid, x, ground, z, trunkTop, width, 'bark')
   const roll = random()
   const foliage: Kind = roll < 0.45 ? 'oakGreen' : roll < 0.75 ? 'oakOrange' : 'oakGold'
-  const cx = x + 0.5
-  const cz = z + 0.5
+  const cx = x + (width - 1) / 2
+  const cz = z + (width - 1) / 2
   const branches = 4 + Math.floor(random() * 3)
   const ends: [number, number, number][] = [[cx, ground + height - vox(2), cz]]
   for (let i = 0; i < branches; i++) {
@@ -333,7 +365,7 @@ function oakTree(grid: Grid, x: number, ground: number, z: number, random: () =>
       Math.min(startY + vox(2 + random() * 3), ground + height - vox(1.5)),
       cz + Math.sin(angle) * reach,
     ]
-    grid.line(Math.round(cx), startY, Math.round(cz), Math.round(end[0]), Math.round(end[1]), Math.round(end[2]), 'bark')
+    grid.capsule(cx, startY, cz, end[0], end[1], end[2], BRANCH_RADIUS, 'bark')
     ends.push(end)
   }
   for (const [ex, ey, ez] of ends) {
@@ -341,12 +373,12 @@ function oakTree(grid: Grid, x: number, ground: number, z: number, random: () =>
   }
 }
 
-/** A fern or bracken clump about a metre across. */
+/** A fern or bracken clump about a metre across: fronds spreading from the middle. */
 function fern(grid: Grid, x: number, y: number, z: number, kind: Kind, random: () => number) {
-  grid.put(x, y, z, kind)
-  if (random() < 0.5) grid.put(x, y + 1, z, kind)
+  grid.ball(x, y, z, 1.5, kind, 1, random)
+  if (random() < 0.5) grid.ball(x, y + vox(0.5), z, 1.5, kind, 1, random)
   for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-    if (random() < 0.6) grid.put(x + dx, y, z + dz, kind)
+    if (random() < 0.6) grid.ball(x + dx * vox(0.5), y, z + dz * vox(0.5), 1.5, kind, 1, random)
   }
 }
 
@@ -378,11 +410,13 @@ function fallenLog(
   const angle = random() * Math.PI
   const dx = Math.cos(angle)
   const dz = Math.sin(angle)
-  for (let i = 0; i <= length; i++) {
+  const [ex, ez] = [x + dx * length, z + dz * length]
+  const lift = BRANCH_RADIUS * 1.5
+  grid.capsule(x, ground(x, z) + lift, z, ex, ground(Math.round(ex), Math.round(ez)) + lift, ez, BRANCH_RADIUS * 1.5, 'deadwood')
+  // Moss in patches on top.
+  for (let i = 0; i <= length; i += vox(0.5)) {
     const px = Math.round(x + dx * i)
     const pz = Math.round(z + dz * i)
-    const y = ground(px, pz) + 1
-    grid.put(px, y, pz, 'deadwood', true)
-    if (random() < 0.5) grid.put(px, y + 1, pz, 'moss')
+    if (random() < 0.5) grid.ball(px, ground(px, pz) + lift * 2 + 1, pz, 1.2, 'moss', 1, random)
   }
 }

@@ -1,13 +1,15 @@
 /**
  * Slice selection: decides which z-slices of the world the camera renders,
  * how they are split into chunks, and along which direction each chunk is
- * baked. Voxel (x, y, z) is the unit cube centred on (x, y, z).
+ * baked. Voxels are rhombic dodecahedra on the FCC lattice (fcc.ts): voxel
+ * (x, y, z) reaches from z − 1 to z + 1, so a slice of `size` layers is
+ * size + 1 thick, and neighbouring slices interlock.
  *
  * Constraints (see DESIGN.md for the derivation and worked examples):
  *
  * 1. Occlusion (physical). A slice is drawn flat, so a thick slice can show
  *    geometry that true perspective hides. A slice at viewing distance d at
- *    most d / detail thick, with detail = leakFreeDetail(...), never shows
+ *    most d / detail thick (size + 1 ≤ d / detail), with detail = leakFreeDetail(...), never shows
  *    more than `max leak` screen pixels of it. Far voxels are small on
  *    screen, so slices grow with distance and covering distance n takes
  *    O(detail · log n) slices.
@@ -31,7 +33,7 @@
 export interface SliceBoundary {
   /** First integer z of the slice (absolute, camera-independent). */
   depth: number
-  /** Thickness in z units: the slice holds voxels with z in [depth, depth + size). */
+  /** Number of layers: the slice holds voxels with z in [depth, depth + size), and reaches from depth − 1 to depth + size. */
   size: number
 }
 
@@ -93,7 +95,7 @@ export function directionStep(detail: number): number {
  * How far (as a tangent) a ray through a chunk may be from the direction
  * the chunk is baked along: half a chunk's span, C / (2·detail), plus half
  * the direction step. At most C / detail (see bakeAngleError); closer than
- * `detail`, where slices cannot be thinner than one voxel, chunks span more.
+ * 2 · `detail`, where slices cannot be thinner than one layer, chunks span more.
  */
 export function directionError(detail: number): number {
   return CHUNK_WIDTH_PER_SIZE / (2 * detail) + directionStep(detail) / 2
@@ -137,8 +139,8 @@ export function getSliceAtDepth(depth: number, minSize: number): SliceBoundary {
 /**
  * Contiguous slices covering voxels with z from cameraZ + minRelativeDepth
  * to cameraZ + maxRelativeDepth, sorted near to far. No slice is thicker
- * than max(1, a / detail), where a is the distance to its near face
- * (depth - 0.5).
+ * (size + 1) than max(2, a / detail), where a is the distance to its near
+ * side (depth - 1, the near tips of its first layer's voxels).
  */
 export function selectSlices(
   cameraZ: number,
@@ -151,7 +153,7 @@ export function selectSlices(
   const slices: SliceBoundary[] = []
   // Round up: a slice closer than minRelativeDepth would be blown up over the screen.
   for (let z = Math.ceil(cameraZ + minRelativeDepth); z < farZ; ) {
-    const slice = getSliceAtDepth(z, floorPowerOfTwo((z - 0.5 - cameraZ) / detail))
+    const slice = getSliceAtDepth(z, floorPowerOfTwo((z - 1 - cameraZ) / detail - 1))
     slices.push(slice)
     z = slice.depth + slice.size
   }

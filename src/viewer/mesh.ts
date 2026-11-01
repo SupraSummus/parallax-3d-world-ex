@@ -1,5 +1,6 @@
 import type { World } from '@/lib/world'
-import { FACE_SHADE } from '@/lib/bake'
+import { faceShade } from '@/lib/bake'
+import { VOXEL_FACES } from '@/lib/fcc'
 
 export interface VoxelMesh {
   /** xyz per vertex, in three.js space: (x, y, -z), so the default -z view looks along world +z. */
@@ -10,48 +11,49 @@ export interface VoxelMesh {
   faceCount: number
 }
 
-// For each face: the neighbour offset in world space, a brightness, and the
-// four corners in three.js space (z already negated), counter-clockwise when
-// seen from outside so back-face culling works.
-const FACES: { dir: [number, number, number]; shade: number; corners: [number, number, number][] }[] = [
-  { dir: [0, 1, 0], shade: FACE_SHADE.top, corners: [[0, 1, 0], [1, 1, 0], [1, 1, -1], [0, 1, -1]] },
-  { dir: [0, -1, 0], shade: FACE_SHADE.bottom, corners: [[0, 0, 0], [0, 0, -1], [1, 0, -1], [1, 0, 0]] },
-  { dir: [1, 0, 0], shade: FACE_SHADE.right, corners: [[1, 0, 0], [1, 0, -1], [1, 1, -1], [1, 1, 0]] },
-  { dir: [-1, 0, 0], shade: FACE_SHADE.left, corners: [[0, 0, -1], [0, 0, 0], [0, 1, 0], [0, 1, -1]] },
-  // World -z faces the parallax camera; in three.js space that is +z.
-  { dir: [0, 0, -1], shade: FACE_SHADE.front, corners: [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]] },
-  { dir: [0, 0, 1], shade: FACE_SHADE.back, corners: [[1, 0, -1], [0, 0, -1], [0, 1, -1], [1, 1, -1]] },
-]
+// Each face's corners in three.js space (z negated), counter-clockwise seen
+// from outside: negating z mirrors, so the world's order is reversed.
+const FACES = VOXEL_FACES.map(({ normal: [a, b, c], corners }) => ({
+  normal: [a, b, c],
+  shade: faceShade({ x: a, y: b, z: c }),
+  corners: [...corners].reverse().map(([x, y, z]) => [x, y, -z]),
+}))
 
 /**
  * Builds a triangle mesh of every voxel face not covered by a neighbour.
- * Voxel (x, y, z) covers [x ± 0.5] × [y ± 0.5] × [z ± 0.5], as in the
- * parallax renderer.
+ * Voxel (x, y, z) is the rhombic dodecahedron around site (x, y, z)
+ * (see fcc.ts), as in the parallax renderer.
  */
 export function buildVoxelMesh(world: World): VoxelMesh {
-  const faces: number[] = [] // voxel index * 8 + face index
-  world.voxels.forEach((v, i) => {
-    FACES.forEach(({ dir: [dx, dy, dz] }, f) => {
-      if (!world.has(v.x + dx, v.y + dy, v.z + dz)) faces.push(i * 8 + f)
+  const grid = world.grid
+  // Each face not covered by a neighbour: f(x, y, z, id, face index).
+  const eachFace = (f: (x: number, y: number, z: number, id: number, face: number) => void) => {
+    grid.forEach((x, y, z, id) => {
+      FACES.forEach(({ normal: [a, b, c] }, k) => {
+        if (grid.get(x + a, y + b, z + c) === 0) f(x, y, z, id, k)
+      })
     })
-  })
+  }
+  let faceCount = 0
+  eachFace(() => { faceCount++ })
 
-  const positions = new Float32Array(faces.length * 12)
-  const colors = new Uint8Array(faces.length * 12)
-  const indices = new Uint32Array(faces.length * 6)
-  faces.forEach((packed, n) => {
-    const v = world.voxels[Math.floor(packed / 8)]
-    const { shade, corners } = FACES[packed % 8]
-    const rgb = [1, 3, 5].map(i => Math.round(parseInt(v.color.slice(i, i + 2), 16) * shade))
+  const positions = new Float32Array(faceCount * 12)
+  const colors = new Uint8Array(faceCount * 12)
+  const indices = new Uint32Array(faceCount * 6)
+  const rgbs = grid.materials.map(({ color }) => [1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16)))
+  let n = 0
+  eachFace((x, y, z, id, f) => {
+    const { shade, corners } = FACES[f]
     corners.forEach(([cx, cy, cz], k) => {
       const o = (n * 4 + k) * 3
-      positions[o] = v.x - 0.5 + cx
-      positions[o + 1] = v.y - 0.5 + cy
-      positions[o + 2] = -(v.z - 0.5) + cz
-      colors.set(rgb, o)
+      positions[o] = x + cx
+      positions[o + 1] = y + cy
+      positions[o + 2] = -z + cz
+      for (let c = 0; c < 3; c++) colors[o + c] = Math.round(rgbs[id][c] * shade)
     })
     const base = n * 4
     indices.set([base, base + 1, base + 2, base, base + 2, base + 3], n * 6)
+    n++
   })
-  return { positions, colors, indices, faceCount: faces.length }
+  return { positions, colors, indices, faceCount }
 }

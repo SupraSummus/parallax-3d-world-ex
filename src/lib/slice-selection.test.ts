@@ -33,8 +33,8 @@ describe('selectSlices', () => {
 
   it('matches the documented progression for camera z=-67', () => {
     const slices = selectSlices(-67, 1, 200, 1)
-    expect(slices.map(s => s.depth)).toEqual([-66, -65, -64, -62, -60, -56, -48, -32, 0, 64, 128])
-    expect(sizes(slices)).toEqual([1, 1, 2, 2, 4, 8, 16, 32, 64, 64, 64])
+    expect(slices.map(s => s.depth)).toEqual([-66, -65, -64, -63, -62, -60, -56, -48, -32, 0, 64, 128])
+    expect(sizes(slices)).toEqual([1, 1, 1, 1, 2, 4, 8, 16, 32, 64, 64, 64])
   })
 
   it('returns nothing for an empty range', () => {
@@ -68,12 +68,13 @@ describe('selectSlices', () => {
         // Aligned powers of two, so a (depth, size) slice is camera-independent and cacheable.
         expect(Math.abs(s.depth % s.size)).toBe(0)
         expect([1, 2, 4, 8, 16, 32, 64]).toContain(s.size)
-        // Never thicker than (distance to the near face) / detail.
-        expect(s.size).toBeLessThanOrEqual(Math.max(1, (s.depth - 0.5 - cameraZ) / detail))
+        // Never thicker (a voxel reaches 1 past its layer: size + 1) than
+        // (distance to the near side) / detail, or one layer (two units).
+        expect(s.size + 1).toBeLessThanOrEqual(Math.max(2, (s.depth - 1 - cameraZ) / detail))
       }
 
       // Logarithmic, not linear, in the view distance.
-      expect(slices.length).toBeLessThanOrEqual(6 * detail + 10)
+      expect(slices.length).toBeLessThanOrEqual(7 * detail + 10)
     })
   })
 

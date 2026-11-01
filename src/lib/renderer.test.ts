@@ -71,7 +71,7 @@ describe('ParallaxRenderer', () => {
     it('renders one layer per selected slice, near to far', () => {
       render()
       const camera = renderer.getCamera()
-      const expected = selectSlices(camera.z, 1, DEFAULT_RENDER_DISTANCE, renderer.getDetail())
+      const expected = selectSlices(camera.z, 2, DEFAULT_RENDER_DISTANCE, renderer.getDetail())
       expect(renderer.getLayers().map(l => ({ depth: l.depth, size: l.size }))).toEqual(expected)
       expect(lastUpdate().layerCount).toBe(expected.length)
     })
@@ -107,7 +107,7 @@ describe('ParallaxRenderer', () => {
       expect(lastUpdate().voxelsRendered).toBeGreaterThanOrEqual(chunks.reduce((n, c) => n + c.facesDrawn, 0))
     })
 
-    it('bakes each chunk along the grid direction nearest to the ray through its centre', () => {
+    it('bakes each chunk along the grid direction nearest to the ray through its centre, within 45°', () => {
       render()
       const step = directionStep(renderer.getDetail())
       const camera = renderer.getCamera()
@@ -116,11 +116,13 @@ describe('ParallaxRenderer', () => {
         const w = chunkWidth(layer.size)
         const distance = layer.depth + (layer.size - 1) / 2 - camera.z
         for (const chunk of layer.chunks) {
-          const tanX = (chunk.x + w / 2 - 0.5 - camera.x) / distance
-          const tanY = (chunk.y + w / 2 - 0.5 - camera.y) / distance
+          const clamp = (t: number) => Math.max(-1, Math.min(1, t))
+          const tanX = clamp((chunk.x + w / 2 - 0.5 - camera.x) / distance)
+          const tanY = clamp((chunk.y + w / 2 - 0.5 - camera.y) / distance)
           expect(Math.abs(chunk.tanX - tanX)).toBeLessThanOrEqual(step / 2 + 1e-9)
           expect(Math.abs(chunk.tanY - tanY)).toBeLessThanOrEqual(step / 2 + 1e-9)
           expect(Number.isInteger(chunk.tanX / step) && Number.isInteger(chunk.tanY / step)).toBe(true)
+          expect(Math.max(Math.abs(chunk.tanX), Math.abs(chunk.tanY))).toBeLessThanOrEqual(1)
           if (chunk.tanX !== 0 || chunk.tanY !== 0) oblique++
         }
       }
@@ -184,7 +186,7 @@ describe('ParallaxRenderer', () => {
     const pixelsPerUnit = (chunk: Chunk) => screenOf(chunk, chunk.originX + 1, chunk.originY).x - screenOf(chunk, chunk.originX, chunk.originY).x
 
     beforeEach(() => {
-      renderer.setCamera({ x: 0, y: 15, z: -30 })
+      renderer.setCamera({ x: 0, y: 30, z: -60 })
       // Near layers hide most of the view; keep chunks of many layers to compare.
       renderer.setSkipCovered(false)
     })
@@ -242,14 +244,14 @@ describe('ParallaxRenderer', () => {
       render()
       expect(renderer.getLayers().map(l => [l.depth, l.size])).toEqual(slices)
       for (const chunk of allChunks()) {
-        const { x, y } = screenOf(chunk, 0, 15)
+        const { x, y } = screenOf(chunk, 0, 30)
         expect(x).toBeCloseTo(300)
         expect(y).toBeCloseTo(400)
       }
     })
 
     it('draws nothing for empty slices and fogs farther slices more', () => {
-      renderer.setCamera({ z: -70 })
+      renderer.setCamera({ z: -140 })
       render()
       const layers = renderer.getLayers()
       expect(layers.some(l => l.voxelCount === 0 && l.chunks.length === 0)).toBe(true)
@@ -337,7 +339,7 @@ describe('ParallaxRenderer', () => {
       render()
       expect(lastUpdate().detail).toBeLessThan(strict.detail)
       expect(lastUpdate().layerCount).toBeLessThan(strict.layerCount)
-      expect(lastUpdate().layerCount).toBe(selectSlices(world.spawn.z, 1, 200, lastUpdate().detail).length)
+      expect(lastUpdate().layerCount).toBe(selectSlices(world.spawn.z, 2, DEFAULT_RENDER_DISTANCE, lastUpdate().detail).length)
     })
   })
 
@@ -348,7 +350,7 @@ describe('ParallaxRenderer', () => {
       const camera = renderer.getCamera()
       const layers = renderer.getLayers()
       expect(layers.map(l => ({ depth: l.depth, size: l.size })))
-        .toEqual(selectSlices(camera.z, 1, 50, renderer.getDetail()))
+        .toEqual(selectSlices(camera.z, 2, 50, renderer.getDetail()))
       const last = layers[layers.length - 1]
       expect(last.depth + last.size).toBeGreaterThanOrEqual(camera.z + 50)
       expect(last.depth).toBeLessThan(camera.z + 50)
@@ -358,7 +360,7 @@ describe('ParallaxRenderer', () => {
   describe('orientation', () => {
     it('looks all around: behind the camera with the -z face, straight up with +y', () => {
       // In the middle of the world, so there is something in every direction.
-      renderer.setCamera({ x: 0, y: 15, z: 0 })
+      renderer.setCamera({ x: 0, y: 16, z: 0 })
       for (const [yaw, pitch, face] of [[180, 0, '-z'], [0, 90, '+y'], [-90, 0, '-x']] as const) {
         renderer.setOrientation({ yaw, pitch })
         render()
@@ -378,7 +380,7 @@ describe('ParallaxRenderer', () => {
     it('accumulates session totals', () => {
       render()
       const first = lastUpdate()
-      renderer.setCamera({ z: -20 })
+      renderer.setCamera({ z: -40 })
       render()
       const second = lastUpdate()
 

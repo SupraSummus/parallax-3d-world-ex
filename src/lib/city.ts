@@ -3,11 +3,16 @@ import { VoxelGrid, type Material } from './voxel-grid'
 import { hash, rng } from './noise'
 
 /**
- * Metres per voxel: fine enough that a door frame, a window bar or a chair
- * leg is one voxel. All sizes below are in voxels, written as vox(metres).
+ * Metres per cell of the city's plan: fine enough that a door frame, a
+ * window bar or a chair leg is one cell. All sizes below are in plan cells,
+ * written as vox(metres). Buildings are boxes on this plan; each plan cell
+ * is the box of space holding four voxels of the lattice (voxel-grid.ts),
+ * whose unit is half a plan cell.
  */
-export const CITY_VOXEL_SIZE = 0.25
-const vox = (metres: number) => Math.round(metres / CITY_VOXEL_SIZE)
+export const PLAN_CELL_SIZE = 0.25
+/** Lattice units per plan cell. */
+const UNITS = 2
+const vox = (metres: number) => Math.round(metres / PLAN_CELL_SIZE)
 
 // Buildings stand on a grid of square rooms; walls stand on the grid lines.
 const CELL = vox(4)
@@ -37,7 +42,7 @@ const MAX_Y = FLOOR0 + MAX_STOREYS * STOREY + vox(3.5)
 // `type` ids follow world.ts.
 const TYPE = { grass: 1, soil: 2, stone: 3, wood: 4, leaves: 5, water: 8, plaster: 10, glass: 11, metal: 12, fabric: 13 }
 
-/** A material kind: one of `colors` per voxel, picked by position unless the caller picks. */
+/** A material kind: one of `colors` per plan cell, picked by position unless the caller picks. */
 interface Paint {
   type: number
   colors: readonly string[]
@@ -91,33 +96,36 @@ const FLOORS = {
 type Floor = keyof typeof FLOORS
 const FLOOR_KINDS = Object.keys(FLOORS) as Floor[]
 
-/** The voxel grid, with a material list that grows as paints are used. */
+/** The voxel grid, painted cell by cell of the plan, with a material list that grows as paints are used. */
 class Canvas {
   private readonly materials: Material[] = [{ color: '', type: 0 }]
   private readonly ids = new Map<string, number>()
+  // Plan cell (x, y, z) holds the sites with x in [UNITS · x − 1, UNITS · x] (y, z likewise).
   readonly grid = new VoxelGrid(
-    { minX: MIN_X, minY: MIN_Y, minZ: MIN_Z, maxX: MIN_X + SIZE, maxY: MAX_Y, maxZ: MIN_Z + SIZE },
+    {
+      minX: UNITS * MIN_X - 1, minY: UNITS * MIN_Y - 1, minZ: UNITS * MIN_Z - 1,
+      maxX: UNITS * (MIN_X + SIZE) - 1, maxY: UNITS * MAX_Y - 1, maxZ: UNITS * (MIN_Z + SIZE) - 1,
+    },
     this.materials,
   )
   constructor(private readonly shadeSeed: number) {}
 
-  /** Places `p` (one of its colours: picked by `pick` in [0, 1), else by position); null clears. Out-of-range cells are ignored. */
+  /** Fills plan cell (x, y, z) with `p` (one of its colours: picked by `pick` in [0, 1), else by position); null clears. Out-of-range cells are ignored. */
   put(x: number, y: number, z: number, p: Paint | null, pick?: number) {
-    const i = this.grid.index(x, y, z)
-    if (i < 0) return
-    if (p === null) {
-      this.grid.cells[i] = 0
-      return
+    let id = 0
+    if (p !== null) {
+      const color = p.colors[Math.floor((pick ?? hash(this.shadeSeed, x, y, z)) * p.colors.length)]
+      const key = `${color}|${String(p.type)}`
+      const known = this.ids.get(key)
+      if (known === undefined) {
+        id = this.materials.push({ color, type: p.type }) - 1
+        if (id > 255) throw new RangeError('too many city materials')
+        this.ids.set(key, id)
+      } else {
+        id = known
+      }
     }
-    const color = p.colors[Math.floor((pick ?? hash(this.shadeSeed, x, y, z)) * p.colors.length)]
-    const key = `${color}|${String(p.type)}`
-    let id = this.ids.get(key)
-    if (id === undefined) {
-      id = this.materials.push({ color, type: p.type }) - 1
-      if (id > 255) throw new RangeError('too many city materials')
-      this.ids.set(key, id)
-    }
-    this.grid.cells[i] = id
+    this.grid.fillBox(UNITS * x - 1, UNITS * y - 1, UNITS * z - 1, UNITS * x + 1, UNITS * y + 1, UNITS * z + 1, id)
   }
 
   /** Fills the box with corners (x0, y0, z0) and (x1, y1, z1), inclusive. */
@@ -726,5 +734,6 @@ export function generateCity(seed: number): { grid: VoxelGrid; spawn: Vec3 } {
     }
   }
 
-  return { grid: canvas.grid, spawn }
+  // In lattice units, at a site of the plan cell (the upper of its two along each axis).
+  return { grid: canvas.grid, spawn: { x: UNITS * spawn.x, y: UNITS * spawn.y, z: UNITS * spawn.z } }
 }
