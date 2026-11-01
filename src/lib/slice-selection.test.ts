@@ -24,7 +24,7 @@ describe('getSliceAtDepth', () => {
 })
 
 describe('selectSlices', () => {
-  // DESIGN.md, section 1 (detail 1).
+  // docs/architecture.md, section 1 (detail 1).
   it('matches the documented progression for camera z=0', () => {
     const slices = selectSlices(0, 1, 200, 1)
     expect(slices.map(s => s.depth)).toEqual([1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192])

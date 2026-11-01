@@ -29,9 +29,9 @@ Other scripts (`test`, `lint`, `typecheck`, `knip`, `build`) are in
 | Document | Description |
 |----------|-------------|
 | **[AGENTS.md](AGENTS.md)** | Guide for AI agents (start here) |
-| [PRD.md](PRD.md) | Product requirements |
-| [DESIGN.md](DESIGN.md) | Rendering architecture |
-| [TESTING.md](TESTING.md) | Testing guide |
+| [docs/product.md](docs/product.md) | Product requirements |
+| [docs/architecture.md](docs/architecture.md) | Rendering architecture |
+| [docs/testing.md](docs/testing.md) | Testing guide |
 
 ## License
 

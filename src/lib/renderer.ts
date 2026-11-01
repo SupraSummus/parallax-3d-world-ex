@@ -169,8 +169,8 @@ export interface RendererOptions {
 /**
  * Renders a World as a stack of flat, cached slices, each split into chunks
  * so that only what is in view is rasterised. render() returns where each
- * chunk goes on screen; drawing it is the compositor's job. See DESIGN.md
- * for the slicing and caching scheme.
+ * chunk goes on screen; drawing it is the compositor's job. See
+ * docs/architecture.md for the slicing and caching scheme.
  */
 export class ParallaxRenderer {
   private world: World

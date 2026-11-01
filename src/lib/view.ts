@@ -2,7 +2,8 @@
  * The camera's view and the 12 faces of a rhombic dodecahedron around it,
  * one towards each nearest neighbour of the FCC lattice (fcc.ts). Each face
  * has its own stack of slices, cut along its axis, and draws the rays
- * closer to its axis than to any other's. See DESIGN.md, section 4.
+ * closer to its axis than to any other's. See docs/architecture.md,
+ * section 4.
  */
 import type { Vec3 } from './world'
 

@@ -99,7 +99,7 @@ below). T = 1: a stack draws rays up to 45° from its axis (section 4).
 
 **Derivation.** Every step below is stated and checked on random samples,
 plus end to end against ray-cast perspective, in
-[`src/lib/leak-bound.test.ts`](src/lib/leak-bound.test.ts); read it to
+[`src/lib/leak-bound.test.ts`](../src/lib/leak-bound.test.ts); read it to
 follow or change the reasoning. In short, for one lateral axis, a slice
 with near side at distance a, thickness s ((size + 1) · LAYER, as voxels
 reach a layer past their own), centre plane at D, baked along tangent τ_b
