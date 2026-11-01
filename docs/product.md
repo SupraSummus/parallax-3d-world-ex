@@ -38,7 +38,7 @@ the statistics. "Fill Gaps" (on by default) grows faces that run from one
 slice into the next, where nothing else is drawn in their chunk, so thin
 things like a floor seen from above don't show sky between slices.
 "Skip Covered Chunks" (on by default) doesn't draw chunks that nearer
-ones cover, and bakes them last; the picture is the same, it is there to
+ones cover, nor bakes them; the picture is the same, it is there to
 compare. See [architecture.md](architecture.md).
 
 **Worlds** – Procedurally generated, regenerable with a new seed; the camera
@@ -94,14 +94,12 @@ waits for them; meanwhile a cell shows an older bake, or nothing.
   even with the Rust baker.
   Baking finer than the screen shows is part of it:
   slices of size 4 and 8 get 2–3× the pixels they cover on screen.
-- Count a slice's voxels (`countAlong`, for the Layers panel) only when shown:
-  it is ~1.6 s of the ~10 s first render of the forest.
 - Port the toy worlds to the forest's metric scale, or drop them.
-- Fill cells that have never been baked from the slices a re-tiled slice
-  replaces, instead of showing nothing until they arrive. Covered cells
-  would then not need baking at all.
-- Find covered chunks faster: it adds ~30 ms to a render with 12 faces,
+- Find covered chunks faster: it adds ~25 ms to a render with 12 faces,
   mostly in `Coverage.cover`.
+  It could run in Rust, with the chunks' blocks in the main thread's WebAssembly.
+- Find covered chunks more exactly: half of the chunks drawn show no pixel.
+- Build `LayerIndex` off the main thread or in Rust: ~0.4 s at start on the forest.
 - Generate the world in a worker: the forest takes ~0.5 s on the main
   thread at start.
 - Measure the WebGL compositor on real GPUs (headless Chromium only has a

@@ -97,36 +97,6 @@ export class VoxelGrid {
     }
   }
 
-  /**
-   * Number of voxels with p · F in [from, to), for an integer vector F with
-   * two components ±1 and one 0 (a face's lattice.forward): the layers of
-   * a slice, see view.ts.
-   */
-  countAlong({ x: fx, y: fy, z: fz }: Vec3, from: number, to: number): number {
-    const { minX, minY, minZ, nx, ny, nz, cells } = this
-    // [lo, hi) clipped to the v with f · v in [a, b), for f in -1, 0, 1.
-    const clip = (f: number, lo: number, hi: number, a: number, b: number) =>
-      f > 0 ? [Math.max(lo, a), Math.min(hi, b)] : f < 0 ? [Math.max(lo, 1 - b), Math.min(hi, 1 - a)] : a <= 0 && 0 < b ? [lo, hi] : [lo, lo]
-    // The extremes of f · v over the box's x and y.
-    const extremes = (f: number, lo: number, n: number) => [Math.min(f * lo, f * (lo + n - 1)), Math.max(f * lo, f * (lo + n - 1))]
-    const [x0, x1] = extremes(fx, minX, nx)
-    const [y0, y1] = extremes(fy, minY, ny)
-    let count = 0
-    const [zFrom, zTo] = clip(fz, minZ, minZ + nz, from - y1 - x1, to - y0 - x0)
-    for (let z = zFrom; z < zTo; z++) {
-      const [yFrom, yTo] = clip(fy, minY, minY + ny, from - fz * z - x1, to - fz * z - x0)
-      for (let y = yFrom; y < yTo; y++) {
-        const along = fy * y + fz * z
-        const [lo, hi] = clip(fx, minX, minX + nx, from - along, to - along)
-        const row = ((z - minZ) * ny + (y - minY)) * (nx / 2)
-        for (let x = lo + ((lo + y + z) & 1); x < hi; x += 2) {
-          if (cells[row + ((x - minX) >> 1)] !== 0) count++
-        }
-      }
-    }
-    return count
-  }
-
   /** Calls `visit` with every voxel's position and material id, ordered by z, then y, then x. */
   forEach(visit: (x: number, y: number, z: number, id: number) => void) {
     const { minX, minY, minZ, nx, ny, nz, cells } = this
@@ -180,5 +150,148 @@ export class VoxelGrid {
     const grid = new VoxelGrid(box, materials)
     voxels.forEach(({ x, y, z }, n) => { grid.cells[grid.index(x, y, z)] = voxelIds[n] })
     return grid
+  }
+}
+
+/** Width of a column block of LayerIndex, in lattice units along a. */
+const EXTENT_BLOCK = 8
+
+/** A face's lattice vectors R, U, F (see Face in view.ts). */
+interface Lattice {
+  right: Vec3
+  up: Vec3
+  forward: Vec3
+}
+
+/** Per face whose forward has its first non-zero component positive. */
+interface Table {
+  lattice: Lattice
+  cMin: number
+  aMin: number
+  layers: number
+  blocks: number
+  /** Voxels before each layer (c − cMin), and in all of them at the end. */
+  sums: Float64Array
+  /** By (c − cMin, block of a − aMin): the least and greatest b, or least > greatest if there is no voxel. */
+  low: Int16Array
+  high: Int16Array
+}
+
+/**
+ * Where a grid's voxels are along each face's layers (in a face's lattice
+ * coordinates (a, b, c), see Face in view.ts): how many each layer c holds,
+ * and for each layer and block of EXTENT_BLOCK columns a, the range of b
+ * of its voxels. From one pass over the grid, so the renderer can count a
+ * slice's voxels, and tell which chunk cells are empty and how high their
+ * content reaches, without walking or baking them.
+ */
+export class LayerIndex {
+  private keys: string[]
+  private tables: Table[]
+
+  constructor({ minX, minY, minZ, nx, ny, nz, cells }: VoxelData, lattices: readonly Lattice[]) {
+    // Bounds of v · p over the grid's box.
+    const along = (v: Vec3) => {
+      const ends = [0, 1].flatMap(i => [0, 1].flatMap(j => [0, 1].map(k =>
+        v.x * (minX + i * Math.max(0, nx - 1)) + v.y * (minY + j * Math.max(0, ny - 1)) + v.z * (minZ + k * Math.max(0, nz - 1)))))
+      return [Math.min(...ends), Math.max(...ends)]
+    }
+    // A table per pair of opposite faces (see table()).
+    const canonical = lattices.filter(l => !LayerIndex.mirrored(l.forward))
+    const shapes = canonical.filter((l, k) => canonical.findIndex(m => LayerIndex.key(m.forward) === LayerIndex.key(l.forward)) === k).map(lattice => {
+      const [aMin, aMax] = along(lattice.right)
+      const [cMin, cMax] = along(lattice.forward)
+      return { lattice, aMin, cMin, layers: cMax - cMin + 1, blocks: Math.floor((aMax - aMin) / EXTENT_BLOCK) + 1 }
+    })
+    // All tables' arrays in one, for one pass over the grid.
+    const n = shapes.length
+    const [sumAt, lowAt] = [new Int32Array(n + 1), new Int32Array(n + 1)]
+    shapes.forEach(({ layers, blocks }, k) => {
+      sumAt[k + 1] = sumAt[k] + layers + 1
+      lowAt[k + 1] = lowAt[k] + layers * blocks
+    })
+    const sums = new Float64Array(sumAt[n])
+    const low = new Int16Array(lowAt[n]).fill(32767)
+    const high = new Int16Array(lowAt[n]).fill(-32768)
+    const blocks = Int32Array.from(shapes, s => s.blocks)
+    // Per table: a, b and c of site p are v · p − offset, for v = R, U, F.
+    const vectors = Int32Array.from(shapes.flatMap(({ lattice: { right: R, up: U, forward: F } }) => [R, U, F].flatMap(v => [v.x, v.y, v.z])))
+    const offsets = Int32Array.from(shapes.flatMap(s => [s.aMin, 0, s.cMin]))
+    // a, b and c of the row's first site, per table.
+    const row = new Int32Array(3 * n)
+    let i = 0
+    for (let z = minZ; z < minZ + nz; z++) {
+      for (let y = minY; y < minY + ny; y++) {
+        const x0 = minX + ((minX + y + z) & 1)
+        for (let m = 0; m < 3 * n; m++) row[m] = vectors[3 * m] * x0 + vectors[3 * m + 1] * y + vectors[3 * m + 2] * z - offsets[m]
+        for (let x = x0; x < minX + nx; x += 2, i++) {
+          if (cells[i] === 0) continue
+          const dx = x - x0
+          for (let k = 0; k < n; k++) {
+            const v = 9 * k
+            const a = row[3 * k] + vectors[v] * dx
+            const b = row[3 * k + 1] + vectors[v + 3] * dx
+            const c = row[3 * k + 2] + vectors[v + 6] * dx
+            sums[sumAt[k] + c + 1]++
+            // a ≥ 0 here, and EXTENT_BLOCK is 8.
+            const at = lowAt[k] + c * blocks[k] + (a >> 3)
+            if (b < low[at]) low[at] = b
+            if (b > high[at]) high[at] = b
+          }
+        }
+      }
+    }
+    this.tables = shapes.map((shape, k) => {
+      const table = { ...shape, sums: sums.subarray(sumAt[k], sumAt[k + 1]), low: low.subarray(lowAt[k], lowAt[k + 1]), high: high.subarray(lowAt[k], lowAt[k + 1]) }
+      for (let c = 1; c < table.sums.length; c++) table.sums[c] += table.sums[c - 1]
+      return table
+    })
+    this.keys = shapes.map(s => LayerIndex.key(s.lattice.forward))
+  }
+
+  /** Whether a face's forward is the opposite of one with its first non-zero component positive. */
+  private static mirrored({ x, y, z }: Vec3): boolean {
+    return (x || y || z) < 0
+  }
+
+  private static key({ x, y, z }: Vec3): string {
+    const s = (x || y || z) < 0 ? -1 : 1
+    return `${String(s * x)},${String(s * y)},${String(s * z)}`
+  }
+
+  /**
+   * The face's table, and [c0, c1) and [a0, a1) in its coordinates: the
+   * opposite face has the same up, and a and c negated, so c in [c0, c1)
+   * is −c in [1 − c1, 1 − c0).
+   */
+  private table({ forward }: { forward: Vec3 }, c0: number, c1: number, a0: number, a1: number): [Table, number, number, number, number] {
+    const table = this.tables[this.keys.indexOf(LayerIndex.key(forward))]
+    return LayerIndex.mirrored(forward) ? [table, 1 - c1, 1 - c0, 1 - a1, 1 - a0] : [table, c0, c1, a0, a1]
+  }
+
+  /** Number of voxels in a face's layers [from, to): a slice's. */
+  count(lattice: { forward: Vec3 }, from: number, to: number): number {
+    const [{ cMin, sums }, c0, c1] = this.table(lattice, from, to, 0, 0)
+    const at = (c: number) => sums[Math.min(sums.length - 1, Math.max(0, c - cMin))]
+    return Math.max(0, at(c1) - at(c0))
+  }
+
+  /**
+   * The least and greatest b of the voxels in a face's layers [c0, c1)
+   * with a in [a0, a1) (or a little wider, by whole blocks), or null if
+   * there are none.
+   */
+  range(lattice: { forward: Vec3 }, c0: number, c1: number, a0: number, a1: number): [number, number] | null {
+    const [{ cMin, aMin, layers, blocks, low, high }, cFrom, cTo, aFrom, aTo] = this.table(lattice, c0, c1, a0, a1)
+    const k0 = Math.max(0, Math.floor((aFrom - aMin) / EXTENT_BLOCK))
+    const k1 = Math.min(blocks - 1, Math.floor((aTo - 1 - aMin) / EXTENT_BLOCK))
+    let [lo, hi] = [Infinity, -Infinity]
+    for (let c = Math.max(cFrom - cMin, 0); c < Math.min(cTo - cMin, layers); c++) {
+      for (let k = c * blocks + k0; k <= c * blocks + k1; k++) {
+        if (low[k] < lo) lo = low[k]
+        if (high[k] > hi) hi = high[k]
+      }
+    }
+    return lo <= hi ? [lo, hi] : null
   }
 }

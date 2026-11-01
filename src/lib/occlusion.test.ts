@@ -1,43 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { ParallaxRenderer, type Frame } from './renderer'
-import { inFace, screenBox, screenRay } from './view'
+import { ParallaxRenderer } from './renderer'
+import { picture } from './picture.test-helper'
 import { World } from './world'
 
 const world = new World(12345, 'hills_with_trees')
-const [WIDTH, HEIGHT, STEP] = [800, 600, 3]
-
-/**
- * The frame's colour at every STEP-th pixel, as the compositor draws it
- * (nearest texel, nearer layers first, each face's own rays).
- */
-function picture(frame: Frame): Uint32Array {
-  const cols = Math.ceil(WIDTH / STEP)
-  const colour = new Uint32Array(cols * Math.ceil(HEIGHT / STEP))
-  const depth = new Float64Array(colour.length).fill(Infinity)
-  frame.layers.forEach(({ face, distance, placements }, index) => {
-    const boxOf = screenBox(frame, face)
-    for (const { chunk, x, y } of placements) {
-      const box = boxOf(x, x + chunk.width / chunk.scale, y - chunk.height / chunk.scale, y, distance)
-      if (!box) continue
-      for (let j = Math.max(0, Math.floor(box.minY / STEP)); j * STEP < Math.min(HEIGHT, box.maxY); j++) {
-        for (let i = Math.max(0, Math.floor(box.minX / STEP)); i * STEP < Math.min(WIDTH, box.maxX); i++) {
-          const k = j * cols + i
-          if (depth[k] < index) continue
-          const ray = screenRay(frame, face, i * STEP + 0.5, j * STEP + 0.5)
-          if (!inFace(ray.x, ray.y, ray.z)) continue
-          const px = Math.floor(((ray.x / ray.z) * distance - x) * chunk.scale)
-          const py = Math.floor((y - (ray.y / ray.z) * distance) * chunk.scale)
-          if (px < 0 || py < 0 || px >= chunk.width || py >= chunk.height) continue
-          const texel = chunk.pixels[py * chunk.width + px]
-          if (texel === 0) continue
-          depth[k] = index
-          colour[k] = texel
-        }
-      }
-    }
-  })
-  return colour
-}
+const [WIDTH, HEIGHT] = [800, 600]
 
 describe('skipping covered chunks', () => {
   it.each([[0, 0], [20, -25], [-30, 10]])('leaves the picture unchanged (yaw %s°, pitch %s°)', (yaw, pitch) => {
@@ -50,6 +17,6 @@ describe('skipping covered chunks', () => {
       return { frame: renderer.render(), covered: renderer.getStats().lastUpdate?.chunksCovered ?? 0 }
     })
     expect(frames[1].covered).toBeGreaterThan(0)
-    expect(picture(frames[1].frame)).toEqual(picture(frames[0].frame))
+    expect(picture(frames[1].frame, 3)).toEqual(picture(frames[0].frame, 3))
   })
 })

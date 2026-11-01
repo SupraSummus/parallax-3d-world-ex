@@ -208,30 +208,39 @@ pub fn fill_faces(
 
 /** Side of a block of pixels in solid_blocks (BLOCK in occlusion.ts). */
 const BLOCK: usize = 4;
+/** A block's bits in solid_blocks: all its pixels drawn, some drawn (SOLID and DRAWN in occlusion.ts). */
+const SOLID: u8 = 1;
+const DRAWN: u8 = 2;
 
 /**
- * Which BLOCK × BLOCK blocks of an image are all drawn (1 per such block,
- * in rows), for finding what a chunk hides (Solid in occlusion.ts), and
- * their bounds in pixels: left, right, top, bottom. A block reaching past
- * the image's edge counts its pixels in the image.
+ * Which BLOCK × BLOCK blocks of an image are all drawn (SOLID) and which
+ * have a pixel drawn (DRAWN), a byte of bits per block, in rows, for
+ * finding what a chunk hides and whether it is hidden (Solid in
+ * occlusion.ts), and the bounds of the solid blocks in pixels: left,
+ * right, top, bottom. A block reaching past the image's edge counts its
+ * pixels in the image.
  */
 pub fn solid_blocks(blocks: &mut Vec<u8>, pixels: &[u32], width: usize, height: usize) -> [usize; 4] {
     let cols = width.div_ceil(BLOCK);
     let rows = height.div_ceil(BLOCK);
     blocks.clear();
-    blocks.resize(cols * rows, 1);
+    blocks.resize(cols * rows, SOLID);
     for y in 0..height {
         let row = &pixels[y * width..(y + 1) * width];
         let block_row = &mut blocks[y / BLOCK * cols..(y / BLOCK + 1) * cols];
         for (block, run) in block_row.iter_mut().zip(row.chunks(BLOCK)) {
-            if run.contains(&0) {
-                *block = 0;
+            let drawn = run.iter().filter(|&&p| p != 0).count();
+            if drawn < run.len() {
+                *block &= !SOLID;
+            }
+            if drawn > 0 {
+                *block |= DRAWN;
             }
         }
     }
     let mut bounds = [width, 0, height, 0];
-    for (k, &full) in blocks.iter().enumerate() {
-        if full == 0 {
+    for (k, &bits) in blocks.iter().enumerate() {
+        if bits & SOLID == 0 {
             continue;
         }
         let (x, y) = (k % cols * BLOCK, k / cols * BLOCK);
@@ -332,5 +341,26 @@ mod tests {
         // 0xc is nearer than 0xa's growth, so it is painted first.
         let shown = [at(0.5, 0.5), at(1.5, 0.5), at(2.5, 1.5), at(0.5, 2.5), at(3.2, 3.2), at(3.8, 3.8)];
         assert_eq!(shown, [0xa, 0xb, 0xb, 0xa, 0xc, 0]);
+    }
+
+    #[test]
+    fn marks_blocks_all_drawn_or_partly_drawn_and_bounds_the_solid_ones() {
+        // 6 × 5 pixels: blocks of 4 × 4, the right and bottom ones cut by the edge.
+        let mut pixels = vec![0u32; 6 * 5];
+        for y in 0..4 {
+            for x in 0..4 {
+                pixels[y * 6 + x] = 7;
+            }
+        }
+        // The right block's pixels in the image all drawn, the bottom right one partly.
+        for y in 0..4 {
+            pixels[y * 6 + 4] = 7;
+            pixels[y * 6 + 5] = 7;
+        }
+        pixels[4 * 6 + 5] = 7;
+        let mut blocks = Vec::new();
+        let bounds = solid_blocks(&mut blocks, &pixels, 6, 5);
+        assert_eq!(blocks, vec![SOLID | DRAWN, SOLID | DRAWN, 0, DRAWN]);
+        assert_eq!(bounds, [0, 6, 0, 4]);
     }
 }

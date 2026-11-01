@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { selectSlices, getSliceAtDepth, leakFreeDetail } from './slice-selection'
+import { selectSlices, getSliceAtDepth, leakFreeDetail, matchTilings } from './slice-selection'
 
 const sizes = (slices: { size: number }[]) => slices.map(s => s.size)
 
@@ -100,5 +100,43 @@ describe('leakFreeDetail', () => {
   it('is tan(fov / 2)·focal/ε when the view is narrower', () => {
     // 0.25 · 640 / 16 = 10, rounded up.
     expect(leakFreeDetail(640, 0.25, 16)).toBe(2 ** 3.5)
+  })
+})
+
+describe('matchTilings', () => {
+  const tiling = (...sizes: number[]) => sizes.reduce<{ depth: number; size: number }[]>((slices, size) => {
+    const depth = slices.length === 0 ? 0 : slices[slices.length - 1].depth + slices[slices.length - 1].size
+    return [...slices, { depth, size }]
+  }, [])
+  const layers = (slices: { depth: number; size: number }[]) => slices.length === 0 ? null : [slices[0].depth, slices[slices.length - 1].depth + slices[slices.length - 1].size]
+
+  it('pairs segments ending at boundaries both tilings share, with the slices holding the same layers', () => {
+    // [0, 1, 2, 4, 8) against [0, 2, 3, 4, 8).
+    const segments = matchTilings(tiling(1, 1, 2, 4), tiling(2, 1, 1, 4))
+    expect(segments.map(s => [layers(s.wanted), layers(s.previous)])).toEqual([[[0, 2], [0, 2]], [[2, 4], [2, 4]], [[4, 8], [4, 8]]])
+    expect(segments[1].previous.map(s => s.size)).toEqual([1, 1])
+  })
+
+  it('lets the first segment start within a previous slice, and pairs nothing beyond the previous tiling', () => {
+    // The camera moved forward: wanted starts at 1, previous at 0 and ends at 4.
+    const wanted = tiling(1, 1, 2, 4, 8).slice(1)
+    const segments = matchTilings(wanted, tiling(2, 2))
+    expect(segments.map(s => [layers(s.wanted), layers(s.previous)])).toEqual([[[1, 2], [0, 2]], [[2, 4], [2, 4]], [[4, 16], null]])
+  })
+
+  it('covers every wanted slice once, in order, for any two tilings', () => {
+    for (let cameraZ = -40; cameraZ < 40; cameraZ += 3) {
+      for (const previousZ of [cameraZ - 5, cameraZ, cameraZ + 7]) {
+        const wanted = selectSlices(cameraZ, 1, 300, 2)
+        const previous = selectSlices(previousZ, 1, 300, 2)
+        const segments = matchTilings(wanted, previous)
+        expect(segments.flatMap(s => s.wanted)).toEqual(wanted)
+        for (const { wanted: w, previous: p } of segments) {
+          if (p.length === 0) continue
+          expect(layers(p)?.[1]).toBe(layers(w)?.[1])
+          expect(p[0].depth).toBeLessThanOrEqual(w[0].depth)
+        }
+      }
+    }
   })
 })

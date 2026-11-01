@@ -216,9 +216,34 @@ export interface ScreenBox {
  * it is in front.
  */
 export function screenBox(view: View, face: Face): (left: number, right: number, bottom: number, top: number, distance: number) => ScreenBox | null {
-  const { forward } = faceBasis(face, view.orientation)
+  const { right: r, up: u, forward } = faceBasis(face, view.orientation)
   const to = projector(view, face)
+  const [cx, cy, f] = [view.width / 2, view.height / 2, view.focal]
   return (left, right, bottom, top, distance) => {
+    // Depth along the camera's axis of the corners: linear in x and y.
+    const zl = forward.x * left + forward.z * distance
+    const zr = forward.x * right + forward.z * distance
+    const zb = forward.y * bottom
+    const zt = forward.y * top
+    if (Math.min(zl, zr) + Math.min(zb, zt) > NEAR_PLANE) {
+      // All in front (the common case): project the corners directly.
+      let minX = Infinity
+      let maxX = -Infinity
+      let minY = Infinity
+      let maxY = -Infinity
+      for (let k = 0; k < 4; k++) {
+        const x = k === 0 || k === 3 ? left : right
+        const y = k < 2 ? bottom : top
+        const z = (k === 0 || k === 3 ? zl : zr) + (k < 2 ? zb : zt)
+        const sx = cx + ((r.x * x + r.y * y + r.z * distance) * f) / z
+        const sy = cy - ((u.x * x + u.y * y + u.z * distance) * f) / z
+        if (sx < minX) minX = sx
+        if (sx > maxX) maxX = sx
+        if (sy < minY) minY = sy
+        if (sy > maxY) maxY = sy
+      }
+      return { minX, maxX, minY, maxY }
+    }
     const corners = [[left, bottom], [right, bottom], [right, top], [left, top]].map(([x, y]) => ({ x, y, z: distance }))
     const points = clip(corners, p => dot(p, forward) - NEAR_PLANE).flatMap(p => to(p) ?? [])
     if (points.length === 0) return null

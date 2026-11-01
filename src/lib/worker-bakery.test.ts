@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { bakeHandler, ChunkBaker, type BakeMessage, type BakeResult, type ChunkRequest } from './chunk-baker'
-import { ParallaxRenderer, type Camera, type Frame } from './renderer'
+import { ParallaxRenderer, type Bakery, type Camera, type Frame } from './renderer'
 import type { Orientation } from './view'
+import { picture } from './picture.test-helper'
 import { VoxelGrid } from './voxel-grid'
 import { WorkerBakery, type BakeWorker } from './worker-bakery'
 import { World } from './world'
@@ -123,7 +124,7 @@ describe('WorkerBakery', () => {
     const bakery = new RecordingBakery([new FakeWorker(), new FakeWorker()])
     const renderer = new ParallaxRenderer(world, { bakery })
     renderer.resize(800, 600)
-    // Covered cells are baked last of all.
+    // Covered cells are not baked: bake every cell, so each has an older bake.
     renderer.setSkipCovered(false)
     await settle(renderer)
     const baked = new Set(bakery.all.map(cell))
@@ -150,30 +151,49 @@ describe('WorkerBakery', () => {
     expect(pending(renderer)).toBe(0)
   }, 60_000)
 
-  it('bakes covered cells too, so a nearer slice re-tiling uncovers no gap', async () => {
-    const bakery = new RecordingBakery([new FakeWorker(), new FakeWorker()])
-    const renderer = new ParallaxRenderer(world, { bakery })
-    renderer.resize(800, 600)
-    await settle(renderer)
-    // Forward and sideways: cells come into view behind the near slices.
-    const { x, z } = renderer.getCamera()
-    renderer.setCamera({ x: x + 3, z: z + 3 })
-    renderer.render()
-    while (bakery.latest.length > 0) {
-      await tick()
-      renderer.render()
+  it('bakes no cell nearer layers cover, and ends up showing the same', () => {
+    // Bakes a few of the wanted chunks per render, as workers slower than renders do.
+    const settled = (skip: boolean) => {
+      const baker = new ChunkBaker(world.grid)
+      let wanted: ChunkRequest[] = []
+      let deliver: Parameters<Bakery['connect']>[0] = () => undefined
+      const renderer = new ParallaxRenderer(world, { bakery: { connect(d) { deliver = d }, setWorld() {}, want(r) { wanted = r } } })
+      renderer.resize(800, 600)
+      // Among the trees, near the ground.
+      renderer.setCamera({ x: 0, y: 15, z: 0 })
+      renderer.setSkipCovered(skip)
+      let bakes = 0
+      for (renderer.render(); wanted.length > 0; renderer.render()) {
+        for (const request of wanted.slice(0, 50)) deliver(request, baker.bake(request))
+        bakes += Math.min(50, wanted.length)
+      }
+      return { bakes, picture: picture(renderer.render(), 4) }
     }
-    expect(renderer.getStats().lastUpdate?.chunksCovered).toBeGreaterThan(0)
+    const [skipping, all] = [settled(true), settled(false)]
+    expect(skipping.picture).toEqual(all.picture)
+    // ~150 against ~3500.
+    expect(skipping.bakes).toBeLessThan(all.bakes / 4)
+  })
 
-    // Every cell in view has a bake, if only an older one.
-    renderer.setSkipCovered(false)
-    const cells = (frame: Frame) => frame.layers.flatMap((l, i) => l.placements.map(({ chunk }) => `${String(i)}:${String(chunk.i)},${String(chunk.j)}`))
-    const showing = new Set(cells(renderer.render()))
+  it('while slices re-tile, shows the slices they replace until the new ones are baked', async () => {
+    const renderer = workerRenderer()
+    // Among the trees, near the ground.
+    renderer.setCamera({ x: 0, y: 15, z: 0 })
+    await settle(renderer)
+    // Up and forward: slices re-tile, and nothing is baked for them yet.
+    // Cells that come out from behind nearer ones show nothing until baked.
+    renderer.setCamera({ x: 0, y: 35, z: 30 })
+    const moved = picture(renderer.render(), 4)
+    expect(pending(renderer)).toBeGreaterThan(0)
     const target = new ParallaxRenderer(world)
     target.resize(800, 600)
     target.setCamera(renderer.getCamera())
-    target.setSkipCovered(false)
-    expect(cells(target.render()).filter(c => !showing.has(c))).toEqual([])
+    const settled = picture(target.render(), 4)
+    const drawn = settled.filter(p => p !== 0).length
+    const gaps = settled.filter((p, k) => p !== 0 && moved[k] === 0).length
+    expect(drawn).toBeGreaterThan(settled.length / 4)
+    // Without stand-ins, ~15%.
+    expect(gaps).toBeLessThan(drawn / 10)
   })
 
   it('drops chunks baked from a replaced world', async () => {

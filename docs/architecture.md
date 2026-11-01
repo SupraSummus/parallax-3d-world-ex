@@ -169,6 +169,17 @@ every chunk covers about the same part of the screen. Only chunks whose
 cell reaches the screen are rasterised; empty ones are cached too, so
 their cells are not searched again, but not shown.
 
+**Empty cells.** A chunk draws the voxels of its cell and a margin around it
+(`cellMargin`), within a few units of their b.
+`LayerIndex` (`voxel-grid.ts`) holds, per face, layer c and block of 8 columns a,
+the least and greatest b of its voxels
+(and each layer's voxel count, for the Layers panel).
+A cell with no voxels it can draw is never baked
+(on the forest, about 3 in 10 cells in view).
+For the others, only the part of the cell within reach of those b
+is checked against the screen and coverage (section 4),
+so a treetop's chunk is not held to the sky above it.
+
 **Directed baking.** Chunk (i, j) is baked as the parallel projection of
 its slice along (τx, τy, 1), the grid direction nearest to the ray through
 the cell's centre (section 2): point (x, y, z) goes to
@@ -257,18 +268,24 @@ doesn't depend on the camera's position, so a chunk is drawn once when it
 first comes into view (with its direction) and is never redrawn.
 
 On the forest at 1280 × 800, 90°, looking along an axis (yaw 0):
-677 slices of 5 faces, ~4800 chunks drawn (~1400 more covered),
-~140 Mpx cached; a first render baking all of them takes ~10 s on one thread.
-Looking diagonally (yaw 45°): 845 slices, ~9 s.
-render() with everything cached takes ~90 ms in Node (cubes: ~60 ms).
+677 slices of 5 faces, ~3200 chunks drawn,
+~110 Mpx cached; a first render baking all of them takes ~7 s on one thread.
+Looking diagonally (yaw 45°): 845 slices, ~5 s.
+render() with everything cached takes ~50 ms in Node.
 
 **Workers.** In the app, a frame never waits for chunks:
 each render lists the missing chunks in view,
 and up to 4 workers, each with a copy of the world, bake them
 (`WorkerBakery`, `bake.worker.ts`, `ChunkBaker`).
 Until a chunk arrives, the cell's latest bake (along an older direction) stands in;
-a cell never baked shows nothing yet, e.g. right after start or when slices re-tile.
+if that one is covered (section 4), nothing is baked.
+A cell never baked shows nothing yet, e.g. right after start.
 Those cells are baked first, then the rest, each near to far across all faces.
+When the camera moves along a face's axis, its slices re-tile.
+`matchTilings` pairs the new slices with the ones drawn last,
+in segments ending where both have a boundary;
+until a segment's new slices have a bake in every cell they show,
+the old ones are drawn instead.
 Each worker has a few dozen requests in flight,
 enough to keep baking while the main thread is busy.
 Without a bakery (tests), `render()` bakes missing chunks itself.
@@ -328,27 +345,27 @@ Chunk cells are searched in the bounding box of the part it shows
 a cell, then its chunk's content, is kept
 if its projected corners' bounding box (`screenBox`) overlaps the viewport.
 
-**Covered chunks.** Near layers cover most of what is behind them
-(from the forest's spawn, about 70% of the chunks in view).
-`Coverage` marks which 16 × 16 pixel cells of the screen
-the face's layers drawn so far cover,
-and a cell or chunk whose bounding box, plus 8 pixels around it,
-lies on covered cells is not drawn.
+**Covered chunks.** Near layers cover most of what is behind them.
+`Coverage` marks which 4 × 4 pixel sub-blocks of the screen
+the face's layers drawn so far cover;
+a cell whose box, plus 8 pixels around it, lies on covered sub-blocks
+is neither drawn nor baked,
+and a baked chunk is not drawn if each of its tiles
+(a sixteenth of it) with something drawn lies on covered sub-blocks.
 Each pixel shows one face, so coverage starts over for each face,
-and cells outside the face count as covered.
-A screen cell is covered once one layer's chunks draw all of the face's part of it:
-bakers record which 4 × 4 pixel blocks of a chunk are all drawn (`solid_blocks`),
-and the blocks under a screen cell, plus a pixel around for smoothing, must be.
-Covered cells never baked are still baked, last:
-when the camera moves, a near slice re-tiles and shows nothing until baked,
-and what it covered must be there
-(without them, up to half of a frame went empty).
+and sub-blocks outside the face count as covered.
+A sub-block is covered once one layer's chunks draw all of the face's part of it,
+but different sub-blocks may be covered by different layers:
+leaves, trunks and the ground together close what none of them closes alone.
+Bakers record which 4 × 4 pixel blocks of a chunk are all drawn and which partly (`solid_blocks`);
+the blocks under a sub-block, plus a pixel around for smoothing, must all be drawn.
 Only chunks already baked cover anything.
-With cube voxels, on the city at 1600 × 900, the view finished baking ~7× sooner after start
-(the forest: ~1.5×), with a third of the chunks drawn;
-render() took 4–7 ms more.
-With 12 faces, on the forest at 1280 × 800 it hides ~1400 of ~6200 chunks,
-and adds ~30 ms to render() in Node, most of it in `cover`.
+When the camera moves, cells coming out from behind nearer layers
+show nothing until baked, a frame or two.
+On the forest at 1280 × 800 a settled view bakes half the chunks it would without coverage,
+and draws ~3200, of which ~1600 show a pixel.
+Coverage adds ~25 ms to render() in Node, most of it in `cover`;
+the rays through each sub-block are kept per face while the camera only moves.
 
 The `Compositor` draws a frame onto one opaque WebGL 2 canvas, one
 textured rectangle per chunk, then the sky behind them. Chunk pixels are
@@ -387,7 +404,7 @@ baked again on every render.
 | turning | Slices and chunks reused; chunks entering the view baked |
 | field of view change | Focal length, hence detail and directions, change: slices still needed are reused, chunks rebaked |
 | leak tolerance change | Slices still needed are reused |
-| small z movement | Far slices reused; a few near slices re-tile |
+| small z movement | Far slices reused; a few slices re-tile, the ones they replace standing in until baked |
 | resize | Slices reused unless the longer side crosses a quarter octave (detail changes); placements update |
 | gap filling toggle | Chunks rebaked (keyed by how far they are grown) |
 | world regeneration | Whole cache cleared |
