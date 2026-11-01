@@ -7,13 +7,19 @@ Entry point for AI agents working on this codebase. Read this first.
 | Document | Purpose | Read when |
 |----------|---------|-----------|
 | [README.md](README.md) | Overview and quick start | First |
-| [PRD.md](PRD.md) | What the product does and doesn't do | Adding or changing features |
-| [DESIGN.md](DESIGN.md) | Slicing, caching and compositing architecture | Touching `src/lib` |
-| [TESTING.md](TESTING.md) | Test layout and conventions | Writing tests |
+| [docs/product.md](docs/product.md) | What the product does and doesn't do | Adding or changing features |
+| [docs/architecture.md](docs/architecture.md) | Slicing, caching and compositing architecture | Touching `src/lib` |
+| [docs/testing.md](docs/testing.md) | Test layout and conventions | Writing tests |
 
-Each concept has one home: build/test commands live in `package.json`
-scripts, architecture in DESIGN.md, product behaviour in PRD.md, test
-conventions in TESTING.md, agent rules here. Link instead of duplicating.
+Each concept has one home:
+build/test commands live in `package.json` scripts,
+architecture in `docs/architecture.md`,
+product behaviour in `docs/product.md`,
+test conventions in `docs/testing.md`,
+agent rules here.
+Link instead of duplicating.
+Docs go in `docs/` with lower-case names;
+only conventional files (README, AGENTS, LICENSE) stay at the root.
 
 ## Source layout
 
@@ -69,6 +75,7 @@ at the result in the browser (`pnpm dev`); unit tests can't see pixels.
 2. **Minimal docs.** Prefer code comments for implementation details. Delete
    outdated docs rather than letting them mislead. When changing code, grep
    the docs for mentions and update them.
-3. **Architecture changes** update DESIGN.md and the affected tests.
+3. **Architecture changes** update `docs/architecture.md` and the affected
+   tests.
 4. **TypeScript strict** (`strictTypeChecked` ESLint rules). Follow existing
    patterns in neighbouring files.

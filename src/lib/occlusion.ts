@@ -1,6 +1,6 @@
 /**
  * Which parts of the screen nearer layers already cover, so chunks behind
- * them need not be drawn. See DESIGN.md, section 4.
+ * them need not be drawn. See docs/architecture.md, section 4.
  */
 import type { Chunk, Placement } from './renderer'
 import { screenBox, screenRay, tangentBox, type Face, type ScreenBox, type TangentBox, type View } from './view'

@@ -39,7 +39,7 @@ slice into the next, where nothing else is drawn in their chunk, so thin
 things like a floor seen from above don't show sky between slices.
 "Skip Covered Chunks" (on by default) doesn't draw chunks that nearer
 ones cover, and bakes them last; the picture is the same, it is there to
-compare. See [DESIGN.md](DESIGN.md).
+compare. See [architecture.md](architecture.md).
 
 **Worlds** – Procedurally generated, regenerable with a new seed; the camera
 moves to the world's spawn point.

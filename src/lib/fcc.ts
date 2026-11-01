@@ -1,6 +1,6 @@
 /**
- * Geometry of a voxel on the face-centred cubic (FCC) lattice. See DESIGN.md,
- * section 6.
+ * Geometry of a voxel on the face-centred cubic (FCC) lattice. See
+ * docs/architecture.md, section 6.
  *
  * Sites are the integer points (x, y, z) with x + y + z even (voxel-grid.ts).
  * A voxel is a site's Voronoi cell, a rhombic dodecahedron: the points p

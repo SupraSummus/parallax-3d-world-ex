@@ -6,7 +6,7 @@
  * c + 1, so a slice of `size` layers is size + 1 thick, and neighbouring
  * slices interlock.
  *
- * Constraints (see DESIGN.md for the derivation and worked examples):
+ * Constraints (see docs/architecture.md for the derivation and worked examples):
  *
  * 1. Occlusion (physical). A slice is drawn flat, so a thick slice can show
  *    geometry that true perspective hides. A slice at viewing distance d at

@@ -1,7 +1,7 @@
 /**
  * Baking a chunk: which voxel faces a parallel projection along
  * (tanX, tanY, 1) reaches, where they land on the slice's centre plane, and
- * filling them into pixels. See DESIGN.md, section 3.
+ * filling them into pixels. See docs/architecture.md, section 3.
  *
  * Voxels are rhombic dodecahedra on the FCC lattice (fcc.ts), so faces are
  * rhombi, drawn as the parallelograms they project to. A slice is read in
@@ -218,10 +218,10 @@ let scratch = new Float64Array(4096 * FACE)
  * faces facing the ray never overlap either.
  *
  * Given the slice `detail` (0 for none), faces are also grown to close the
- * gaps that open between slices (DESIGN.md, section 3): the open faces of
- * voxels with a neighbour in the next or previous slice, including ones
- * only rays up to directionError (at most MAX_REACH) off the baking
- * direction reach (marked as not reached).
+ * gaps that open between slices (docs/architecture.md, section 3): the
+ * open faces of voxels with a neighbour in the next or previous slice,
+ * including ones only rays up to directionError (at most MAX_REACH) off
+ * the baking direction reach (marked as not reached).
  *
  * `records` is the cell's surface (cellSurface), with the margin around
  * the cell that its chunks may show.
@@ -462,8 +462,9 @@ let nextEmpty = new Int32Array(0)
  *
  * Then every face, grown (its outline swept over the rectangle of its
  * growth, see FACE), is painted where nothing is yet, nearest first. This
- * closes the gaps between slices (DESIGN.md, section 3) without changing
- * what the chunk already shows. Returns how many faces covered a pixel.
+ * closes the gaps between slices (docs/architecture.md, section 3)
+ * without changing what the chunk already shows. Returns how many faces
+ * covered a pixel.
  */
 export function fillFaces(
   faces: ChunkFaces, palette: Uint32Array,
