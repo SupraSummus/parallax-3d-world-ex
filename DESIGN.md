@@ -159,10 +159,14 @@ and open side faces facing the camera (−x when τx > 0, the top when
 same z (`chunkFaces`). Shading is shared with the reference viewer
 (`FACE_SHADE`).
 
-Faces are filled into pixels directly (`fillQuad`): a pixel is filled
-when its centre is inside, with half-open edges, so neighbours meet
-without gaps or overlap. Canvas paths would antialias the slanted edges,
-and a soft 1-pixel edge magnified 20× on screen is a blur.
+Faces are drawn as axis-aligned rectangles.
+A side face is a parallelogram sheared along the direction;
+its bounding rectangle covers a little more
+(past the voxel's outline, a triangle of |τx| × |τy| / 2),
+so nothing leaks (section 2).
+A pixel is filled when its centre is inside, with half-open edges,
+so neighbours meet without gaps or overlap (`fillFaces`).
+No antialiasing: a soft 1-pixel edge magnified 20× on screen is a blur.
 
 `bake.ts` has no DOM and works on flat typed arrays,
 ready for a worker or a Rust/WASM port.
@@ -263,4 +267,6 @@ so from the parallax camera's position both renderers should agree.
   error.
 - Faces seen from one direction per chunk: a face nearly parallel to the
   rays may be missing or slightly too wide.
+- Side faces are drawn as rectangles: near the camera, towards the
+  screen's corners, voxels lose their slanted edges.
 - Near slices are heavily upscaled from `RENDER_SCALE`.

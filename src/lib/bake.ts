@@ -133,12 +133,13 @@ function grow(array: Int32Array, length: number): Int32Array<ArrayBuffer> {
 }
 
 /**
- * Floats per baked face: its four corners (x, y) on the centre plane, its
- * colour (an index into shadedPalette) and the index of its voxel's record.
+ * Floats per baked face: its rectangle on the centre plane (minX, minY,
+ * maxX, maxY), its colour (an index into shadedPalette) and the index of
+ * its voxel's record.
  */
-export const FACE = 10
+export const FACE = 6
 
-/** The faces of one chunk, in painting order, and the extent of their corners. */
+/** The faces of one chunk, in painting order, and the extent of their rectangles. */
 export interface ChunkFaces {
   /** count · FACE floats. A scratch buffer: valid until the next chunkFaces call. */
   data: Float64Array
@@ -188,8 +189,7 @@ export function chunkFaces(surface: SliceSurface, x0: number, y0: number, tanX: 
   }
 
   const faces: ChunkFaces = { data: scratch, count: 0, minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
-  // A face is the parallelogram a, a + u, a + u + v, a + v.
-  const emit = (kind: number, r: number, ax: number, ay: number, ux: number, uy: number, vx: number, vy: number) => {
+  const emit = (kind: number, r: number, minX: number, minY: number, maxX: number, maxY: number) => {
     if ((faces.count + 1) * FACE > scratch.length) {
       const grown = new Float64Array(scratch.length * 2)
       grown.set(scratch)
@@ -197,22 +197,22 @@ export function chunkFaces(surface: SliceSurface, x0: number, y0: number, tanX: 
     }
     const d = faces.data
     const o = faces.count++ * FACE
-    d[o] = ax
-    d[o + 1] = ay
-    d[o + 2] = ax + ux
-    d[o + 3] = ay + uy
-    d[o + 4] = ax + ux + vx
-    d[o + 5] = ay + uy + vy
-    d[o + 6] = ax + vx
-    d[o + 7] = ay + vy
-    d[o + 8] = records[r * RECORD + 3] * FACE_KINDS + kind
-    d[o + 9] = r
-    faces.minX = Math.min(faces.minX, ax, ax + ux + vx, ax + Math.min(ux, vx))
-    faces.maxX = Math.max(faces.maxX, ax, ax + ux + vx, ax + Math.max(ux, vx))
-    faces.minY = Math.min(faces.minY, ay, ay + uy + vy, ay + Math.min(uy, vy))
-    faces.maxY = Math.max(faces.maxY, ay, ay + uy + vy, ay + Math.max(uy, vy))
+    d[o] = minX
+    d[o + 1] = minY
+    d[o + 2] = maxX
+    d[o + 3] = maxY
+    d[o + 4] = records[r * RECORD + 3] * FACE_KINDS + kind
+    d[o + 5] = r
+    faces.minX = Math.min(faces.minX, minX)
+    faces.maxX = Math.max(faces.maxX, maxX)
+    faces.minY = Math.min(faces.minY, minY)
+    faces.maxY = Math.max(faces.maxY, maxY)
   }
 
+  // A side face is its voxel's edge swept one unit deep: a parallelogram.
+  // It is drawn as its bounding rectangle, which covers a little more, never less.
+  const [lowX, highX] = [Math.min(0, -tanX), Math.max(0, -tanX)]
+  const [lowY, highY] = [Math.min(0, -tanY), Math.max(0, -tanY)]
   for (let z = depth + size - 1; z >= depth; z--) {
     // Baking shifts the plane z − 0.5 by (nearX, nearY), and each unit of depth by (−tanX, −tanY).
     const [nearX, nearY] = bake(0, 0, z - 0.5, tanX, tanY, centre)
@@ -233,12 +233,21 @@ export function chunkFaces(surface: SliceSurface, x0: number, y0: number, tanX: 
         }
       }
     }
+    // Corner of a voxel's front face on the plane.
+    const left = (x: number) => x - 0.5 + nearX
+    const bottom = (y: number) => y - 0.5 + nearY
     eachVoxel((r, x, y, open) => {
-      if (sideX !== 0 && open & (1 << kindX)) emit(kindX, r, x - sideX * 0.5 + nearX, y - 0.5 + nearY, 0, 1, -tanX, -tanY)
-      if (sideY !== 0 && open & (1 << kindY)) emit(kindY, r, x - 0.5 + nearX, y - sideY * 0.5 + nearY, 1, 0, -tanX, -tanY)
+      if (sideX !== 0 && open & (1 << kindX)) {
+        const edge = left(x) + (sideX > 0 ? 0 : 1)
+        emit(kindX, r, edge + lowX, bottom(y) + lowY, edge + highX, bottom(y) + 1 + highY)
+      }
+      if (sideY !== 0 && open & (1 << kindY)) {
+        const edge = bottom(y) + (sideY > 0 ? 0 : 1)
+        emit(kindY, r, left(x) + lowX, edge + lowY, left(x) + 1 + highX, edge + highY)
+      }
     })
     eachVoxel((r, x, y, open) => {
-      if (open & (1 << FRONT)) emit(FRONT, r, x - 0.5 + nearX, y - 0.5 + nearY, 1, 0, 0, 1)
+      if (open & (1 << FRONT)) emit(FRONT, r, left(x), bottom(y), left(x) + 1, bottom(y) + 1)
     })
   }
   return faces
@@ -246,58 +255,29 @@ export function chunkFaces(surface: SliceSurface, x0: number, y0: number, tanX: 
 
 /**
  * Fills baked faces into a width × height pixel buffer showing the centre
- * plane from (originX, originY) (top-left) at `scale` pixels per unit.
- * Returns how many faces covered a pixel.
+ * plane from (originX, originY) (top-left) at `scale` pixels per unit,
+ * without antialiasing: a pixel is filled when its centre is inside, with
+ * half-open edges, so faces sharing an edge neither overlap nor leave a gap
+ * there. Returns how many faces covered a pixel.
  */
 export function fillFaces(
   faces: ChunkFaces, palette: Uint32Array,
   pixels: Uint32Array, width: number, height: number, originX: number, originY: number, scale: number,
 ): number {
   const { data } = faces
-  const quad = new Float64Array(8)
+  // The first pixel whose centre is at or past u units from the origin.
+  const pixel = (u: number) => Math.ceil(u * scale - 0.5)
   let drawn = 0
   for (let f = 0; f < faces.count; f++) {
     const o = f * FACE
-    for (let k = 0; k < 8; k += 2) {
-      quad[k] = (data[o + k] - originX) * scale
-      quad[k + 1] = (originY - data[o + k + 1]) * scale
-    }
-    if (fillQuad(pixels, width, height, quad, palette[data[o + 8]])) drawn++
+    const from = Math.max(0, pixel(data[o] - originX))
+    const to = Math.min(width, pixel(data[o + 2] - originX))
+    const top = Math.max(0, pixel(originY - data[o + 3]))
+    const bottom = Math.min(height, pixel(originY - data[o + 1]))
+    if (from >= to || top >= bottom) continue
+    const color = palette[data[o + 4]]
+    for (let row = top; row < bottom; row++) pixels.fill(color, row * width + from, row * width + to)
+    drawn++
   }
   return drawn
-}
-
-/**
- * Fills a convex quadrilateral (x, y of its four corners, in pixels) into a
- * width × height pixel buffer, without antialiasing: a pixel is filled when
- * its centre is inside, with half-open edges, so quads sharing an edge
- * neither overlap nor leave a gap there. Returns whether any pixel was
- * filled.
- */
-export function fillQuad(pixels: Uint32Array, width: number, height: number, quad: ArrayLike<number>, color: number): boolean {
-  const top = Math.min(quad[1], quad[3], quad[5], quad[7])
-  const bottom = Math.max(quad[1], quad[3], quad[5], quad[7])
-  let filled = false
-  for (let row = Math.max(0, Math.ceil(top - 0.5)); row < Math.min(height, Math.ceil(bottom - 0.5)); row++) {
-    const y = row + 0.5
-    let left = Infinity
-    let right = -Infinity
-    for (let i = 0; i < 8; i += 2) {
-      const x0 = quad[i]
-      const y0 = quad[i + 1]
-      const x1 = quad[(i + 2) & 7]
-      const y1 = quad[(i + 3) & 7]
-      if ((y0 <= y && y < y1) || (y1 <= y && y < y0)) {
-        const x = x0 + ((y - y0) / (y1 - y0)) * (x1 - x0)
-        left = Math.min(left, x)
-        right = Math.max(right, x)
-      }
-    }
-    const from = Math.max(0, Math.ceil(left - 0.5))
-    const to = Math.min(width, Math.ceil(right - 0.5))
-    if (from >= to) continue
-    pixels.fill(color, row * width + from, row * width + to)
-    filled = true
-  }
-  return filled
 }

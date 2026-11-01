@@ -286,12 +286,11 @@ describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', T
         const tan = dirStep === 0 ? 0 : nearestDirection((x0 + w / 2 - 0.5 - cu) / distance, dirStep)
         const { data, count } = chunkFaces(surface, x0, 0, tan, 0)
         for (let f = 0; f < count; f++) {
-          const record = data[f * FACE + 9] * RECORD
+          const record = data[f * FACE + 5] * RECORD
           const cell = cellAt.get(`${String(surface.records[record])},${String(surface.records[record + 2])}`) ?? -1
           // Clipped to the chunk's cell, then drawn at the centre plane's distance.
-          const xs = [0, 2, 4, 6].map(k => data[f * FACE + k])
-          const from = Math.max(x0 - 0.5, Math.min(...xs))
-          const to = Math.min(x0 + w - 0.5, Math.max(...xs))
+          const from = Math.max(x0 - 0.5, data[f * FACE])
+          const to = Math.min(x0 + w - 0.5, data[f * FACE + 2])
           const first = Math.ceil(((from - cu) / distance + TAN_HALF_FOV) / step)
           const last = Math.floor(((to - cu) / distance + TAN_HALF_FOV) / step)
           for (let i = Math.max(0, first); i <= Math.min(RAYS - 1, last); i++) owner[i] = cell
