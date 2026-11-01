@@ -10,6 +10,9 @@ The camera looks roughly along +z (section 4). Voxel (x, y, z) is the unit cube 
 ```
 World (voxels) ──selectSlices──▶ slices ──chunks in view──▶ cached pixels ──Frame──▶ WebGL ──▶ screen
    world.ts               slice-selection.ts                  renderer.ts          compositor.ts
+                                                               │      ▲
+                                                 missing chunks▼      │pixels
+                                                 bake workers (worker-bakery.ts)
 ```
 
 ## 1. Slice selection (`slice-selection.ts`)
@@ -136,9 +139,9 @@ leaking about half as much as straight baking at the same detail. It
 cannot be pushed to zero by thinner slices: even size-1 slices leak,
 because the back faces and the inside of the slab are flattened.
 
-## 3. Chunks and rasterisation (`renderer.ts`, `bake.ts`)
+## 3. Chunks and rasterisation (`renderer.ts`, `chunk-baker.ts`, `bake.ts`)
 
-When a slice is first needed, its voxels with a face that is not covered
+When a slice's first chunk is baked, its voxels with a face that is not covered
 by a neighbour (or a front face on the slice's near plane) are indexed by
 chunk, with a bitmask of their open faces; buried voxels are dropped
 (`sliceSurface`). Nothing is drawn yet.
@@ -176,7 +179,7 @@ so neighbours meet without gaps or overlap (`fillFaces`).
 No antialiasing: a soft 1-pixel edge magnified 20× on screen is a blur.
 
 `bake.ts` has no DOM and works on flat typed arrays,
-ready for a worker or a Rust/WASM port.
+ready for a Rust/WASM port.
 A cell's surface records are stored far to near,
 so painting order needs no sort:
 the cell and its eight neighbours are walked one z at a time.
@@ -192,8 +195,18 @@ the world position of its top-left corner on the centre plane. The image
 doesn't depend on the camera's position, so a chunk is drawn once when it
 first comes into view (with its direction) and is never redrawn.
 
-On the forest at 1280 × 800, 90°: 105 slices, ~1100 chunks, ~38 Mpx
+On the forest at 1280 × 800, 90°: 105 slices, ~1300 chunks, ~43 Mpx
 (straight-baked, unchunked slices: 141 slices, ~235 Mpx).
+
+**Workers.** In the app, a frame never waits for chunks:
+each render lists the missing chunks in view, near to far,
+and up to 4 workers, each with a copy of the world, bake them
+(`WorkerBakery`, `bake.worker.ts`).
+Each worker has at most 4 requests in flight,
+so a camera that moves on leaves no backlog.
+Until a chunk arrives, the cell's latest bake (along an older direction) stands in;
+a cell never baked shows nothing yet, e.g. right after start or when slices re-tile.
+Without a bakery (tests), `render()` bakes missing chunks itself.
 
 ## 4. Turning and compositing (`view.ts`, `renderer.ts`, `compositor.ts`)
 
@@ -267,9 +280,11 @@ up to `MAX_HIDDEN_CHUNK_PIXELS` = 32 Mpx (oldest slices' first).
 | resize | Slices reused unless the longer side crosses a quarter octave (detail changes); placements update |
 | world regeneration | Whole cache cleared |
 
-Per-render stats (`UpdateStats`) report chunks reused vs rasterised, voxels
-rasterised and the pixels of all cached chunks; `SessionStats`
-accumulates them.
+Per-render stats (`UpdateStats`) report chunks reused vs shown for the
+first time since they were baked, chunks still baking, voxel faces baked
+since the previous render and the pixels of all cached chunks;
+`SessionStats` accumulates them. `renderTime` is main-thread time, which
+excludes baking in workers.
 
 ## 6. Worlds (`world.ts`, `forest.ts`)
 

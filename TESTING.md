@@ -20,6 +20,7 @@ pnpm exec vitest -t "cache"     # filter by test name
 | `src/viewer/mesh.test.ts` | Reference viewer mesh: face culling, coordinates, winding, shading |
 | `src/lib/view.test.ts` | Camera basis, projection against screen rays, culling bounds, turning stops at the slices' reach |
 | `src/lib/renderer.test.ts` | Layer and chunk contents, culling to the view, baking directions, frame order and fog, perspective/parallax placement (straight ahead and turned), cache reuse and invalidation, stats (on a small world: the forest is slow in jsdom) |
+| `src/lib/worker-bakery.test.ts` | Baking in workers (simulated in microtasks): same frames as baking on the main thread, older bakes standing in, no backlog after the camera moves, stale worlds dropped |
 | `src/lib/renderer-regressions.test.ts` | Previously fixed rendering bugs, checked on chunk pixels and their placement |
 | `src/App.test.tsx` | UI panels, keyboard movement and turning (with a stub forest, for speed) |
 

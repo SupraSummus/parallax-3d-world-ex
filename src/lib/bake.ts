@@ -7,7 +7,7 @@
  * so it ports directly to a worker or to Rust/WASM.
  */
 import { bake, chunkWidth, sliceCentre } from './slice-selection'
-import type { Material, VoxelGrid } from './voxel-grid'
+import type { Material, VoxelData } from './voxel-grid'
 
 // Faces of a voxel a bake can show, by kind; the open-face mask has bit 1 << kind.
 const FRONT = 0
@@ -60,8 +60,6 @@ export interface SliceSurface {
   cellsY: number
   cellStart: Uint32Array
   records: Int32Array
-  /** All voxels in the slice, including buried ones. */
-  voxelCount: number
 }
 
 /**
@@ -70,7 +68,7 @@ export interface SliceSurface {
  * where the slice is cut and the cut must show), by chunk cell. Buried
  * voxels are dropped.
  */
-export function sliceSurface(grid: VoxelGrid, depth: number, size: number): SliceSurface {
+export function sliceSurface(grid: VoxelData, depth: number, size: number): SliceSurface {
   const width = chunkWidth(size)
   const { minX, minY, minZ, nx, ny, nz, cells } = grid
   const cellX = Math.floor(minX / width)
@@ -84,14 +82,12 @@ export function sliceSurface(grid: VoxelGrid, depth: number, size: number): Slic
   let scanned = new Int32Array(1024 * RECORD)
   let cellOf = new Int32Array(1024)
   let count = 0
-  let voxelCount = 0
   for (let z = Math.min(depth + size, minZ + nz) - 1; z >= Math.max(depth, minZ); z--) {
     for (let y = minY; y < minY + ny; y++) {
       let i = ((z - minZ) * ny + (y - minY)) * nx
       for (let x = minX; x < minX + nx; x++, i++) {
         const material = cells[i]
         if (material === 0) continue
-        voxelCount++
         const open =
           (z === depth || z === minZ || cells[i - plane] === 0 ? 1 << FRONT : 0) |
           (x === minX || cells[i - 1] === 0 ? 1 << LEFT : 0) |
@@ -123,7 +119,7 @@ export function sliceSurface(grid: VoxelGrid, depth: number, size: number): Slic
     const to = next[cellOf[n]]++ * RECORD
     for (let k = 0; k < RECORD; k++) records[to + k] = scanned[n * RECORD + k]
   }
-  return { depth, size, width, cellX, cellY, cellsX, cellsY, cellStart, records, voxelCount }
+  return { depth, size, width, cellX, cellY, cellsX, cellsY, cellStart, records }
 }
 
 function grow(array: Int32Array, length: number): Int32Array<ArrayBuffer> {
