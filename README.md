@@ -9,6 +9,29 @@ images.
 
 Live demo: <https://suprasummus.github.io/parallax-world/> (deployed from `main`).
 
+## Design principles
+
+What the design is held to, beyond speed:
+
+1. **Structure comes from the lattice, not the screen.**
+   Slices, chunks and every other partition follow the FCC lattice,
+   and their boundaries run between voxels.
+   A rectangle of pixels imposed from outside is a foreign element.
+2. **Self-similarity.**
+   Every coarser level is again an FCC lattice of rhombic dodecahedra:
+   the same rule and the same geometry at every scale,
+   with no special case for coarser levels.
+3. **Isotropy over convenience.**
+   No direction is preferred:
+   the world must look the same along each of the 12 directions.
+   This outranks nesting (a tree of cells) and ease of implementation.
+4. **Exact over approximate.**
+   Prefer what the geometry gives exactly (shares of ½, ¼, ⅙ of a voxel)
+   to heuristics.
+   A tie-break rule for voxels exactly on a boundary is the accepted minimum.
+5. **Elegance is a criterion in its own right.**
+   Results should be visible, not only measured.
+
 ## Quick start
 
 Chunks are baked by Rust compiled to WebAssembly (`bake/`),
