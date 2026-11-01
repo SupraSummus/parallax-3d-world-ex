@@ -2,7 +2,10 @@
 //! faces of a chunk cell, baked along a direction onto its slice's centre
 //! plane and filled into pixels. chunk-baker.ts drives it through the
 //! exports at the bottom. See docs/architecture.md, section 3.
+//! The same module finds what nearer layers cover on the main thread
+//! (coverage.rs).
 
+mod coverage;
 mod faces;
 mod fill;
 mod slicing;
@@ -50,8 +53,6 @@ pub struct Image {
     pub origin_y: f64,
     pub scale: f64,
     pub faces_drawn: usize,
-    /** left, right, top, bottom of the solid blocks. */
-    pub solid: [usize; 4],
 }
 
 type SurfaceKey = (usize, i32, i32, i32, i32);
@@ -137,8 +138,8 @@ impl Baker {
         let palettes = self.palettes.len() / VIEW_FACES;
         let palette = &self.palettes[face * palettes..(face + 1) * palettes];
         let faces_drawn = fill_faces(&mut self.scratch, &self.faces, palette, &mut self.pixels, width, height, min_x, max_y, scale);
-        let solid = solid_blocks(&mut self.blocks, &self.pixels, width, height);
-        Image { width, height, origin_x: min_x, origin_y: max_y, scale, faces_drawn, solid }
+        solid_blocks(&mut self.blocks, &self.pixels, width, height);
+        Image { width, height, origin_x: min_x, origin_y: max_y, scale, faces_drawn }
     }
 }
 
@@ -155,7 +156,7 @@ enum State {
 
 thread_local! {
     static STATE: RefCell<State> = const { RefCell::new(State::None) };
-    static RESULT: RefCell<[f64; 13]> = const { RefCell::new([0.0; 13]) };
+    static RESULT: RefCell<[f64; 9]> = const { RefCell::new([0.0; 9]) };
 }
 
 /** Starts a world of `cells` sites and `materials` materials; returns where to write the sites. */
@@ -207,7 +208,7 @@ pub extern "C" fn world_ready(min_x: i32, min_y: i32, min_z: i32, nx: i32, ny: i
 /**
  * Bakes a chunk (see Baker::bake); returns RESULT: width, height, origin x,
  * origin y, scale, faces drawn, pixels pointer, blocks pointer, blocks
- * length, then the solid bounds left, right, top, bottom.
+ * length.
  */
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
@@ -226,10 +227,6 @@ pub extern "C" fn bake(face: u32, depth: i32, size: i32, i: i32, j: i32, tan_x: 
                 baker.pixels.as_ptr() as usize as f64,
                 baker.blocks.as_ptr() as usize as f64,
                 baker.blocks.len() as f64,
-                image.solid[0] as f64,
-                image.solid[1] as f64,
-                image.solid[2] as f64,
-                image.solid[3] as f64,
             ];
             result.as_ptr()
         })

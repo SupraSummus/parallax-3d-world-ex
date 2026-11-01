@@ -6,7 +6,6 @@
  */
 import wasm from '../../bake/target/wasm32-unknown-unknown/release/bake.wasm?inline'
 import { shadedPalette, VOXEL_GEOMETRY } from './bake'
-import type { Solid } from './occlusion'
 import { FACES } from './view'
 import type { VoxelData } from './voxel-grid'
 
@@ -35,8 +34,12 @@ export interface ChunkImage {
   height: number
   /** RGBA, rows top to bottom; transparent where nothing is drawn. */
   pixels: Uint32Array
-  /** Which blocks of pixels are all drawn, for finding what the chunk hides. */
-  solid: Solid
+  /**
+   * A byte per block of 4 × 4 pixels, in rows: whether all its pixels are
+   * drawn, and whether some are (solid_blocks in bake/src/fill.rs), for
+   * finding what the chunk hides and whether it is hidden (occlusion.ts).
+   */
+  blocks: Uint8Array
   /** x, y of the top-left pixel's corner, in face coordinates. */
   originX: number
   originY: number
@@ -66,10 +69,15 @@ type Call = (face: number, depth: number, size: number, i: number, j: number, ta
  */
 export const FACE = 17
 
-// Compiled on first use, once per thread, synchronously: in the app only
-// workers bake (and may compile synchronously), in tests Node does.
+// Compiled on first use, once per thread, synchronously
+// (browsers allow that for a module this small even on the main thread).
 let compiled: WebAssembly.Module | null = null
 const bakerModule = () => (compiled ??= new WebAssembly.Module(Uint8Array.from(atob(wasm.slice(wasm.indexOf(',') + 1)), c => c.charCodeAt(0))))
+
+/** A new instance of the module, with its own memory: for baking a world, or for Coverage (occlusion.ts). */
+export function bakerInstance(): WebAssembly.Exports {
+  return new WebAssembly.Instance(bakerModule()).exports
+}
 
 const faceIndex = new Map(FACES.map((face, index) => [face.name, index]))
 
@@ -81,7 +89,7 @@ export class ChunkBaker {
   private baker: Baker
 
   constructor({ minX, minY, minZ, nx, ny, nz, cells, materials }: VoxelData) {
-    const baker = new WebAssembly.Instance(bakerModule()).exports as unknown as Baker
+    const baker = bakerInstance() as unknown as Baker
     // Memory may grow on each call, detaching earlier views of it.
     const write = <T extends Uint8Array | Int32Array | Uint32Array | Float64Array>(View: new (buffer: ArrayBuffer, offset: number, length: number) => T, offset: number, values: T) => {
       new View(baker.memory.buffer, offset, values.length).set(values)
@@ -103,14 +111,14 @@ export class ChunkBaker {
    */
   bake(request: ChunkRequest): ChunkImage {
     const { memory } = this.baker
-    const result = this.call(this.baker.bake, request, 13)
-    const [width, height, originX, originY, scale, facesDrawn, pixels, blocks, blockCount, left, right, top, bottom] = result
+    const result = this.call(this.baker.bake, request, 9)
+    const [width, height, originX, originY, scale, facesDrawn, pixels, blocks, blockCount] = result
     return {
       width,
       height,
       // Copied out: the baker reuses its buffers.
       pixels: new Uint32Array(memory.buffer, pixels, width * height).slice(),
-      solid: { blocks: new Uint8Array(memory.buffer, blocks, blockCount).slice(), left, right, top, bottom },
+      blocks: new Uint8Array(memory.buffer, blocks, blockCount).slice(),
       originX,
       originY,
       scale,
@@ -162,7 +170,7 @@ export function bakeHandler(post: (result: BakeResult, transfer: Transferable[])
     } else if (baker) {
       const { generation, request } = message
       const image = baker.bake(request)
-      post({ generation, request, image }, [image.pixels.buffer, image.solid.blocks.buffer])
+      post({ generation, request, image }, [image.pixels.buffer, image.blocks.buffer])
     }
   }
 }

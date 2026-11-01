@@ -244,7 +244,8 @@ grown faces are painted nearest first into pixels the chunk left empty
 
 **The baker** is Rust (`bake/`), compiled to WebAssembly
 and inlined into the app, so it compiles synchronously
-in a worker or in Node, with no files to fetch.
+in a worker, on the main thread (for coverage, section 4) or in Node,
+with no files to fetch.
 `ChunkBaker` hands it a world once:
 the grid, the voxel's faces in lattice coordinates and the palettes (`bake.ts`).
 Then each chunk is one call,
@@ -271,7 +272,7 @@ On the forest at 1280 × 800, 90°, looking along an axis (yaw 0):
 677 slices of 5 faces, ~3200 chunks drawn,
 ~110 Mpx cached; a first render baking all of them takes ~7 s on one thread.
 Looking diagonally (yaw 45°): 845 slices, ~5 s.
-render() with everything cached takes ~50 ms in Node.
+render() with everything cached takes ~30 ms in Node.
 
 **Workers.** In the app, a frame never waits for chunks:
 each render lists the missing chunks in view,
@@ -346,7 +347,9 @@ a cell, then its chunk's content, is kept
 if its projected corners' bounding box (`screenBox`) overlaps the viewport.
 
 **Covered chunks.** Near layers cover most of what is behind them.
-`Coverage` marks which 4 × 4 pixel sub-blocks of the screen
+`Coverage` (`bake/src/coverage.rs`, run on the main thread
+in its own instance of the baker's WebAssembly)
+marks which 4 × 4 pixel sub-blocks of the screen
 the face's layers drawn so far cover;
 a cell whose box, plus 8 pixels around it, lies on covered sub-blocks
 is neither drawn nor baked,
@@ -359,12 +362,17 @@ but different sub-blocks may be covered by different layers:
 leaves, trunks and the ground together close what none of them closes alone.
 Bakers record which 4 × 4 pixel blocks of a chunk are all drawn and which partly (`solid_blocks`);
 the blocks under a sub-block, plus a pixel around for smoothing, must all be drawn.
+A chunk is handed to `Coverage` when first drawn or tested,
+which keeps its tiles and a table of sums of its all-drawn blocks,
+so testing the blocks under a rectangle takes four reads;
+chunks unused for 16 renders are dropped, and handed over again if needed.
 Only chunks already baked cover anything.
 When the camera moves, cells coming out from behind nearer layers
 show nothing until baked, a frame or two.
 On the forest at 1280 × 800 a settled view bakes half the chunks it would without coverage,
 and draws ~3200, of which ~1600 show a pixel.
-Coverage adds ~25 ms to render() in Node, most of it in `cover`;
+Coverage adds ~17 ms to render() in Node,
+most of it in `cover`, testing sub-blocks one by one;
 the rays through each sub-block are kept per face while the camera only moves.
 
 The `Compositor` draws a frame onto one opaque WebGL 2 canvas, one
