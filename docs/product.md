@@ -95,9 +95,8 @@ waits for them; meanwhile a cell shows an older bake, or nothing.
   Baking finer than the screen shows is part of it:
   slices of size 4 and 8 get 2–3× the pixels they cover on screen.
 - Port the toy worlds to the forest's metric scale, or drop them.
-- Find covered chunks faster: it adds ~25 ms to a render with 12 faces,
-  mostly in `Coverage.cover`.
-  It could run in Rust, with the chunks' blocks in the main thread's WebAssembly.
+- Find covered chunks faster: it still adds ~17 ms to a render with 12 faces,
+  mostly testing sub-blocks one by one in `cover` (`bake/src/coverage.rs`).
 - Find covered chunks more exactly: half of the chunks drawn show no pixel.
 - Build `LayerIndex` off the main thread or in Rust: ~0.4 s at start on the forest.
 - Generate the world in a worker: the forest takes ~0.5 s on the main

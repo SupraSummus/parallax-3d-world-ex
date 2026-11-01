@@ -206,21 +206,19 @@ pub fn fill_faces(
     covered.iter().filter(|&&c| c).count()
 }
 
-/** Side of a block of pixels in solid_blocks (BLOCK in occlusion.ts). */
-const BLOCK: usize = 4;
-/** A block's bits in solid_blocks: all its pixels drawn, some drawn (SOLID and DRAWN in occlusion.ts). */
-const SOLID: u8 = 1;
-const DRAWN: u8 = 2;
+/** Side of a block of pixels in solid_blocks. */
+pub const BLOCK: usize = 4;
+/** A block's bits in solid_blocks: all its pixels drawn, some drawn. */
+pub const SOLID: u8 = 1;
+pub const DRAWN: u8 = 2;
 
 /**
  * Which BLOCK × BLOCK blocks of an image are all drawn (SOLID) and which
  * have a pixel drawn (DRAWN), a byte of bits per block, in rows, for
- * finding what a chunk hides and whether it is hidden (Solid in
- * occlusion.ts), and the bounds of the solid blocks in pixels: left,
- * right, top, bottom. A block reaching past the image's edge counts its
- * pixels in the image.
+ * finding what a chunk hides and whether it is hidden (coverage.rs).
+ * A block reaching past the image's edge counts its pixels in the image.
  */
-pub fn solid_blocks(blocks: &mut Vec<u8>, pixels: &[u32], width: usize, height: usize) -> [usize; 4] {
+pub fn solid_blocks(blocks: &mut Vec<u8>, pixels: &[u32], width: usize, height: usize) {
     let cols = width.div_ceil(BLOCK);
     let rows = height.div_ceil(BLOCK);
     blocks.clear();
@@ -238,18 +236,6 @@ pub fn solid_blocks(blocks: &mut Vec<u8>, pixels: &[u32], width: usize, height: 
             }
         }
     }
-    let mut bounds = [width, 0, height, 0];
-    for (k, &bits) in blocks.iter().enumerate() {
-        if bits & SOLID == 0 {
-            continue;
-        }
-        let (x, y) = (k % cols * BLOCK, k / cols * BLOCK);
-        bounds[0] = bounds[0].min(x);
-        bounds[1] = bounds[1].max(width.min(x + BLOCK));
-        bounds[2] = bounds[2].min(y);
-        bounds[3] = bounds[3].max(height.min(y + BLOCK));
-    }
-    bounds
 }
 
 #[cfg(test)]
@@ -344,7 +330,7 @@ mod tests {
     }
 
     #[test]
-    fn marks_blocks_all_drawn_or_partly_drawn_and_bounds_the_solid_ones() {
+    fn marks_blocks_all_drawn_or_partly_drawn() {
         // 6 × 5 pixels: blocks of 4 × 4, the right and bottom ones cut by the edge.
         let mut pixels = vec![0u32; 6 * 5];
         for y in 0..4 {
@@ -359,8 +345,7 @@ mod tests {
         }
         pixels[4 * 6 + 5] = 7;
         let mut blocks = Vec::new();
-        let bounds = solid_blocks(&mut blocks, &pixels, 6, 5);
+        solid_blocks(&mut blocks, &pixels, 6, 5);
         assert_eq!(blocks, vec![SOLID | DRAWN, SOLID | DRAWN, 0, DRAWN]);
-        assert_eq!(bounds, [0, 6, 0, 4]);
     }
 }

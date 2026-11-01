@@ -42,7 +42,7 @@ src/
     ├── slice-selection.ts   # Slices, chunks and baking directions (pure functions)
     ├── view.ts              # Camera orientation, the 12 faces (FCC directions), projection
     ├── renderer.ts          # Slices and chunks in view, caching, screen placement (no DOM)
-    ├── occlusion.ts         # Which screen cells nearer layers cover, to skip chunks behind them
+    ├── occlusion.ts         # Which screen cells nearer layers cover (bake/src/coverage.rs), to skip chunks behind them
     ├── chunk-baker.ts       # Bakes whole chunks with bake/ (WebAssembly); the bake worker's message protocol
     ├── worker-bakery.ts     # Pool of bake workers the renderer sends missing chunks to
     ├── bake.worker.ts       # Bake worker entry
@@ -53,14 +53,15 @@ viewer.html                  # Reference 3D viewer page (second Vite entry)
 src/viewer/
 ├── main.ts                  # three.js scene, orbit camera
 └── mesh.ts                  # World -> triangle mesh of exposed rhombic faces
-bake/                        # Chunk baker in Rust, compiled to WebAssembly (no dependencies)
+bake/                        # Chunk baker and coverage in Rust, compiled to WebAssembly (no dependencies)
 └── src/
     ├── lib.rs               # Baker: cached cell surfaces, one chunk per call; the WebAssembly exports
     ├── world.rs             # Grid and voxel faces as handed over, read per face
     ├── slicing.rs           # The parts of slice-selection.ts baking needs
     ├── surface.rs           # A cell's voxels that can show
     ├── faces.rs             # Which voxel faces a chunk shows, baked onto its centre plane
-    └── fill.rs              # Faces filled into pixels, gap filling, solid blocks
+    ├── fill.rs              # Faces filled into pixels, gap filling, solid blocks
+    └── coverage.rs          # Which screen cells nearer layers cover, on the main thread; its WebAssembly exports
 ```
 
 ## Workflow
