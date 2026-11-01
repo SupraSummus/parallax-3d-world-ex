@@ -302,7 +302,9 @@ Slices are keyed by `face:depth:size` and hold their chunks keyed by corner.
 Insertion order of the slice `Map` is the LRU order. Slices and chunks that
 leave the view lose their textures but stay cached so moving back
 reuses them: up to `MAX_CACHED_SLICES` = 256 slices, and hidden chunks
-up to `MAX_HIDDEN_CHUNK_PIXELS` = 32 Mpx (oldest slices' first).
+up to `MAX_HIDDEN_CHUNK_PIXELS` = 32 Mpx (oldest slices' first). Chunks
+of cells in view are kept even if they draw nothing, or they would be
+baked again on every render.
 
 | Event | Effect |
 |---|---|

@@ -182,7 +182,8 @@ export class ParallaxRenderer {
   private slices = new Map<string, Slice>()
   // Slices of the most recent render, face by face, near to far.
   private visibleSlices: Slice[] = []
-  // Chunks of the most recent render.
+  // Chunks of the cells in view in the most recent render, drawn or not:
+  // evicted, one would be baked again on the next render.
   private inView = new Set<Chunk>()
 
   private bakery: Bakery | null
@@ -281,6 +282,7 @@ export class ParallaxRenderer {
               }
               if (!chunk) continue
             }
+            inView.add(chunk)
             if (chunk.facesDrawn === 0) continue
             // The chunk's content, not just its cell, must reach the screen.
             const contentLeft = chunk.originX - camera.x
@@ -293,7 +295,6 @@ export class ParallaxRenderer {
               chunksReused++
             }
             layer.chunks.push(chunk)
-            inView.add(chunk)
             placements.push({ chunk, x: contentLeft, y: contentTop })
           }
         }
