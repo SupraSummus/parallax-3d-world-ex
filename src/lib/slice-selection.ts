@@ -98,16 +98,6 @@ export function directionStep(detail: number): number {
   return 2 ** Math.floor(Math.log2(CHUNK_WIDTH_PER_SIZE / detail))
 }
 
-/**
- * How far (as a tangent) a ray through a chunk may be from the direction
- * the chunk is baked along: half a chunk's span, C / (2·detail), plus half
- * the direction step. At most C / detail (see bakeAngleError); closer than
- * 2 · `detail`, where slices cannot be thinner than one layer, chunks span more.
- */
-export function directionError(detail: number): number {
-  return CHUNK_WIDTH_PER_SIZE / (2 * detail) + directionStep(detail) / 2
-}
-
 /** The direction a chunk whose centre ray has `tangent` is baked along: the nearest multiple of `step`. */
 export function nearestDirection(tangent: number, step: number): number {
   return Math.round(tangent / step) * step
@@ -116,14 +106,6 @@ export function nearestDirection(tangent: number, step: number): number {
 /** z (face coordinates) of a slice's centre plane, the plane its chunks are baked onto and drawn at. */
 export function sliceCentre({ depth, size }: SliceBoundary): number {
   return (depth + (size - 1) / 2) * LAYER
-}
-
-/**
- * Where baking along (tanX, tanY, 1) puts point (x, y, z): its parallel
- * projection onto the plane z = centre.
- */
-export function bake(x: number, y: number, z: number, tanX: number, tanY: number, centre: number): [number, number] {
-  return [x - tanX * (z - centre), y - tanY * (z - centre)]
 }
 
 /** Largest power of two <= n, clamped to [1, MAX_SIZE]. */

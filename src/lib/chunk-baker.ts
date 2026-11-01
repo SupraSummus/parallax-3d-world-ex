@@ -1,19 +1,21 @@
 /**
- * Baking whole chunks: from a chunk request to its pixels. Used by the
+ * Baking whole chunks: from a chunk request to its pixels, by the baker in
+ * bake/ (Rust, compiled to WebAssembly and inlined here). Used by the
  * renderer directly (without workers) and inside bake workers, through the
  * message protocol below. No DOM.
  */
-import { cellSurface, chunkFaces, fillFaces, shadedPalette } from './bake'
-import { chunkCell } from './slice-selection'
-import { solidBlocks, type Solid } from './occlusion'
-import { FACES, type Face } from './view'
+import wasm from '../../bake/target/wasm32-unknown-unknown/release/bake.wasm?inline'
+import { shadedPalette, VOXEL_GEOMETRY } from './bake'
+import type { Solid } from './occlusion'
+import { FACES } from './view'
 import type { VoxelData } from './voxel-grid'
 
 /**
  * A chunk to bake: cell (i, j) (see chunkCell) of the slice
  * [depth, depth + size) of a face (by name, see FACES), seen along
  * (tanX, tanY, 1), in the face's coordinates, with faces grown to fill
- * gaps for slices of `fillDetail` (0 for none; see chunkFaces).
+ * gaps for slices of `fillDetail` (0 for none; see docs/architecture.md,
+ * section 3).
  */
 export interface ChunkRequest {
   face: string
@@ -38,98 +40,98 @@ export interface ChunkImage {
   /** x, y of the top-left pixel's corner, in face coordinates. */
   originX: number
   originY: number
-  /** Pixels per world unit (see renderScale). */
+  /** Pixels per world unit (render_scale in bake/src/lib.rs). */
   scale: number
   /** Number of voxel faces drawn. */
   facesDrawn: number
 }
 
-// Pixels per unit used when rasterising the nearest slices: 20 pixels
-// across a voxel, 2 units wide, so that rhombi magnified near the camera
-// keep their slanted edges. Chunks are rasterised camera-independently so
-// they can be cached and reused as the camera moves; perspective scaling
-// is applied when compositing.
-const RENDER_SCALE = 10
-
-/**
- * Chunk pixels per unit for a slice of `size`: 40 / (size + 1), between 1
- * (2 pixels across a voxel) and RENDER_SCALE. A slice of size s lies at
- * distance ≥ (s + 1) · detail · LAYER, where a unit is at most
- * focal / ((s + 1) · detail · LAYER) screen pixels, about 40 / (s + 1) with
- * the defaults; finer chunks would not show. Other settings just scale the
- * chunks on screen.
- */
-function renderScale(size: number): number {
-  return Math.max(1, Math.min(RENDER_SCALE, Math.floor(40 / (size + 1))))
+/** The baker's exports (bake/src/lib.rs). */
+interface Baker {
+  memory: WebAssembly.Memory
+  world_cells: (cells: number, materials: number) => number
+  world_table: (table: number) => number
+  world_ready: (minX: number, minY: number, minZ: number, nx: number, ny: number, nz: number) => void
+  bake: Call
+  faces: Call
 }
-
-// Cell surfaces kept for baking the same cell along other directions,
-// least recently used dropped first.
-const MAX_SURFACES = 1024
+type Call = (face: number, depth: number, size: number, i: number, j: number, tanX: number, tanY: number, detail: number) => number
 
 /**
- * Bakes chunks of one world, keeping the surfaces of recently used cells
- * and the palette of each face baked so far.
+ * @internal Numbers per face in ChunkBaker.faces: its four corners on the
+ * centre plane (x0, y0, …, x3, y3), its colour (an index into
+ * shadedPalette), 1 if a ray along the baking direction reaches it, its
+ * growth (left, bottom, right, top) and its voxel's site (a, b, c). See
+ * bake/src/faces.rs.
+ */
+export const FACE = 17
+
+// Compiled on first use, once per thread, synchronously: in the app only
+// workers bake (and may compile synchronously), in tests Node does.
+let compiled: WebAssembly.Module | null = null
+const bakerModule = () => (compiled ??= new WebAssembly.Module(Uint8Array.from(atob(wasm.slice(wasm.indexOf(',') + 1)), c => c.charCodeAt(0))))
+
+const faceIndex = new Map(FACES.map((face, index) => [face.name, index]))
+
+/**
+ * Bakes chunks of one world: a WebAssembly instance holding a copy of the
+ * grid, the palette of each face, and the surfaces of recently baked cells.
  */
 export class ChunkBaker {
-  private grid: VoxelData
-  private faces = new Map<string, { axes: Face; palette: Uint32Array }>()
-  // Keyed by `face:depth:size:i:j`; insertion order is LRU order.
-  private surfaces = new Map<string, Int32Array>()
+  private baker: Baker
 
-  constructor(grid: VoxelData) {
-    this.grid = grid
+  constructor({ minX, minY, minZ, nx, ny, nz, cells, materials }: VoxelData) {
+    const baker = new WebAssembly.Instance(bakerModule()).exports as unknown as Baker
+    // Memory may grow on each call, detaching earlier views of it.
+    const write = <T extends Uint8Array | Int32Array | Uint32Array | Float64Array>(View: new (buffer: ArrayBuffer, offset: number, length: number) => T, offset: number, values: T) => {
+      new View(baker.memory.buffer, offset, values.length).set(values)
+    }
+    write(Uint8Array, baker.world_cells(cells.length, materials.length), cells)
+    write(Float64Array, baker.world_table(0), VOXEL_GEOMETRY)
+    write(Int32Array, baker.world_table(1), Int32Array.from(FACES.flatMap(({ lattice: { right, up, forward } }) => [right, up, forward].flatMap(v => [v.x, v.y, v.z]))))
+    const palettes = FACES.map(face => shadedPalette(materials, face.lattice))
+    palettes.forEach((palette, f) => { write(Uint32Array, baker.world_table(2) + f * palette.byteLength, palette) })
+    baker.world_ready(minX, minY, minZ, nx, ny, nz)
+    this.baker = baker
   }
 
   /**
    * Rasterises one chunk: the slice baked along (tanX, tanY, 1) onto its
-   * centre plane (see bake.ts), clipped to the chunk's cell and cropped to
-   * what is drawn there. A chunk no face reaches has no pixels.
+   * centre plane (docs/architecture.md, section 3), clipped to the chunk's
+   * cell and cropped to what is drawn there. A chunk no face reaches has no
+   * pixels.
    */
-  bake({ face, depth, size, i, j, tanX, tanY, fillDetail }: ChunkRequest): ChunkImage {
-    const { axes, palette } = this.face(face)
-    const faces = chunkFaces({ depth, size }, this.surface(axes, depth, size, i, j), i, j, tanX, tanY, fillDetail)
-
-    // Drawn extent, clipped to the cell.
-    const { width: w, height: h } = chunkCell(size)
-    const minX = Math.max(faces.minX, i * w)
-    const maxX = Math.min(faces.maxX, (i + 1) * w)
-    const minY = Math.max(faces.minY, j * h)
-    const maxY = Math.min(faces.maxY, (j + 1) * h)
-
-    const scale = renderScale(size)
-    const empty = maxX <= minX || maxY <= minY
-    const width = empty ? 0 : Math.ceil((maxX - minX) * scale)
-    const height = empty ? 0 : Math.ceil((maxY - minY) * scale)
-    const pixels = new Uint32Array(width * height)
-    // Without antialiasing: magnified many times on screen, a soft 1-pixel
-    // edge would become a wide blur.
-    const facesDrawn = fillFaces(faces, palette, pixels, width, height, minX, maxY, scale)
-    return { width, height, pixels, solid: solidBlocks(pixels, width, height), originX: minX, originY: maxY, scale, facesDrawn }
+  bake(request: ChunkRequest): ChunkImage {
+    const { memory } = this.baker
+    const result = this.call(this.baker.bake, request, 13)
+    const [width, height, originX, originY, scale, facesDrawn, pixels, blocks, blockCount, left, right, top, bottom] = result
+    return {
+      width,
+      height,
+      // Copied out: the baker reuses its buffers.
+      pixels: new Uint32Array(memory.buffer, pixels, width * height).slice(),
+      solid: { blocks: new Uint8Array(memory.buffer, blocks, blockCount).slice(), left, right, top, bottom },
+      originX,
+      originY,
+      scale,
+      facesDrawn,
+    }
   }
 
-  private face(name: string): { axes: Face; palette: Uint32Array } {
-    let face = this.faces.get(name)
-    if (!face) {
-      const axes = FACES.find(f => f.name === name)
-      if (!axes) throw new Error(`no face ${name}`)
-      face = { axes, palette: shadedPalette(this.grid.materials, axes.lattice) }
-      this.faces.set(name, face)
-    }
-    return face
+  /** @internal The faces of a chunk before filling, FACE numbers each, far to near (for tests). */
+  faces(request: ChunkRequest): Float64Array {
+    const [count, at] = this.call(this.baker.faces, request, 2)
+    return new Float64Array(this.baker.memory.buffer, at, count * FACE).slice()
   }
 
-  private surface(face: Face, depth: number, size: number, i: number, j: number): Int32Array {
-    const key = `${face.name}:${String(depth)}:${String(size)}:${String(i)}:${String(j)}`
-    let surface = this.surfaces.get(key)
-    if (surface) this.surfaces.delete(key)
-    else surface = cellSurface(this.grid, face.lattice, depth, size, i, j)
-    this.surfaces.set(key, surface)
-    for (const old of this.surfaces.keys()) {
-      if (this.surfaces.size <= MAX_SURFACES) break
-      this.surfaces.delete(old)
-    }
-    return surface
+  /** Calls `bake` or `faces` and returns the first `length` numbers of its result. */
+  private call(baker: Call, { face, depth, size, i, j, tanX, tanY, fillDetail }: ChunkRequest, length: number): Float64Array {
+    const index = faceIndex.get(face)
+    if (index === undefined) throw new Error(`no face ${face}`)
+    // Before reading memory.buffer: the call may grow (and so replace) it.
+    const at = baker(index, depth, size, i, j, tanX, tanY, fillDetail)
+    if (at === 0) throw new Error('the baker has no world')
+    return new Float64Array(this.baker.memory.buffer, at, length)
   }
 }
 

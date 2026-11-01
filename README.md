@@ -11,7 +11,12 @@ Live demo: <https://suprasummus.github.io/parallax-world/> (deployed from `main`
 
 ## Quick start
 
+Chunks are baked by Rust compiled to WebAssembly (`bake/`),
+so besides Node and pnpm you need [Rust](https://rustup.rs/)
+with its WebAssembly target:
+
 ```bash
+rustup target add wasm32-unknown-unknown
 pnpm install
 pnpm dev
 ```

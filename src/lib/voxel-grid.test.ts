@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { FACES } from './view'
-import { VoxelGrid, faceReader, isSite } from './voxel-grid'
+import { VoxelGrid, isSite } from './voxel-grid'
 import { World } from './world'
 
 const { grid, voxels } = new World(7, 'hills_with_trees')
@@ -32,29 +32,6 @@ describe('VoxelGrid', () => {
 })
 
 const dot = (p: { x: number; y: number; z: number }, v: { x: number; y: number; z: number }) => p.x * v.x + p.y * v.y + p.z * v.z
-
-describe('faceReader', () => {
-  it("reads every voxel at its lattice coordinates, within the face's bounds", () => {
-    for (const face of FACES) {
-      const { min, max, at } = faceReader(grid, face.lattice)
-      const { right, up, forward } = face.lattice
-      const misplaced = voxels.filter(v => {
-        const [a, b, c] = [dot(v, right), dot(v, up), dot(v, forward)]
-        const inside = a >= min.x && a <= max.x && b >= min.y && b <= max.y && c >= min.z && c <= max.z
-        return !inside || at(a, b, c) !== grid.get(v.x, v.y, v.z)
-      })
-      expect(misplaced).toEqual([])
-    }
-  })
-
-  it('reads empty outside the grid and off the lattice', () => {
-    const { min, at } = faceReader(grid, FACES[0].lattice)
-    expect(at(min.x - 2, min.y, min.z)).toBe(0)
-    const { right, up, forward } = FACES[0].lattice
-    const v = voxels[0]
-    expect(at(dot(v, right) + 1, dot(v, up), dot(v, forward))).toBe(0)
-  })
-})
 
 describe('countAlong', () => {
   it('counts the voxels of a slice of layers', () => {
