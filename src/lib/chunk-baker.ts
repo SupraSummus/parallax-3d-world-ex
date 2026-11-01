@@ -5,8 +5,8 @@
  */
 import { sliceSurface, chunkFaces, fillFaces, shadedPalette, type SliceSurface } from './bake'
 import { solidBlocks, type Solid } from './occlusion'
-import { FACES } from './view'
-import { rotateGrid, type VoxelData } from './voxel-grid'
+import { FACES, type Face } from './view'
+import type { VoxelData } from './voxel-grid'
 
 /**
  * A chunk to bake: corner (x, y) of the slice [depth, depth + size) of a
@@ -43,21 +43,23 @@ export interface ChunkImage {
   facesDrawn: number
 }
 
-// Pixels per world unit used when rasterising the nearest (size-1) slices.
-// Chunks are rasterised camera-independently so they can be cached and
-// reused as the camera moves; perspective scaling is applied when
-// compositing.
+// Pixels per lattice unit used when rasterising the nearest slices: 20
+// pixels across a voxel, 2 units wide, so that rhombi magnified near the
+// camera keep their slanted edges. Chunks are rasterised
+// camera-independently so they can be cached and reused as the camera
+// moves; perspective scaling is applied when compositing.
 const RENDER_SCALE = 10
 
 /**
- * Chunk pixels per world unit for a slice of `size`: 24 / size, between 2
- * and RENDER_SCALE. A slice of size s ≥ 2 lies at distance ≥ s · detail,
- * where a voxel is at most focal / (s · detail) screen pixels, about 24 / s
- * with the defaults; finer chunks would not show. Other settings just
- * scale the chunks on screen.
+ * Chunk pixels per lattice unit for a slice of `size`: 24 / size, between 1
+ * (2 pixels across a voxel) and RENDER_SCALE. A slice of size s lies at
+ * distance ≥ (s + 1) · detail, where a unit is at most
+ * focal / ((s + 1) · detail) screen pixels, less than 24 / s with the
+ * defaults; finer chunks would not show. Other settings just scale the
+ * chunks on screen.
  */
 function renderScale(size: number): number {
-  return Math.max(2, Math.min(RENDER_SCALE, Math.floor(24 / size)))
+  return Math.max(1, Math.min(RENDER_SCALE, Math.floor(24 / size)))
 }
 
 // Slice surfaces kept for baking more chunks of the same slice, least recently used dropped first.
@@ -65,12 +67,11 @@ const MAX_SURFACES = 64
 
 /**
  * Bakes chunks of one world, keeping the surfaces of recently used slices
- * and, for each face baked so far, the world turned so the face looks
- * along +z.
+ * and the palette of each face baked so far.
  */
 export class ChunkBaker {
   private grid: VoxelData
-  private faces = new Map<string, { grid: VoxelData; palette: Uint32Array }>()
+  private faces = new Map<string, { axes: Face; palette: Uint32Array }>()
   // Keyed by `face:depth:size`; insertion order is LRU order.
   private surfaces = new Map<string, SliceSurface>()
 
@@ -84,8 +85,8 @@ export class ChunkBaker {
    * what is drawn there. A chunk no face reaches has no pixels.
    */
   bake({ face, depth, size, x: x0, y: y0, tanX, tanY, fillDetail }: ChunkRequest): ChunkImage {
-    const { grid, palette } = this.face(face)
-    const surface = this.surface(face, grid, depth, size)
+    const { axes, palette } = this.face(face)
+    const surface = this.surface(axes, depth, size)
     const faces = chunkFaces(surface, x0, y0, tanX, tanY, fillDetail)
 
     // Drawn extent, clipped to the cell [x0 - 0.5, x0 + w - 0.5) × [y0 - 0.5, y0 + w - 0.5).
@@ -106,22 +107,22 @@ export class ChunkBaker {
     return { width, height, pixels, solid: solidBlocks(pixels, width, height), originX: minX, originY: maxY, scale, facesDrawn }
   }
 
-  private face(name: string): { grid: VoxelData; palette: Uint32Array } {
+  private face(name: string): { axes: Face; palette: Uint32Array } {
     let face = this.faces.get(name)
     if (!face) {
       const axes = FACES.find(f => f.name === name)
       if (!axes) throw new Error(`no face ${name}`)
-      face = { grid: rotateGrid(this.grid, axes), palette: shadedPalette(this.grid.materials, axes) }
+      face = { axes, palette: shadedPalette(this.grid.materials, axes) }
       this.faces.set(name, face)
     }
     return face
   }
 
-  private surface(face: string, grid: VoxelData, depth: number, size: number): SliceSurface {
-    const key = `${face}:${String(depth)}:${String(size)}`
+  private surface(face: Face, depth: number, size: number): SliceSurface {
+    const key = `${face.name}:${String(depth)}:${String(size)}`
     let surface = this.surfaces.get(key)
     if (surface) this.surfaces.delete(key)
-    else surface = sliceSurface(grid, depth, size)
+    else surface = sliceSurface(this.grid, face, depth, size)
     this.surfaces.set(key, surface)
     for (const old of this.surfaces.keys()) {
       if (this.surfaces.size <= MAX_SURFACES) break

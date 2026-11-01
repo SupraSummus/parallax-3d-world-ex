@@ -51,7 +51,7 @@ export interface Layer {
   face: string
   /** First integer z of the slice, in its face's coordinates. */
   depth: number
-  /** Thickness in z units; the slice holds voxels with z in [depth, depth + size). */
+  /** Number of layers; the slice holds voxels with z in [depth, depth + size). */
   size: number
   /** Number of voxels in the slice (most are hidden behind nearer ones). */
   voxelCount: number
@@ -103,14 +103,14 @@ export const MIN_MAX_LEAK = 1
 export const MAX_MAX_LEAK = 64
 
 // Visible depth range, relative to the camera: from NEAR_DEPTH to the render
-// distance.
-const NEAR_DEPTH = 1
-export const DEFAULT_RENDER_DISTANCE = 200
-export const MIN_RENDER_DISTANCE = 20
-export const MAX_RENDER_DISTANCE = 400
+// distance, in lattice units (a voxel's neighbours are √2 away, see fcc.ts).
+const NEAR_DEPTH = 2
+export const DEFAULT_RENDER_DISTANCE = 400
+export const MIN_RENDER_DISTANCE = 40
+export const MAX_RENDER_DISTANCE = 800
 
 // Slices and chunks outside the view are kept so that moving or turning
-// back reuses them, up to these caps (a face has about 100 slices). What
+// back reuses them, up to these caps (a face has about 150 slices). What
 // is in view is never evicted.
 const MAX_CACHED_SLICES = 256
 const MAX_HIDDEN_CHUNK_PIXELS = 32_000_000
@@ -274,7 +274,7 @@ export class ParallaxRenderer {
         const bottom = camera.y + tangents.minY * distance
         const top = camera.y + tangents.maxY * distance
         const w = slice.width
-        // Voxel x covers [x - 0.5, x + 0.5], so chunk x0 covers [x0 - 0.5, x0 + w - 0.5).
+        // Chunk x0 holds the voxels with x in [x0, x0 + w) and draws the cell [x0 - 0.5, x0 + w - 0.5).
         const firstX = Math.floor((left + 0.5) / w) * w
         const firstY = Math.floor((bottom + 0.5) / w) * w
         for (let x = firstX; x - 0.5 < right; x += w) {
@@ -282,9 +282,10 @@ export class ParallaxRenderer {
             // The screen shows a quadrilateral of the plane, less than its bounding box.
             const cellBox = boxOf(x - 0.5 - camera.x, x + w - 0.5 - camera.x, y - 0.5 - camera.y, y + w - 0.5 - camera.y, distance)
             if (!onScreen(view, cellBox)) continue
-            // Bake along the grid direction nearest to the ray through the cell's centre.
-            const tanX = nearestDirection((x + w / 2 - 0.5 - camera.x) / distance, step)
-            const tanY = nearestDirection((y + w / 2 - 0.5 - camera.y) / distance, step)
+            // Bake along the grid direction nearest to the ray through the cell's centre,
+            // within the face's 45°: the rays shown are, and baking needs it (see chunkFaces).
+            const tanX = Math.max(-1, Math.min(1, nearestDirection((x + w / 2 - 0.5 - camera.x) / distance, step)))
+            const tanY = Math.max(-1, Math.min(1, nearestDirection((y + w / 2 - 0.5 - camera.y) / distance, step)))
             const request = { face: face.name, depth, size, x, y, tanX, tanY, fillDetail }
             let chunk = slice.chunks.get(chunkKey(request))
             if (covered(cellBox)) {

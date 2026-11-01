@@ -27,9 +27,10 @@ src/
 │   ├── LayerPreview.tsx     # Layers panel
 │   └── ui/                  # shadcn/ui primitives (generated; CLI config in components.json)
 └── lib/
-    ├── voxel-grid.ts        # Dense voxel storage (typed arrays), turned copies
+    ├── fcc.ts               # Voxel geometry: rhombic dodecahedra of the FCC lattice
+    ├── voxel-grid.ts        # Dense voxel storage on the FCC lattice (typed arrays), read per face
     ├── world.ts             # World: voxel grid, spawn, toy world types
-    ├── forest.ts            # Forest scene generator (VOXEL_SIZE lives here)
+    ├── forest.ts            # Forest scene generator (UNIT_SIZE lives here)
     ├── city.ts              # City scene generator: streets, buildings, maze of rooms
     ├── noise.ts             # Seeded hash, value noise and PRNG for the generators
     ├── slice-selection.ts   # Slices, chunks and baking directions (pure functions)
@@ -45,7 +46,7 @@ src/
 viewer.html                  # Reference 3D viewer page (second Vite entry)
 src/viewer/
 ├── main.ts                  # three.js scene, orbit camera
-└── mesh.ts                  # World -> triangle mesh of exposed faces
+└── mesh.ts                  # World -> triangle mesh of exposed rhombic faces
 ```
 
 ## Workflow

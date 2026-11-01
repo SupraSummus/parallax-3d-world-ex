@@ -3,8 +3,9 @@
  *
  * Claim: with the slicing of slice-selection.ts, geometry that true
  * perspective hides never shows by more than ε screen pixels (ε = the
- * renderer's max leak), except closer than `detail`, where slices cannot be
- * thinner than one voxel and the bound is tan(fov/2) voxels.
+ * renderer's max leak), except closer than 2 · `detail`, where slices
+ * cannot be thinner than one layer of voxels (two units: a voxel reaches 1
+ * past its layer, see fcc.ts) and the bound is 2 · tan(fov/2) units.
  *
  * Each `describe` below is one step: the claim in words, then a check on
  * random samples (seeded, so failures reproduce) using the same functions
@@ -23,6 +24,9 @@
  * slice thickness measured from the centre instead of the near face [4],
  * an angle error that ignores the chunk width [7, 8].
  *
+ * A slice of `size` layers is s = size + 1 thick: its voxels reach from
+ * depth − 1 to depth + size.
+ *
  * Notation, for one lateral axis (x and y are independent): the camera is
  * at lateral 0, depth 0 (so world z is relative to it). A slice has its
  * near face at distance a, thickness s, and centre plane at distance D, the
@@ -36,6 +40,7 @@ import {
   type SliceBoundary,
 } from './slice-selection'
 import { sliceSurface, chunkFaces, FACE, RECORD } from './bake'
+import { FACES } from './view'
 import { VoxelGrid } from './voxel-grid'
 
 /** Seeded uniform samples in [lo, hi). */
@@ -73,7 +78,7 @@ describe('Step 1: a baked, drawn point is off by (τ − τ_b)·(z − D)', () =
       const cameraZ = r(-1, 0)
       // Relative to the camera.
       const D = sliceCentre(slice) - cameraZ
-      const z = slice.depth - 0.5 + r(0, slice.size) - cameraZ
+      const z = slice.depth - 1 + r(0, slice.size + 1) - cameraZ
       return { D, z, tau: r(-1.5, 1.5), tauB: r(-1.5, 1.5) }
     }, ({ D, z, tau, tauB }) => {
       const x = tau * z
@@ -86,16 +91,16 @@ describe('Step 1: a baked, drawn point is off by (τ − τ_b)·(z − D)', () =
 
 describe('Step 2: within a slice |z − D| ≤ s/2', () => {
   /*
-   * Voxels are unit cubes centred on integer z, so a slice holding z in
-   * [depth, depth + s) spans [depth − 0.5, depth + s − 0.5], and
-   * sliceCentre is its middle. With step 1, every point of a slice is drawn
-   * at most |τ − τ_b|·s/2 from where it belongs.
+   * A voxel at z reaches from z − 1 to z + 1, so a slice holding z in
+   * [depth, depth + size) spans [depth − 1, depth + size], s = size + 1
+   * thick, and sliceCentre is its middle. With step 1, every point of a
+   * slice is drawn at most |τ − τ_b|·s/2 from where it belongs.
    */
   it('holds for every point of random slices', () => {
     forAll(2000, r => {
       const slice: SliceBoundary = { depth: Math.floor(r(-300, 300)), size: 2 ** Math.floor(r(0, 7)) }
-      return { slice, z: slice.depth - 0.5 + r(0, slice.size) }
-    }, ({ slice, z }) => Math.abs(z - sliceCentre(slice)) <= slice.size / 2)
+      return { slice, z: slice.depth - 1 + r(0, slice.size + 1) }
+    }, ({ slice, z }) => Math.abs(z - sliceCentre(slice)) <= (slice.size + 1) / 2)
   })
 })
 
@@ -131,13 +136,14 @@ describe('Step 4: in pixels, a leak is at most τ_err·focal / detail', () => {
    * w·focal/a pixels. With step 3, w ≤ τ_err·s. Slices are at most
    * a / detail thick (or one voxel, see step 7), so the leak is at most
    * τ_err·s·focal/a ≤ τ_err·focal/detail pixels. This checks the slicing
-   * keeps s ≤ max(1, a / detail).
+   * keeps s = size + 1 ≤ max(2, a / detail), a measured to the slice's near
+   * side, depth − 1.
    */
-  it('selectSlices keeps every slice at most max(1, a / detail) thick', () => {
+  it('selectSlices keeps every slice at most max(2, a / detail) thick', () => {
     forAll(300, r => ({ cameraZ: r(-300, 300), detail: 2 ** r(0, 8), range: r(10, 1000) }), ({ cameraZ, detail, range }) =>
-      selectSlices(cameraZ, 1, range, detail).every(s => {
-        const a = s.depth - 0.5 - cameraZ
-        return s.size <= Math.max(1, a / detail) && sliceCentre(s) - cameraZ >= a
+      selectSlices(cameraZ, 2, range, detail).every(s => {
+        const a = s.depth - 1 - cameraZ
+        return s.size + 1 <= Math.max(2, a / detail) && sliceCentre(s) - cameraZ >= a
       }))
   })
 })
@@ -146,14 +152,14 @@ describe('Step 5: rays through a chunk are within C / (2·detail) of its centre 
   /*
    * A chunk of a size-s slice is chunkWidth(s) = C·s wide on the plane at
    * distance D ≥ a, so its rays span C·s / D in tangent, at most C·s / a
-   * ≤ C / detail when s ≤ a / detail (step 4). The renderer only shows
+   * ≤ C / detail when s < size + 1 ≤ a / detail (step 4). The renderer only shows
    * what lands inside the chunk's cell, so no ray is further than half
    * that from the ray through the cell's centre.
    */
   it('holds for the chunks of random slicings', () => {
     forAll(300, r => ({ cameraZ: r(-300, 300), detail: 2 ** r(0, 8) }), ({ cameraZ, detail }) =>
-      selectSlices(cameraZ, 1, 1000, detail)
-        .filter(s => s.size <= (s.depth - 0.5 - cameraZ) / detail)
+      selectSlices(cameraZ, 2, 1000, detail)
+        .filter(s => s.size + 1 <= (s.depth - 1 - cameraZ) / detail)
         .every(s => chunkWidth(s.size) / 2 / (sliceCentre(s) - cameraZ) <= C / (2 * detail) + EPSILON))
   })
 })
@@ -183,9 +189,9 @@ describe('Step 7: leakFreeDetail closes the loop', () => {
    * min(tan, C/detail)·focal/detail. So the leak is at most ε pixels, for
    * every focal length, field of view and tolerance.
    *
-   * Closer than `detail`, a / detail < 1 but slices are one voxel thick,
-   * so step 4's bound becomes τ_err·1 world units: at most tan(fov/2)
-   * voxels.
+   * Closer than 2 · `detail`, a / detail < 2 but slices are at least one
+   * layer (two units) thick, so step 4's bound becomes τ_err·2 world units:
+   * at most 2 · tan(fov/2) units.
    */
   const leakBound = (focal: number, tan: number, epsilon: number, detail: number) =>
     (Math.min(tan, C / detail) * focal) / detail
@@ -213,11 +219,13 @@ describe('Step 7: leakFreeDetail closes the loop', () => {
 
 /**
  * Step 8 (end to end): the renderer against true perspective, in 2D: one
- * lateral axis u (think height) and depth z, voxels (u, 0, z). Slices,
- * chunks, directions and faces come from the renderer's own functions; only
- * the clipping to cells and the compositing are restated here. A leak is a
- * run of screen where the renderer shows a voxel that no perspective ray
- * reaches, measured in pixels of a SCREEN-pixel screen.
+ * lateral axis u (think height) and depth z, voxels (u, 0, z) with u + z
+ * even. The plane y = 0 cuts each into the square |u| + |z| ≤ 1 (turned 45°),
+ * and these tile it. Slices, chunks, directions and faces come from the
+ * renderer's own functions; only the clipping to cells and the compositing
+ * are restated here, along the line y = 0 of each chunk. A leak is a run of
+ * screen where the renderer shows a voxel that no perspective ray reaches,
+ * measured in pixels of a SCREEN-pixel screen.
  */
 describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', TAN_HALF_FOV => {
   interface Cell { u: number; z: number }
@@ -229,7 +237,7 @@ describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', T
   const rays = Array.from({ length: RAYS }, (_, i) => -TAN_HALF_FOV + (2 * TAN_HALF_FOV * i) / (RAYS - 1))
   const step = rays[1] - rays[0]
 
-  /** Deterministic heightfield with steps and cliffs, solid down to u = -6. */
+  /** Deterministic heightfield with steps and cliffs, solid down to u = -12. */
   function terrain(seed: number): Cell[] {
     let state = seed
     const random = () => {
@@ -238,10 +246,10 @@ describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', T
     }
     const cells: Cell[] = []
     let height = 0
-    for (let z = 1; z < DEPTH; z++) {
+    for (let z = 2; z < DEPTH; z++) {
       height += random() < 0.7 ? Math.round(random() * 2 - 1) : Math.round(random() * 8 - 4)
-      height = Math.max(-6, Math.min(6, height))
-      for (let u = -6; u <= height; u++) cells.push({ u, z })
+      height = Math.max(-12, Math.min(12, height))
+      for (let u = -12; u <= height; u++) if ((u + z) % 2 === 0) cells.push({ u, z })
     }
     return cells
   }
@@ -249,22 +257,40 @@ describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', T
   function perspectiveVisible(cells: Cell[], cu: number, cz: number): Set<number> {
     const nearest = rays.map(() => ({ distance: Infinity, cell: -1 }))
     cells.forEach(({ u, z }, cell) => {
-      const lo = u - 0.5 - cu
-      const hi = u + 0.5 - cu
       rays.forEach((t, i) => {
-        // Depth range over which the ray u = cu + t * d is inside [lo, hi].
-        let enter = z - 0.5 - cz
-        let exit = z + 0.5 - cz
-        if (t === 0) {
-          if (lo > 0 || hi < 0) return
-        } else {
-          enter = Math.max(enter, Math.min(lo / t, hi / t))
-          exit = Math.min(exit, Math.max(lo / t, hi / t))
+        // The ray (cu + t·d, cz + d) is in the cell while |a + b·d| ≤ 1 for
+        // both diagonals: a = (cu − u) ± (cz − z), b = t ± 1.
+        let enter = 0
+        let exit = Infinity
+        for (const sign of [1, -1]) {
+          const a = cu - u + sign * (cz - z)
+          const b = t + sign
+          if (b === 0) {
+            if (Math.abs(a) > 1) return
+          } else {
+            enter = Math.max(enter, Math.min((-1 - a) / b, (1 - a) / b))
+            exit = Math.min(exit, Math.max((-1 - a) / b, (1 - a) / b))
+          }
         }
         if (enter <= exit && enter < nearest[i].distance) nearest[i] = { distance: enter, cell }
       })
     })
     return new Set(nearest.map(n => n.cell))
+  }
+
+  /** Where a convex polygon (x, y pairs) meets the line y = 0: [from, to], or null. */
+  function onAxis(points: ArrayLike<number>): [number, number] | null {
+    let from = Infinity
+    let to = -Infinity
+    for (let i = 0; i < 4; i++) {
+      const [px, py, qx, qy] = [points[2 * i], points[2 * i + 1], points[(2 * i + 2) % 8], points[(2 * i + 3) % 8]]
+      if (py === 0) [from, to] = [Math.min(from, px), Math.max(to, px)]
+      if ((py < 0) !== (qy < 0) && py !== qy) {
+        const x = px + ((qx - px) * -py) / (qy - py)
+        ;[from, to] = [Math.min(from, x), Math.max(to, x)]
+      }
+    }
+    return from < to ? [from, to] : null
   }
 
   /** dirStep 0 bakes every chunk straight along z. */
@@ -277,20 +303,23 @@ describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', T
       const centre = sliceCentre(slice)
       const distance = centre - cz
       const w = chunkWidth(slice.size)
-      const surface = sliceSurface(grid, slice.depth, slice.size)
+      const surface = sliceSurface(grid, FACES[0], slice.depth, slice.size)
       const chunkCells = new Set(cells.filter(({ z }) => z >= slice.depth && z < slice.depth + slice.size).flatMap(({ u }) => {
         const x0 = Math.floor(u / w) * w
         return [x0 - w, x0, x0 + w]
       }))
       for (const x0 of chunkCells) {
-        const tan = dirStep === 0 ? 0 : nearestDirection((x0 + w / 2 - 0.5 - cu) / distance, dirStep)
+        const tan = dirStep === 0 ? 0 : Math.max(-1, Math.min(1, nearestDirection((x0 + w / 2 - 0.5 - cu) / distance, dirStep)))
         const { data, count } = chunkFaces(surface, x0, 0, tan, 0)
         for (let f = 0; f < count; f++) {
-          const record = data[f * FACE + 5] * RECORD
+          if (data[f * FACE + 10] === 0) continue
+          const extent = onAxis(data.subarray(f * FACE, f * FACE + 8))
+          if (!extent) continue
+          const record = data[f * FACE + 9] * RECORD
           const cell = cellAt.get(`${String(surface.records[record])},${String(surface.records[record + 2])}`) ?? -1
           // Clipped to the chunk's cell, then drawn at the centre plane's distance.
-          const from = Math.max(x0 - 0.5, data[f * FACE])
-          const to = Math.min(x0 + w - 0.5, data[f * FACE + 2])
+          const from = Math.max(x0 - 0.5, extent[0])
+          const to = Math.min(x0 + w - 0.5, extent[1])
           const first = Math.ceil(((from - cu) / distance + TAN_HALF_FOV) / step)
           const last = Math.floor(((to - cu) / distance + TAN_HALF_FOV) / step)
           for (let i = Math.max(0, first); i <= Math.min(RAYS - 1, last); i++) owner[i] = cell
@@ -300,36 +329,36 @@ describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', T
     return owner
   }
 
-  /** Every leak: its width in screen pixels and in voxels at its nearest leaked voxel. */
-  function leaks(cells: Cell[], cu: number, cz: number, detail: number, straight = false): { pixels: number; voxels: number }[] {
+  /** Every leak: its width in screen pixels and in units at its nearest leaked voxel. */
+  function leaks(cells: Cell[], cu: number, cz: number, detail: number, straight = false): { pixels: number; units: number }[] {
     const visible = perspectiveVisible(cells, cu, cz)
-    const owner = parallaxOwners(cells, cu, cz, selectSlices(cz, 1, DEPTH, detail), straight ? 0 : directionStep(detail))
+    const owner = parallaxOwners(cells, cu, cz, selectSlices(cz, 2, DEPTH, detail), straight ? 0 : directionStep(detail))
     const runs: { rays: number; distance: number }[] = []
     let run: { rays: number; distance: number } | null = null
     for (const cell of owner) {
       if (cell >= 0 && !visible.has(cell)) {
         run ??= { rays: 0, distance: Infinity }
         run.rays++
-        run.distance = Math.min(run.distance, cells[cell].z - cz)
+        run.distance = Math.min(run.distance, cells[cell].z - 1 - cz)
       } else if (run) {
         runs.push(run)
         run = null
       }
     }
     if (run) runs.push(run)
-    return runs.map(r => ({ pixels: r.rays * step * focal, voxels: r.rays * step * r.distance }))
+    return runs.map(r => ({ pixels: r.rays * step * focal, units: r.rays * step * r.distance }))
   }
 
   // Camera above the terrain looking over it, like the lake world.
-  const scenes = [1, 2, 3, 4].map(seed => ({ cells: terrain(seed), cu: 6 + seed * 3.7, cz: -0.1 - seed * 0.2 }))
+  const scenes = [1, 2, 3, 4].map(seed => ({ cells: terrain(seed), cu: 12 + seed * 7.4, cz: -0.2 - seed * 0.4 }))
   const detail = leakFreeDetail(focal, TAN_HALF_FOV, MAX_LEAK)
   // Within the leak bound, give or take one ray. Slices are at least one
-  // voxel thick, so near the camera (closer than `detail`) the bound is
-  // tan(fov / 2) voxels instead, which is more pixels there.
-  const withinBound = ({ pixels, voxels }: { pixels: number; voxels: number }) =>
-    pixels <= MAX_LEAK + step * focal || voxels <= TAN_HALF_FOV + step * DEPTH
+  // layer (two units) thick, so near the camera (closer than 2 · detail) the
+  // bound is 2 · tan(fov / 2) units instead, which is more pixels there.
+  const withinBound = ({ pixels, units }: { pixels: number; units: number }) =>
+    pixels <= MAX_LEAK + step * focal || units <= 2 * TAN_HALF_FOV + step * DEPTH
 
-  it('keeps every leak within max(max leak pixels, tan(fov / 2) voxels) with leakFreeDetail', () => {
+  it('keeps every leak within max(max leak pixels, 2 · tan(fov / 2) units) with leakFreeDetail', () => {
     for (const { cells, cu, cz } of scenes) {
       expect(leaks(cells, cu, cz, detail).filter(l => !withinBound(l))).toEqual([])
     }
@@ -343,9 +372,9 @@ describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', T
   // Only where the baking directions are what allows the thinner detail.
   if (bakeAngleError(focal, TAN_HALF_FOV, MAX_LEAK) < TAN_HALF_FOV) {
     it('leaks less than baking every chunk straight, seen from high above', () => {
-      const widest = (straight: boolean) => Math.max(...[60, 100].flatMap(cu => [5, 6].flatMap(seed =>
-        leaks(terrain(seed), cu, -0.3, detail, straight)
-          .filter(l => l.voxels > TAN_HALF_FOV + step * DEPTH)
+      const widest = (straight: boolean) => Math.max(...[120, 200].flatMap(cu => [5, 6].flatMap(seed =>
+        leaks(terrain(seed), cu, -0.6, detail, straight)
+          .filter(l => l.units > 2 * TAN_HALF_FOV + step * DEPTH)
           .map(l => l.pixels))))
       expect(widest(false)).toBeLessThan(widest(true) * 0.7)
     })

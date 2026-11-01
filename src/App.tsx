@@ -56,8 +56,8 @@ function App() {
   const [showStats, setShowStats] = useState(true)
   const [showLayers, setShowLayers] = useState(true)
   const [layers, setLayers] = useState<Layer[]>([])
-  // Voxels per second.
-  const [moveSpeed, setMoveSpeed] = useState(30)
+  // Lattice units per second.
+  const [moveSpeed, setMoveSpeed] = useState(60)
   const [worldType, setWorldType] = useState<WorldType>('forest')
   const [fov, setFov] = useState(DEFAULT_FOV)
   const [renderDistance, setRenderDistance] = useState(DEFAULT_RENDER_DISTANCE)
@@ -301,11 +301,11 @@ function App() {
               {orientation.yaw.toFixed(1)}°, {orientation.pitch.toFixed(1)}°
             </StatRow>
             <SliderRow
-              label={`Move Speed: ${String(moveSpeed)} voxels/s`}
+              label={`Move Speed: ${String(moveSpeed)} units/s`}
               value={moveSpeed}
-              min={5}
-              max={120}
-              step={5}
+              min={10}
+              max={240}
+              step={10}
               onChange={([v]) => { setMoveSpeed(v) }}
             />
             <SliderRow

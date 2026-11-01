@@ -21,6 +21,8 @@ const worldType: WorldType = WORLD_TYPES.find(t => t.value === worldParam)?.valu
 const started = performance.now()
 const world = new World(seed, worldType)
 const mesh = buildVoxelMesh(world)
+let voxelCount = 0
+world.grid.forEach(() => { voxelCount++ })
 const buildTime = performance.now() - started
 
 const [cx, cy, cz] = (params.get('camera') ?? '').split(',').map(Number)
@@ -75,7 +77,7 @@ function resize() {
 const info = document.getElementById('info')
 if (info) {
   info.textContent =
-    `${worldType} · seed ${String(seed)} · ${world.voxels.length.toLocaleString()} voxels · ` +
+    `${worldType} · seed ${String(seed)} · ${voxelCount.toLocaleString()} voxels · ` +
     `${mesh.faceCount.toLocaleString()} faces · built in ${buildTime.toFixed(0)} ms`
 }
 document.getElementById('reset')?.addEventListener('click', toParallaxView)

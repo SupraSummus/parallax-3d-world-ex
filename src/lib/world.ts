@@ -34,7 +34,12 @@ const SCENES: Partial<Record<WorldType, (seed: number) => { grid: VoxelGrid; spa
   city: generateCity,
 }
 
-/** The world spans x, z in [-HALF_SIZE, HALF_SIZE). */
+/**
+ * Toy worlds are built of blocks BLOCK lattice units wide: block (x, y, z)
+ * holds the sites with x in [BLOCK · x − 1, BLOCK · x] (y, z likewise).
+ */
+const BLOCK = 2
+/** The world spans blocks x, z in [-HALF_SIZE, HALF_SIZE). */
 const HALF_SIZE = 40
 /** Every column is filled from this y up to its surface. */
 const BEDROCK_Y = -5
@@ -49,7 +54,7 @@ export class World {
   private store: VoxelGrid
   // Voxels as a list, built from the grid on first use.
   private list: Voxel[] | null = null
-  // Toy world voxels while generating.
+  // Toy world blocks while generating.
   private generated: Voxel[] = []
 
   constructor(seed: number = Date.now(), worldType: WorldType = 'forest') {
@@ -64,14 +69,14 @@ export class World {
       return
     }
 
-    this.spawn = { x: 0, y: 20, z: -70 }
+    this.spawn = { x: 0, y: 20 * BLOCK, z: -70 * BLOCK }
 
     for (let x = -HALF_SIZE; x < HALF_SIZE; x++) {
       for (let z = -HALF_SIZE; z < HALF_SIZE; z++) {
         this.generateColumn(x, z)
       }
     }
-    this.store = VoxelGrid.fromVoxels(this.generated)
+    this.store = World.fromBlocks(this.generated)
     this.generated = []
   }
 
@@ -91,7 +96,7 @@ export class World {
     this.list = null
   }
 
-  /** Whether a voxel occupies the given integer cell. */
+  /** Whether a voxel occupies the given site. */
   has(x: number, y: number, z: number): boolean {
     return this.store.get(x, y, z) !== 0
   }
@@ -114,6 +119,33 @@ export class World {
 
   private push(x: number, y: number, z: number, material: Material) {
     this.generated.push({ x, y, z, color: material.color, type: material.type })
+  }
+
+  /** The grid of the generated blocks: block (x, y, z) is filled with the sites it holds; later blocks win. */
+  private static fromBlocks(blocks: readonly Voxel[]): VoxelGrid {
+    if (blocks.length === 0) return VoxelGrid.fromVoxels([])
+    const box = { minX: Infinity, minY: Infinity, minZ: Infinity, maxX: -Infinity, maxY: -Infinity, maxZ: -Infinity }
+    for (const { x, y, z } of blocks) {
+      box.minX = Math.min(box.minX, BLOCK * x - 1)
+      box.minY = Math.min(box.minY, BLOCK * y - 1)
+      box.minZ = Math.min(box.minZ, BLOCK * z - 1)
+      box.maxX = Math.max(box.maxX, BLOCK * x + 1)
+      box.maxY = Math.max(box.maxY, BLOCK * y + 1)
+      box.maxZ = Math.max(box.maxZ, BLOCK * z + 1)
+    }
+    const materials: Material[] = [{ color: '#000000', type: 0 }]
+    const ids = new Map<string, number>()
+    const grid = new VoxelGrid(box, materials)
+    for (const { x, y, z, color, type } of blocks) {
+      const key = `${color}|${String(type)}`
+      let id = ids.get(key)
+      if (id === undefined) {
+        id = materials.push({ color, type }) - 1
+        ids.set(key, id)
+      }
+      grid.fillBox(BLOCK * x - 1, BLOCK * y - 1, BLOCK * z - 1, BLOCK * x + 1, BLOCK * y + 1, BLOCK * z + 1, id)
+    }
+    return grid
   }
 
   /** Fills a column from bedrock to `top`: surface block, 2 subsoil blocks, rock below. */

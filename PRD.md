@@ -3,6 +3,9 @@
 A proof of concept for rendering a 3D voxel world as a stack of cached 2D
 depth slices composited with parallax, instead of rasterising the scene in 3D
 every frame. The demo exists to show (and measure) that idea.
+Voxels are rhombic dodecahedra on the face-centred cubic (FCC) lattice,
+not cubes; scenes keep their shapes (flat walls along the axes,
+rectangular buildings), only their surfaces are made of rhombi.
 
 ## Goals
 
@@ -20,7 +23,8 @@ every frame. The demo exists to show (and measure) that idea.
 (up to straight up or down). W/S forward/back and A/D left/right along
 where it looks (level), Space/Shift up/down, adjustable move speed, field
 of view
-(5°–120° across the longer screen side) and render distance (20–400).
+(5°–120° across the longer screen side) and render distance (40–800
+lattice units; a voxel's neighbours are √2 units away).
 
 **Slicing** – Six stacks of slices, one per face of a cube around the
 camera, each cut along its face's axis. Slices are aligned powers of two
@@ -38,19 +42,20 @@ compare. See [DESIGN.md](DESIGN.md).
 
 **Worlds** – Procedurally generated, regenerable with a new seed; the camera
 moves to the world's spawn point.
-- *Forest* (default): a 96 m × 160 m autumn forest valley at 0.5 m per
-  voxel: a winding path, spruces, birches and oaks, ferns, bushes, boulders
-  and fallen logs, and a ridge closing the far end. ~700k voxels.
-- *City*: a 116 m × 116 m district at 0.25 m per voxel,
+- *Forest* (default): a 96 m × 160 m autumn forest valley, voxels 0.35 m
+  apart: a winding path, spruces, birches and oaks, ferns, bushes, boulders
+  and fallen logs, and a ridge closing the far end. ~2.8M voxels.
+- *City*: a 116 m × 116 m district planned on a 0.25 m grid, four voxels
+  (0.18 m apart) per plan cell,
   for checking flat walls, thin frames and openings:
   3 × 3 blocks of 1–3 storey buildings whose rooms form a maze of doorways,
   with windows, balconies, courtyards, furniture, street lamps and trees.
-  The camera starts in front of an open entrance. ~750k voxels.
+  The camera starts in front of an open entrance. ~3M voxels.
 - Hills, mountains, hills with trees, lake with island: small 80×80 toy
-  scenes without a real-world scale.
+  scenes of blocks (four voxels each) without a real-world scale.
 
 **3D viewer** – "Open in 3D Viewer" renders the same world (same seed) as an
-ordinary triangle mesh with three.js and an orbit camera, starting from the
+ordinary triangle mesh of the voxels' rhombic faces with three.js and an orbit camera, starting from the
 parallax camera with the same perspective (field of view) and fog. It is
 the reference for checking what a scene looks like, independent of the
 slice renderer.
@@ -78,6 +83,15 @@ waits for them; meanwhile a cell shows an older bake, or nothing.
   more in software WebGL.
 - Measure the seams between faces against ray-cast perspective.
 - Generate geometry on demand (chunks) instead of one fixed world.
+- Bake FCC voxels faster: a first bake is ~5× slower than it was with
+  cubes (more voxels, four faces towards the camera instead of one).
+- Hold less of the world: every worker has its own 35–50 MB copy;
+  a shared buffer or only the voxels with an open face would do.
+- Describe the city in metres, like the forest, instead of boxes on its
+  0.25 m plan.
+- Slice along the FCC lattice instead of the cube's axes: treat voxels
+  as points (parts poking out of a slice don't matter) and cut the view
+  by lattice directions.
 - Port the toy worlds to the forest's metric scale, or drop them.
 - Port baking (`bake.ts`, DOM-free) to Rust/WASM, if it becomes the bottleneck.
 - Fill cells that have never been baked from the slices a re-tiled slice

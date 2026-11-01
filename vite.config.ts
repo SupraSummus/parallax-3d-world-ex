@@ -26,5 +26,7 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     setupFiles: './src/test-setup.ts',
+    // Baking whole views of FCC worlds takes a few seconds in jsdom.
+    testTimeout: 20_000,
   },
 })

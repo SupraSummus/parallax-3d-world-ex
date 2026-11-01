@@ -7,34 +7,40 @@ describe('World', () => {
 
   it('is deterministic for a given seed and type', () => {
     for (const value of smallWorlds) {
-      expect(new World(42, value).voxels).toEqual(new World(42, value).voxels)
+      const [a, b] = [new World(42, value).grid, new World(42, value).grid]
+      // toEqual on a million sites is slow.
+      expect(a.cells.length === b.cells.length && a.cells.every((id, i) => id === b.cells[i])).toBe(true)
     }
   })
 
   it('varies with the seed', () => {
-    expect(new World(42, 'hills_with_trees').voxels.length).not.toBe(new World(99, 'hills_with_trees').voxels.length)
+    const [a, b] = [new World(42, 'hills_with_trees').grid, new World(99, 'hills_with_trees').grid]
+    expect(a.cells.length === b.cells.length && a.cells.every((id, i) => id === b.cells[i])).toBe(false)
   })
 
   it.each(smallWorlds)('generates a %s world with a grass surface', worldType => {
     const world = new World(12345, worldType)
     expect(world.worldType).toBe(worldType)
     expect(world.voxels.some(v => v.type === 1)).toBe(true)
-    // Columns are filled from bedrock at y=-5 within x, z in [-40, 40);
-    // trees may overhang the edge by their 2-block canopy radius.
+    // Columns of blocks (two units wide: sites 2b - 1 and 2b) are filled from
+    // bedrock at block y = -5 within blocks x, z in [-40, 40); trees may
+    // overhang the edge by their 2-block canopy radius.
+    const block = (c: number) => Math.ceil(c / 2)
     let minY = Infinity
     let maxXZ = 0
-    for (const v of world.voxels) {
-      minY = Math.min(minY, v.y)
-      maxXZ = Math.max(maxXZ, Math.abs(v.x + 0.5), Math.abs(v.z + 0.5))
-    }
+    world.grid.forEach((x, y, z) => {
+      minY = Math.min(minY, block(y))
+      maxXZ = Math.max(maxXZ, Math.abs(block(x) + 0.5), Math.abs(block(z) + 0.5))
+    })
     expect(minY).toBe(-5)
     expect(maxXZ).toBeLessThanOrEqual(42.5)
   })
 
   it('puts water around the island in the lake world', () => {
     const world = new World(12345, 'lake_with_island')
+    // Top voxel of the column of sites at block (x, z).
     const surfaceAt = (x: number, z: number) =>
-      world.voxels.filter(v => v.x === x && v.z === z).reduce((top, v) => (v.y > top.y ? v : top))
+      world.voxels.filter(v => v.x === 2 * x && v.z === 2 * z).reduce((top, v) => (v.y > top.y ? v : top))
     expect(surfaceAt(15, 0).type).toBe(8) // water
     expect(surfaceAt(0, 0).type).not.toBe(8)
   })

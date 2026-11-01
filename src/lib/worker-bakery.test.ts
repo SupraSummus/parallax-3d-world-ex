@@ -147,7 +147,7 @@ describe('WorkerBakery', () => {
     // settle()'s last render evicted; did it drop chunks the view wants but does not draw?
     renderer.render()
     expect(pending(renderer)).toBe(0)
-  })
+  }, 60_000)
 
   it('bakes covered cells too, so a nearer slice re-tiling uncovers no gap', async () => {
     const bakery = new RecordingBakery([new FakeWorker(), new FakeWorker()])

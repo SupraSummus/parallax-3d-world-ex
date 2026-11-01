@@ -74,14 +74,14 @@ describe('Renderer regressions', () => {
   // voxel right in front of the camera landed far outside the canvas bitmap.
   // Layers are now rasterised at a fixed scale and scaled when compositing.
   it('shows voxels right in front of the camera inside the viewport', () => {
-    // A column from the ground up to eye level, 1 unit ahead of the camera.
+    // A column from the ground up to eye level, 2 units ahead of the camera.
     const voxels: World['voxels'] = []
-    for (let y = 0; y <= 15; y++) {
-      voxels.push({ x: 0, y, z: -29, color: '#00ff00', type: 1 })
+    for (let y = 0; y <= 30; y += 2) {
+      voxels.push({ x: 0, y, z: -58, color: '#00ff00', type: 1 })
     }
     const renderer = new ParallaxRenderer(makeWorldWithVoxels(voxels))
     renderer.resize(800, 600)
-    renderer.setCamera({ x: 0, y: 15, z: -30 })
+    renderer.setCamera({ x: 0, y: 30, z: -60 })
 
     const visible = drawnPixels(renderer.render()).filter(p => p.x >= 0 && p.x < 800 && p.y >= 0 && p.y < 600)
     expect(visible.length).toBeGreaterThan(0)
@@ -92,19 +92,19 @@ describe('Renderer regressions', () => {
   describe('z-movement cache churn', () => {
     // Near layers, which change as the camera moves, hide most of the view
     // here; these tests are about the distant ones, so nothing is skipped.
-    it('reuses most chunks after a 1-unit Z move from the initial camera position', () => {
+    it('reuses most chunks after a 2-unit Z move from the initial camera position', () => {
       const renderer = new ParallaxRenderer(world)
       renderer.resize(800, 600)
       renderer.setSkipCovered(false)
-      renderer.setCamera({ x: 0, y: 15, z: -30 })
+      renderer.setCamera({ x: 0, y: 30, z: -60 })
 
       renderer.render() // initial: everything dirty, regenerated once
-      renderer.setCamera({ x: 0, y: 15, z: -29 })
+      renderer.setCamera({ x: 0, y: 30, z: -58 })
       renderer.render()
 
       const stats = renderer.getStats().lastUpdate
       expect(stats).toBeDefined()
-      // Very near layers (size 1 at viewingDistance ~1) legitimately need to
+      // Very near layers (size 1 at viewingDistance ~2) legitimately need to
       // redraw because their scale changes noticeably. Distant layers that
       // cover 64 z-units shouldn't. So "reused" should meaningfully beat
       // "regenerated".
@@ -115,15 +115,15 @@ describe('Renderer regressions', () => {
       const renderer = new ParallaxRenderer(world)
       renderer.resize(800, 600)
       renderer.setSkipCovered(false)
-      renderer.setCamera({ x: 0, y: 15, z: -30 })
+      renderer.setCamera({ x: 0, y: 30, z: -60 })
 
       renderer.render()
       const initialRegens = renderer.getStats().totalChunksRegenerated
       const chunkCount = renderer.getLayers().flatMap(l => l.chunks).length
 
-      // Simulate holding W for 8 frames at the default move speed of 0.5.
+      // Simulate holding W for 8 frames, a unit per frame.
       for (let i = 1; i <= 8; i++) {
-        renderer.setCamera({ x: 0, y: 15, z: -30 + i * 0.5 })
+        renderer.setCamera({ x: 0, y: 30, z: -60 + i })
         renderer.render()
       }
 
@@ -143,14 +143,14 @@ describe('Renderer regressions', () => {
       const renderer = new ParallaxRenderer(world)
       renderer.resize(800, 600)
       renderer.setSkipCovered(false)
-      renderer.setCamera({ x: 0, y: 15, z: -30 })
+      renderer.setCamera({ x: 0, y: 30, z: -60 })
 
       renderer.render() // warm cache at z=-30
 
       // Take a round trip: forward a few units, then back to the exact start.
-      renderer.setCamera({ x: 0, y: 15, z: -25 })
+      renderer.setCamera({ x: 0, y: 30, z: -50 })
       renderer.render()
-      renderer.setCamera({ x: 0, y: 15, z: -30 })
+      renderer.setCamera({ x: 0, y: 30, z: -60 })
       renderer.render()
 
       const returnStats = renderer.getStats().lastUpdate
@@ -161,20 +161,21 @@ describe('Renderer regressions', () => {
 
   // Slices move what they show by up to the leak bound, so a thin floor
   // seen from high above showed the sky between them. Grown faces cover it.
-  describe('one voxel thick floor seen from high above', () => {
+  describe('one layer thick floor seen from high above', () => {
     const voxels: World['voxels'] = []
-    for (let x = -40; x < 40; x++) {
-      for (let z = 0; z < 600; z++) voxels.push({ x, y: 0, z, color: '#40a040', type: 1 })
+    for (let x = -80; x < 80; x++) {
+      for (let z = x & 1; z < 1200; z += 2) voxels.push({ x, y: 0, z, color: '#40a040', type: 1 })
     }
     const floor = makeWorldWithVoxels(voxels)
     const gaps = (fillGaps: boolean) => {
       const renderer = new ParallaxRenderer(floor)
       renderer.resize(1280, 800)
-      renderer.setRenderDistance(400)
-      renderer.setCamera({ x: 0.3, y: 100, z: -2 })
+      renderer.setRenderDistance(800)
+      renderer.setCamera({ x: 0.6, y: 200, z: -4 })
       renderer.setFillGaps(fillGaps)
-      // Columns well inside the floor: grown faces may stick out past its sides.
-      return gapPixels(renderer.render(), 540, 740)
+      // Columns well inside the floor: grown faces may stick out past its
+      // sides, and its sides are jagged (voxels are rhombic dodecahedra).
+      return gapPixels(renderer.render(), 540, 720)
     }
 
     it('shows the sky between slices without filling gaps', () => {
