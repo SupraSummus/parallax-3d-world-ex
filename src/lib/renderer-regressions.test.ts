@@ -36,6 +36,38 @@ function drawnPixels(frame: Frame): { x: number; y: number }[] {
   }))
 }
 
+/**
+ * Screen pixels in columns [fromX, toX) that nothing covers, between covered
+ * ones, compositing an unturned view as the compositor does (nearest chunk pixel).
+ */
+function gapPixels(frame: Frame, fromX: number, toX: number): number {
+  const { width, height, focal } = frame
+  const covered = new Uint8Array(width * height)
+  for (const { distance, placements } of frame.layers) {
+    for (const { chunk, x, y } of placements) {
+      const corner = projector(frame)({ x, y, z: distance })
+      if (!corner) continue
+      // Screen pixels per chunk pixel.
+      const scale = focal / distance / chunk.scale
+      const left = Math.max(0, Math.ceil(corner.x - 0.5))
+      const right = Math.min(width, corner.x + chunk.width * scale - 0.5)
+      for (let row = Math.max(0, Math.ceil(corner.y - 0.5)); row < Math.min(height, corner.y + chunk.height * scale - 0.5); row++) {
+        const v = Math.floor((row + 0.5 - corner.y) / scale)
+        for (let column = left; column < right; column++) {
+          const u = Math.floor((column + 0.5 - corner.x) / scale)
+          if (chunk.pixels[v * chunk.width + u] !== 0) covered[row * width + column] = 1
+        }
+      }
+    }
+  }
+  let gaps = 0
+  for (let x = fromX; x < toX; x++) {
+    const column = Array.from({ length: height }, (_, y) => covered[y * width + x])
+    gaps += column.slice(column.indexOf(1), column.lastIndexOf(1)).filter(c => c === 0).length
+  }
+  return gaps
+}
+
 describe('Renderer regressions', () => {
   // Near layers used to be rasterised at their full perspective scale, so a
   // voxel right in front of the camera landed far outside the canvas bitmap.
@@ -118,6 +150,33 @@ describe('Renderer regressions', () => {
       const returnStats = renderer.getStats().lastUpdate
       expect(returnStats).toBeDefined()
       expect(returnStats?.chunksReused ?? 0).toBeGreaterThan(returnStats?.chunksRegenerated ?? 0)
+    })
+  })
+
+  // Slices move what they show by up to the leak bound, so a thin floor
+  // seen from high above showed the sky between them. Grown faces cover it.
+  describe('one voxel thick floor seen from high above', () => {
+    const voxels: World['voxels'] = []
+    for (let x = -40; x < 40; x++) {
+      for (let z = 0; z < 600; z++) voxels.push({ x, y: 0, z, color: '#40a040', type: 1 })
+    }
+    const floor = makeWorldWithVoxels(voxels)
+    const gaps = (fillGaps: boolean) => {
+      const renderer = new ParallaxRenderer(floor)
+      renderer.resize(1280, 800)
+      renderer.setRenderDistance(400)
+      renderer.setCamera({ x: 0.3, y: 100, z: -2 })
+      renderer.setFillGaps(fillGaps)
+      // Columns well inside the floor: grown faces may stick out past its sides.
+      return gapPixels(renderer.render(), 540, 740)
+    }
+
+    it('shows the sky between slices without filling gaps', () => {
+      expect(gaps(false)).toBeGreaterThan(0)
+    })
+
+    it('has no gaps with filling', () => {
+      expect(gaps(true)).toBe(0)
     })
   })
 })

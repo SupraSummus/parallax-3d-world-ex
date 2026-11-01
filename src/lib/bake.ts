@@ -130,12 +130,13 @@ function grow(array: Int32Array, length: number): Int32Array<ArrayBuffer> {
 
 /**
  * Floats per baked face: its rectangle on the centre plane (minX, minY,
- * maxX, maxY), its colour (an index into shadedPalette) and the index of
- * its voxel's record.
+ * maxX, maxY), its colour (an index into shadedPalette), the index of
+ * its voxel's record, and how far perspective may show it past its
+ * rectangle (see fillFaces).
  */
-export const FACE = 6
+export const FACE = 7
 
-/** The faces of one chunk, in painting order, and the extent of their rectangles. */
+/** The faces of one chunk, in painting order, and the extent of their grown rectangles. */
 export interface ChunkFaces {
   /** count · FACE floats. A scratch buffer: valid until the next chunkFaces call. */
   data: Float64Array
@@ -157,15 +158,22 @@ const NEIGHBOURS = [[0, 0], [-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1]
  * near, and side faces before the front faces of the same z, which are
  * nearer. A ray going +x enters a voxel through its −x face, and so on.
  *
- * Voxels whose projection can reach the chunk's cell are within
- * |tan| · size / 2 + 1 of it, less than a cell width, so only the cell and
- * its eight neighbours are looked at.
+ * The chunk may be seen along rays up to `spread` (a tangent) off that
+ * direction. Such a ray sees a point at depth z′ shifted by up to
+ * spread · |z′ − centre| on the plane, so each face records that much,
+ * over its depths, as how far it may show past its rectangle.
+ *
+ * Voxels whose grown projection can reach the chunk's cell are within
+ * (|tan| + spread) · size / 2 + 1 of it, less than a cell width, so only
+ * the cell and its eight neighbours are looked at.
  */
-export function chunkFaces(surface: SliceSurface, x0: number, y0: number, tanX: number, tanY: number): ChunkFaces {
+export function chunkFaces(
+  surface: SliceSurface, x0: number, y0: number, tanX: number, tanY: number, spread = 0,
+): ChunkFaces {
   const { depth, size, width: w, records } = surface
   const centre = sliceCentre(surface)
-  const marginX = (Math.abs(tanX) * size) / 2 + 1
-  const marginY = (Math.abs(tanY) * size) / 2 + 1
+  const marginX = ((Math.abs(tanX) + spread) * size) / 2 + 1
+  const marginY = ((Math.abs(tanY) + spread) * size) / 2 + 1
   const near = (x: number, y: number) =>
     x > x0 - 1 - marginX && x < x0 + w + marginX && y > y0 - 1 - marginY && y < y0 + w + marginY
   const sideX = Math.sign(tanX)
@@ -185,7 +193,7 @@ export function chunkFaces(surface: SliceSurface, x0: number, y0: number, tanX: 
   }
 
   const faces: ChunkFaces = { data: scratch, count: 0, minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
-  const emit = (kind: number, r: number, minX: number, minY: number, maxX: number, maxY: number) => {
+  const emit = (kind: number, r: number, minX: number, minY: number, maxX: number, maxY: number, grow: number) => {
     if ((faces.count + 1) * FACE > scratch.length) {
       const grown = new Float64Array(scratch.length * 2)
       grown.set(scratch)
@@ -199,10 +207,11 @@ export function chunkFaces(surface: SliceSurface, x0: number, y0: number, tanX: 
     d[o + 3] = maxY
     d[o + 4] = records[r * RECORD + 3] * FACE_KINDS + kind
     d[o + 5] = r
-    faces.minX = Math.min(faces.minX, minX)
-    faces.maxX = Math.max(faces.maxX, maxX)
-    faces.minY = Math.min(faces.minY, minY)
-    faces.maxY = Math.max(faces.maxY, maxY)
+    d[o + 6] = grow
+    faces.minX = Math.min(faces.minX, minX - grow)
+    faces.maxX = Math.max(faces.maxX, maxX + grow)
+    faces.minY = Math.min(faces.minY, minY - grow)
+    faces.maxY = Math.max(faces.maxY, maxY + grow)
   }
 
   // A side face is its voxel's edge swept one unit deep: a parallelogram.
@@ -212,6 +221,9 @@ export function chunkFaces(surface: SliceSurface, x0: number, y0: number, tanX: 
   for (let z = depth + size - 1; z >= depth; z--) {
     // Baking shifts the plane z − 0.5 by (nearX, nearY), and each unit of depth by (−tanX, −tanY).
     const [nearX, nearY] = bake(0, 0, z - 0.5, tanX, tanY, centre)
+    // Front faces lie at z − 0.5, side faces span z ± 0.5.
+    const growFront = spread * Math.abs(z - 0.5 - centre)
+    const growSide = spread * (Math.abs(z - centre) + 0.5)
     const runs = cells.map(cell => {
       let stop = cell.next
       while (stop < cell.end && records[stop * RECORD + 2] === z) stop++
@@ -235,26 +247,35 @@ export function chunkFaces(surface: SliceSurface, x0: number, y0: number, tanX: 
     eachVoxel((r, x, y, open) => {
       if (sideX !== 0 && open & (1 << kindX)) {
         const edge = left(x) + (sideX > 0 ? 0 : 1)
-        emit(kindX, r, edge + lowX, bottom(y) + lowY, edge + highX, bottom(y) + 1 + highY)
+        emit(kindX, r, edge + lowX, bottom(y) + lowY, edge + highX, bottom(y) + 1 + highY, growSide)
       }
       if (sideY !== 0 && open & (1 << kindY)) {
         const edge = bottom(y) + (sideY > 0 ? 0 : 1)
-        emit(kindY, r, left(x) + lowX, edge + lowY, left(x) + 1 + highX, edge + highY)
+        emit(kindY, r, left(x) + lowX, edge + lowY, left(x) + 1 + highX, edge + highY, growSide)
       }
     })
     eachVoxel((r, x, y, open) => {
-      if (open & (1 << FRONT)) emit(FRONT, r, left(x), bottom(y), left(x) + 1, bottom(y) + 1)
+      if (open & (1 << FRONT)) emit(FRONT, r, left(x), bottom(y), left(x) + 1, bottom(y) + 1, growFront)
     })
   }
   return faces
 }
+
+// fillFaces' map to the next empty pixel, reused.
+let nextEmpty = new Int32Array(0)
 
 /**
  * Fills baked faces into a width × height pixel buffer showing the centre
  * plane from (originX, originY) (top-left) at `scale` pixels per unit,
  * without antialiasing: a pixel is filled when its centre is inside, with
  * half-open edges, so faces sharing an edge neither overlap nor leave a gap
- * there. Returns how many faces covered a pixel.
+ * there. Faces are painted in order.
+ *
+ * Then every face, grown by how far perspective may show it past its
+ * rectangle (see FACE), is painted where nothing is yet, nearest first.
+ * This covers the gaps slices and chunks open (DESIGN.md, section 3)
+ * without changing what the chunk already shows. Returns how many faces
+ * covered a pixel.
  */
 export function fillFaces(
   faces: ChunkFaces, palette: Uint32Array,
@@ -263,17 +284,46 @@ export function fillFaces(
   const { data } = faces
   // The first pixel whose centre is at or past u units from the origin.
   const pixel = (u: number) => Math.ceil(u * scale - 0.5)
-  let drawn = 0
-  for (let f = 0; f < faces.count; f++) {
+  // Pixel rectangle of face f grown by g, clipped to the buffer.
+  const rect = (f: number, g: number) => {
     const o = f * FACE
-    const from = Math.max(0, pixel(data[o] - originX))
-    const to = Math.min(width, pixel(data[o + 2] - originX))
-    const top = Math.max(0, pixel(originY - data[o + 3]))
-    const bottom = Math.min(height, pixel(originY - data[o + 1]))
-    if (from >= to || top >= bottom) continue
-    const color = palette[data[o + 4]]
-    for (let row = top; row < bottom; row++) pixels.fill(color, row * width + from, row * width + to)
-    drawn++
+    return {
+      from: Math.max(0, pixel(data[o] - g - originX)),
+      top: Math.max(0, pixel(originY - data[o + 3] - g)),
+      to: Math.min(width, pixel(data[o + 2] + g - originX)),
+      bottom: Math.min(height, pixel(originY - data[o + 1] + g)),
+    }
   }
-  return drawn
+  const covered = new Uint8Array(faces.count)
+  for (let f = 0; f < faces.count; f++) {
+    const { from, top, to, bottom } = rect(f, 0)
+    if (from >= to || top >= bottom) continue
+    const color = palette[data[f * FACE + 4]]
+    for (let row = top; row < bottom; row++) pixels.fill(color, row * width + from, row * width + to)
+    covered[f] = 1
+  }
+  // next[i] leads to the first empty pixel at or after i (by path halving),
+  // so the grown faces skip what is painted.
+  const area = width * height
+  if (nextEmpty.length <= area) nextEmpty = new Int32Array(2 ** Math.ceil(Math.log2(area + 1)))
+  const next = nextEmpty
+  for (let i = 0; i < area; i++) next[i] = pixels[i] === 0 ? i : i + 1
+  next[area] = area
+  const empty = (i: number) => {
+    while (next[i] !== i) i = next[i] = next[next[i]]
+    return i
+  }
+  for (let f = faces.count - 1; f >= 0; f--) {
+    const { from, top, to, bottom } = rect(f, data[f * FACE + 6])
+    if (from >= to) continue
+    const color = palette[data[f * FACE + 4]]
+    for (let row = top; row < bottom; row++) {
+      for (let i = empty(row * width + from); i < row * width + to; i = empty(i + 1)) {
+        pixels[i] = color
+        next[i] = i + 1
+        covered[f] = 1
+      }
+    }
+  }
+  return covered.reduce((n, c) => n + c, 0)
 }

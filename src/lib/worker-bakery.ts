@@ -14,7 +14,7 @@ export interface BakeWorker {
 // left behind.
 const MAX_IN_FLIGHT = 4
 
-const requestKey = ({ depth, size, x, y, tanX, tanY }: ChunkRequest) => [depth, size, x, y, tanX, tanY].join()
+const requestKey = ({ depth, size, x, y, tanX, tanY, spread }: ChunkRequest) => [depth, size, x, y, tanX, tanY, spread].join()
 
 /**
  * Bakes chunks in a pool of workers (bake.worker.ts), each with its own copy

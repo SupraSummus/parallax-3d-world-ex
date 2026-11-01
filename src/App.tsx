@@ -8,6 +8,7 @@ import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { Slider } from '@/components/ui/slider'
+import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { LayerPreview } from '@/components/LayerPreview'
 import { Box, ChartLine, Crosshair, ExternalLink, Eye, EyeOff, History, Layers, Move, RefreshCw } from 'lucide-react'
@@ -56,6 +57,7 @@ function App() {
   const [fov, setFov] = useState(DEFAULT_FOV)
   const [renderDistance, setRenderDistance] = useState(DEFAULT_RENDER_DISTANCE)
   const [maxLeak, setMaxLeak] = useState(DEFAULT_MAX_LEAK)
+  const [fillGaps, setFillGaps] = useState(true)
 
   // Read from the movement loop without restarting it.
   const getMoveSpeed = useEffectEvent(() => moveSpeed)
@@ -236,6 +238,12 @@ function App() {
     requestRender()
   }
 
+  const handleFillGapsChange = (value: boolean) => {
+    setFillGaps(value)
+    rendererRef.current?.setFillGaps(value)
+    requestRender()
+  }
+
   const totalUpdates = sessionStats?.totalUpdates ?? 0
   const averageCacheEfficiency = sessionStats?.averageCacheEfficiency ?? 0
   const lastUpdate = sessionStats?.lastUpdate
@@ -307,6 +315,10 @@ function App() {
               step={1}
               onChange={handleMaxLeakChange}
             />
+            <label className="flex items-center justify-between text-xs text-muted-foreground">
+              Fill Gaps
+              <Switch checked={fillGaps} onCheckedChange={handleFillGapsChange} aria-label="Fill gaps" />
+            </label>
             <div className="space-y-0.5 text-xs text-muted-foreground">
               <div className="flex items-center gap-2"><Move size={14} /><span>W/S - Forward/Back</span></div>
               <div className="pl-[22px]">A/D - Left/Right</div>

@@ -89,6 +89,16 @@ export function directionStep(detail: number): number {
   return 2 ** Math.floor(Math.log2(CHUNK_WIDTH_PER_SIZE / detail))
 }
 
+/**
+ * How far (as a tangent) a ray through a chunk may be from the direction
+ * the chunk is baked along: half a chunk's span, C / (2·detail), plus half
+ * the direction step. At most C / detail (see bakeAngleError); closer than
+ * `detail`, where slices cannot be thinner than one voxel, chunks span more.
+ */
+export function directionError(detail: number): number {
+  return CHUNK_WIDTH_PER_SIZE / (2 * detail) + directionStep(detail) / 2
+}
+
 /** The direction a chunk whose centre ray has `tangent` is baked along: the nearest multiple of `step`. */
 export function nearestDirection(tangent: number, step: number): number {
   return Math.round(tangent / step) * step
