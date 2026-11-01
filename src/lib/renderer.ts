@@ -1,4 +1,4 @@
-import { selectSlices, leakFreeDetail, directionStep, nearestDirection, sliceCentre, chunkWidth } from './slice-selection'
+import { selectSlices, leakFreeDetail, directionStep, directionError, nearestDirection, sliceCentre, chunkWidth } from './slice-selection'
 import { ChunkBaker, type ChunkImage, type ChunkRequest } from './chunk-baker'
 import { World, type Vec3, type WorldType } from './world'
 import type { VoxelData } from './voxel-grid'
@@ -17,6 +17,8 @@ export interface Chunk extends ChunkImage {
    */
   tanX: number
   tanY: number
+  /** How far (a tangent) off the baking direction faces are grown for, to fill gaps; 0 if not. See chunkFaces. */
+  spread: number
 }
 
 /**
@@ -130,8 +132,8 @@ function cellKey(x: number, y: number): string {
   return `${String(x)},${String(y)}`
 }
 
-function chunkKey(x: number, y: number, tanX: number, tanY: number): string {
-  return `${cellKey(x, y)},${String(tanX)},${String(tanY)}`
+function chunkKey({ x, y, tanX, tanY, spread }: ChunkRequest): string {
+  return `${cellKey(x, y)},${String(tanX)},${String(tanY)},${String(spread)}`
 }
 
 /**
@@ -167,6 +169,7 @@ export class ParallaxRenderer {
   private fov = DEFAULT_FOV
   private maxLeak = DEFAULT_MAX_LEAK
   private renderDistance = DEFAULT_RENDER_DISTANCE
+  private fillGaps = true
   private width = 0
   private height = 0
 
@@ -210,6 +213,7 @@ export class ParallaxRenderer {
 
     const detail = this.getDetail()
     const step = directionStep(detail)
+    const spread = this.fillGaps ? directionError(detail) : 0
     const boundaries = selectSlices(this.camera.z, NEAR_DEPTH, this.renderDistance, detail)
     const distances = boundaries.map(s => sliceCentre(s) - this.camera.z)
     const view = this.view()
@@ -261,10 +265,9 @@ export class ParallaxRenderer {
           // Bake along the grid direction nearest to the ray through the cell's centre.
           const tanX = nearestDirection((x + w / 2 - 0.5 - this.camera.x) / distance, step)
           const tanY = nearestDirection((y + w / 2 - 0.5 - this.camera.y) / distance, step)
-          const key = chunkKey(x, y, tanX, tanY)
-          let chunk = slice.chunks.get(key)
+          const request = { depth, size, x, y, tanX, tanY, spread }
+          let chunk = slice.chunks.get(chunkKey(request))
           if (!chunk) {
-            const request = { depth, size, x, y, tanX, tanY }
             if (this.baker) {
               chunk = this.store(request, this.baker.bake(request))
             } else {
@@ -409,6 +412,11 @@ export class ParallaxRenderer {
     this.maxLeak = Math.min(MAX_MAX_LEAK, Math.max(MIN_MAX_LEAK, pixels))
   }
 
+  /** Whether faces are grown to fill the gaps between slices and chunks (see chunkFaces). */
+  setFillGaps(fill: boolean) {
+    this.fillGaps = fill
+  }
+
   /**
    * Slice detail that keeps occlusion leaks within the tolerance on the
    * current viewport. It does not depend on the orientation, so turning
@@ -466,11 +474,11 @@ export class ParallaxRenderer {
 
   /** Caches a baked chunk, unless its slice has been evicted meanwhile. */
   private store(request: ChunkRequest, image: ChunkImage): Chunk | undefined {
-    const { depth, size, x, y, tanX, tanY } = request
+    const { depth, size, x, y, tanX, tanY, spread } = request
     const slice = this.slices.get(sliceKey(depth, size))
-    const key = chunkKey(x, y, tanX, tanY)
+    const key = chunkKey(request)
     if (!slice || slice.chunks.has(key)) return
-    const chunk: Chunk = { ...image, x, y, tanX, tanY }
+    const chunk: Chunk = { ...image, x, y, tanX, tanY, spread }
     slice.chunks.set(key, chunk)
     slice.latest.set(cellKey(x, y), chunk)
     this.fresh.add(chunk)

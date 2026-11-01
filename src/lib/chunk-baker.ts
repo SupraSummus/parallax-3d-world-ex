@@ -6,7 +6,11 @@
 import { sliceSurface, chunkFaces, fillFaces, shadedPalette, type SliceSurface } from './bake'
 import type { VoxelData } from './voxel-grid'
 
-/** A chunk to bake: corner (x, y) of the slice [depth, depth + size), seen along (tanX, tanY, 1). */
+/**
+ * A chunk to bake: corner (x, y) of the slice [depth, depth + size), seen
+ * along (tanX, tanY, 1), with faces grown for rays up to `spread` off it
+ * (see chunkFaces).
+ */
 export interface ChunkRequest {
   depth: number
   size: number
@@ -14,6 +18,7 @@ export interface ChunkRequest {
   y: number
   tanX: number
   tanY: number
+  spread: number
 }
 
 /** A baked chunk's pixels, cropped to what is drawn. */
@@ -69,9 +74,9 @@ export class ChunkBaker {
    * centre plane (see bake.ts), clipped to the chunk's cell and cropped to
    * what is drawn there. A chunk no face reaches has no pixels.
    */
-  bake({ depth, size, x: x0, y: y0, tanX, tanY }: ChunkRequest): ChunkImage {
+  bake({ depth, size, x: x0, y: y0, tanX, tanY, spread }: ChunkRequest): ChunkImage {
     const surface = this.surface(depth, size)
-    const faces = chunkFaces(surface, x0, y0, tanX, tanY)
+    const faces = chunkFaces(surface, x0, y0, tanX, tanY, spread)
 
     // Drawn extent, clipped to the cell [x0 - 0.5, x0 + w - 0.5) × [y0 - 0.5, y0 + w - 0.5).
     const w = surface.width

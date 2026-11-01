@@ -15,7 +15,7 @@ export interface BakeWorker {
 // what is in flight when the camera moves on is wasted.
 const MAX_IN_FLIGHT = 32
 
-const requestKey = ({ depth, size, x, y, tanX, tanY }: ChunkRequest) => [depth, size, x, y, tanX, tanY].join()
+const requestKey = ({ depth, size, x, y, tanX, tanY, spread }: ChunkRequest) => [depth, size, x, y, tanX, tanY, spread].join()
 
 /**
  * Bakes chunks in a pool of workers (bake.worker.ts), each with its own copy

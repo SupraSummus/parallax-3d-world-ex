@@ -14,7 +14,7 @@ pnpm exec vitest -t "cache"     # filter by test name
 |------|--------|
 | `src/lib/slice-selection.test.ts` | Slice math: documented examples plus invariants (contiguous, aligned, logarithmic) over a grid of camera positions and detail levels; the two cases of leak-free detail |
 | `src/lib/leak-bound.test.ts` | The occlusion-leak bound as a step-by-step derivation, each step checked on seeded random samples, ending in a 2D ray-cast comparison of chunked, directed baking against true perspective |
-| `src/lib/bake.test.ts` | Slice surfaces against a brute-force reference; faces filled into pixels tile without gaps or overlaps |
+| `src/lib/bake.test.ts` | Slice surfaces against a brute-force reference; faces filled into pixels, then grown only into empty ones |
 | `src/lib/world.test.ts` | Toy world types: determinism, bounds |
 | `src/lib/forest.test.ts` | Forest: determinism, coverage, voxel budget, tree heights in metres, clear spawn |
 | `src/viewer/mesh.test.ts` | Reference viewer mesh: face culling, coordinates, winding, shading |

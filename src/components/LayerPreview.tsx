@@ -45,8 +45,8 @@ interface LayerItemProps {
 function LayerItem({ layer, onToggleVisibility }: LayerItemProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
-  // Re-drawn when the set of chunks in view changes as the camera moves.
-  const chunkIds = layer.chunks.map(c => [c.x, c.y, c.tanX, c.tanY].join(',')).join(' ')
+  // Re-drawn when the set of chunks in view changes.
+  const chunkIds = layer.chunks.map(c => [c.x, c.y, c.tanX, c.tanY, c.spread].join(',')).join(' ')
   useEffect(() => {
     const thumb = canvasRef.current
     const ctx = thumb?.getContext('2d')

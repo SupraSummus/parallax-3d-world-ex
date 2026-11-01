@@ -178,6 +178,18 @@ A pixel is filled when its centre is inside, with half-open edges,
 so neighbours meet without gaps or overlap (`fillFaces`).
 No antialiasing: a soft 1-pixel edge magnified 20× on screen is a blur.
 
+**Filling gaps.** A slice draws a point at depth z′
+up to τ_err·|z′ − c| off (section 2),
+so neighbouring slices, or chunks baked along different directions,
+can pull a surface apart:
+a one-voxel floor seen from high above shows lines of sky.
+Each face is therefore also painted grown by
+`directionError`·|z′ − c| (τ_err for the chunk's rays),
+nearest first, into pixels its chunk left empty (`fillFaces`).
+Faces at a slice's near and far planes grow most, up to about ε/2 pixels;
+objects look up to that much fatter against what is behind them.
+"Fill Gaps" turns it off.
+
 `bake.ts` has no DOM and works on flat typed arrays,
 ready for a Rust/WASM port.
 A cell's surface records are stored far to near,
@@ -279,6 +291,7 @@ up to `MAX_HIDDEN_CHUNK_PIXELS` = 32 Mpx (oldest slices' first).
 | leak tolerance change | Slices still needed are reused |
 | small z movement | Far slices reused; a few near slices re-tile |
 | resize | Slices reused unless the longer side crosses a quarter octave (detail changes); placements update |
+| gap filling toggle | Chunks rebaked (keyed by how far they are grown) |
 | world regeneration | Whole cache cleared |
 
 Per-render stats (`UpdateStats`) report chunks reused vs shown for the
@@ -322,3 +335,5 @@ so from the parallax camera's position both renderers should agree.
 - Beside the camera, nearer than `NEAR_DEPTH` along +z, nothing is drawn,
   and near voxels seen at a steep angle are the least accurate; a turned
   view shows more of both at its edges.
+- Closer than `detail`, chunks span more than `directionError`,
+  so gap filling may leave gaps there.

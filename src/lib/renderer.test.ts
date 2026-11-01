@@ -145,15 +145,14 @@ describe('ParallaxRenderer', () => {
         expect(box.right).toBeGreaterThan(0)
         expect(box.bottom).toBeGreaterThan(0)
       }
-      // A narrower view shows less of every slice.
+      // A narrower view shows less of every slice. (Not necessarily in fewer
+      // chunks: its thinner slices have more, some holding only grown faces.)
       const narrow = new ParallaxRenderer(world)
       narrow.resize(800, 600)
       narrow.setFov(20)
       narrow.setOrientation({ yaw, pitch })
       narrow.render()
-      const narrowUpdate = narrow.getStats().lastUpdate
-      expect(narrowUpdate?.chunkCount).toBeLessThan(wide.chunkCount)
-      expect(narrowUpdate?.cachedPixels).toBeLessThan(wide.cachedPixels)
+      expect(narrow.getStats().lastUpdate?.cachedPixels).toBeLessThan(wide.cachedPixels)
     })
 
     it('places the chunks in view layer by layer, near to far', () => {
