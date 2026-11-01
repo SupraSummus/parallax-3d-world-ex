@@ -138,7 +138,8 @@ export function selectSlices(
   if (minRelativeDepth >= maxRelativeDepth) return []
   const farZ = cameraZ + maxRelativeDepth
   const slices: SliceBoundary[] = []
-  for (let z = Math.floor(cameraZ + minRelativeDepth); z < farZ; ) {
+  // Round up: a slice closer than minRelativeDepth would be blown up over the screen.
+  for (let z = Math.ceil(cameraZ + minRelativeDepth); z < farZ; ) {
     const slice = getSliceAtDepth(z, floorPowerOfTwo((z - 0.5 - cameraZ) / detail))
     slices.push(slice)
     z = slice.depth + slice.size

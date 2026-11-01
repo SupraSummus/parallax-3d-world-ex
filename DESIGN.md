@@ -38,10 +38,11 @@ and the walk jumps to huge slices.
 
 ### Camera selection
 
-`selectSlices(cameraZ, near, far, detail)` walks from `cameraZ + near` to
-`cameraZ + far`. At each step it requests `minSize` = the largest power of
-two ≤ a / detail, where a is the distance to the slice's near face
-(depth − 0.5), takes what the world provides (never more than requested),
+`selectSlices(cameraZ, near, far, detail)` walks from the first voxel at
+least `near` ahead (a nearer slice, scaled by focal / d, could fill the
+screen) to `cameraZ + far`. At each step it requests `minSize` = the
+largest power of two ≤ a / detail, where a is the distance to the
+slice's near face (depth − 0.5), takes what the world provides (never more than requested),
 and continues from the end of that slice. The result tiles the range with
 no gaps or overlaps. `detail` comes from the leak tolerance (section 2);
 thinner slices are always allowed, so alignment never breaks the bound.

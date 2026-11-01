@@ -54,9 +54,10 @@ describe('selectSlices', () => {
     it.each(cameras)('camera z=%s', cameraZ => {
       const slices = selectSlices(cameraZ, 1, 200, detail)
 
-      // Covers [cameraZ + 1, cameraZ + 200) contiguously.
-      expect(slices[0].depth).toBeLessThanOrEqual(cameraZ + 1)
-      expect(slices[0].depth + slices[0].size).toBeGreaterThan(cameraZ + 1)
+      // Covers voxels with z in [cameraZ + 1, cameraZ + 200) contiguously; none
+      // nearer, as a slice close to the camera would be blown up over the screen.
+      expect(slices[0].depth).toBeGreaterThanOrEqual(cameraZ + 1)
+      expect(slices[0].depth - 1).toBeLessThan(cameraZ + 1)
       const last = slices[slices.length - 1]
       expect(last.depth + last.size).toBeGreaterThanOrEqual(cameraZ + 200)
       for (let i = 1; i < slices.length; i++) {
@@ -69,8 +70,6 @@ describe('selectSlices', () => {
         expect([1, 2, 4, 8, 16, 32, 64]).toContain(s.size)
         // Never thicker than (distance to the near face) / detail.
         expect(s.size).toBeLessThanOrEqual(Math.max(1, (s.depth - 0.5 - cameraZ) / detail))
-        // Every slice is in front of the camera.
-        expect(s.depth + s.size / 2).toBeGreaterThan(cameraZ)
       }
 
       // Logarithmic, not linear, in the view distance.
