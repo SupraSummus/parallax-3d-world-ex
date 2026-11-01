@@ -7,6 +7,8 @@ export default defineConfig({
   // Relative asset URLs, so the build works under any path
   // (GitHub Pages serves it from /<repo-name>/).
   base: './',
+  // The bake workers' WebAssembly (bake/), inlined (?inline) to compile synchronously.
+  assetsInclude: ['**/*.wasm'],
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

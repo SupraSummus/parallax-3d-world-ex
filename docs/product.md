@@ -84,17 +84,19 @@ waits for them; meanwhile a cell shows an older bake, or nothing.
   more in software WebGL.
 - Measure the seams between faces against ray-cast perspective.
 - Generate geometry on demand (chunks) instead of one fixed world.
-- Bake FCC voxels faster: a first bake is ~5× slower than it was with
-  cubes (more voxels, up to six faces towards the camera instead of three).
 - Hold less of the world: every worker has its own 35–50 MB copy;
   a shared buffer or only the voxels with an open face would do.
 - Describe the city in metres, like the forest, instead of boxes on its
   0.25 m plan.
-- Make the 12 stacks cheaper: with four or more faces in view, each
-  with its own near slices, a first bake looking along an axis takes
-  ~2.5× as long as with a cube's six stacks.
+- Make the 12 stacks cheaper:
+  with four or more faces in view, each with its own near slices,
+  a first bake looking along an axis takes ~10 s on one thread,
+  even with the Rust baker.
+  Baking finer than the screen shows is part of it:
+  slices of size 4 and 8 get 2–3× the pixels they cover on screen.
+- Count a slice's voxels (`countAlong`, for the Layers panel) only when shown:
+  it is ~1.6 s of the ~10 s first render of the forest.
 - Port the toy worlds to the forest's metric scale, or drop them.
-- Port baking (`bake.ts`, DOM-free) to Rust/WASM, if it becomes the bottleneck.
 - Fill cells that have never been baked from the slices a re-tiled slice
   replaces, instead of showing nothing until they arrive. Covered cells
   would then not need baking at all.

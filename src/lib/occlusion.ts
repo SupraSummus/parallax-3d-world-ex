@@ -162,7 +162,7 @@ export class Coverage {
   }
 }
 
-/** Side of a block of chunk pixels in Solid. */
+/** Side of a block of chunk pixels in Solid (BLOCK in bake/src/fill.rs). */
 const BLOCK = 4
 
 /** Which blocks of BLOCK × BLOCK pixels of a chunk draw all their pixels. */
@@ -174,28 +174,6 @@ export interface Solid {
   right: number
   top: number
   bottom: number
-}
-
-/** The solid blocks of an image; a block reaching past its edge counts its pixels in the image. */
-export function solidBlocks(pixels: Uint32Array, width: number, height: number): Solid {
-  const cols = Math.ceil(width / BLOCK)
-  const rows = Math.ceil(height / BLOCK)
-  const blocks = new Uint8Array(cols * rows).fill(1)
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if (pixels[y * width + x] === 0) blocks[Math.floor(y / BLOCK) * cols + Math.floor(x / BLOCK)] = 0
-    }
-  }
-  const solid = { blocks, left: width, right: 0, top: height, bottom: 0 }
-  blocks.forEach((full, k) => {
-    if (!full) return
-    const [x, y] = [(k % cols) * BLOCK, Math.floor(k / cols) * BLOCK]
-    solid.left = Math.min(solid.left, x)
-    solid.right = Math.max(solid.right, Math.min(width, x + BLOCK))
-    solid.top = Math.min(solid.top, y)
-    solid.bottom = Math.max(solid.bottom, Math.min(height, y + BLOCK))
-  })
-  return solid
 }
 
 /**

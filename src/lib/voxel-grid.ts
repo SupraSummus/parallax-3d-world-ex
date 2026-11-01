@@ -5,7 +5,6 @@
  * Plain typed arrays and integer ids, the same layout in TS or Rust/WASM.
  */
 
-import type { Basis } from './view'
 import type { Vec3 } from './world'
 
 export interface Voxel {
@@ -181,37 +180,5 @@ export class VoxelGrid {
     const grid = new VoxelGrid(box, materials)
     voxels.forEach(({ x, y, z }, n) => { grid.cells[grid.index(x, y, z)] = voxelIds[n] })
     return grid
-  }
-}
-
-/**
- * The sites of `grid` in a face's lattice coordinates (a, b, c) (see Face
- * in view.ts). `min` and `max` bound them (inclusive); `at` reads a
- * material id, 0 if empty, outside or not a site.
- */
-export function faceReader(grid: VoxelData, { right: R, up: U, forward: F }: Basis): {
-  min: Vec3
-  max: Vec3
-  at: (a: number, b: number, c: number) => number
-} {
-  const { minX, minY, minZ, nx, ny, nz, cells } = grid
-  // A linear map is extreme at the box's corners.
-  const corners = [minX, minX + nx - 1].flatMap(x => [minY, minY + ny - 1].flatMap(y => [minZ, minZ + nz - 1].map(z => ({ x, y, z }))))
-  const dot = (p: Vec3, v: Vec3) => p.x * v.x + p.y * v.y + p.z * v.z
-  const range = (v: Vec3) => corners.map(p => dot(p, v))
-  const [as, bs, cs] = [range(R), range(U), range(F)]
-  const half = nx / 2
-  const at = (a: number, b: number, c: number): number => {
-    if (((a ^ c) | (b ^ c)) & 1) return 0
-    const x = (a * R.x + c * F.x) / 2 + b * U.x - minX
-    const y = (a * R.y + c * F.y) / 2 + b * U.y - minY
-    const z = (a * R.z + c * F.z) / 2 + b * U.z - minZ
-    if (x < 0 || x >= nx || y < 0 || y >= ny || z < 0 || z >= nz) return 0
-    return cells[(z * ny + y) * half + (x >> 1)]
-  }
-  return {
-    min: { x: Math.min(...as), y: Math.min(...bs), z: Math.min(...cs) },
-    max: { x: Math.max(...as), y: Math.max(...bs), z: Math.max(...cs) },
-    at,
   }
 }

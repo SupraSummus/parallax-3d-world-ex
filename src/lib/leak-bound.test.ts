@@ -39,10 +39,10 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  selectSlices, leakFreeDetail, bakeAngleError, directionStep, chunkCell, nearestDirection, sliceCentre, bake,
+  selectSlices, leakFreeDetail, bakeAngleError, directionStep, chunkCell, nearestDirection, sliceCentre,
   type SliceBoundary,
 } from './slice-selection'
-import { cellSurface, chunkFaces, FACE } from './bake'
+import { ChunkBaker, FACE } from './chunk-baker'
 import { FACES, LAYER } from './view'
 import { VoxelGrid } from './voxel-grid'
 
@@ -85,7 +85,8 @@ describe('Step 1: a baked, drawn point is off by (τ − τ_b)·(z − D)', () =
       return { D, z, tau: r(-1.5, 1.5), tauB: r(-1.5, 1.5) }
     }, ({ D, z, tau, tauB }) => {
       const x = tau * z
-      const [baked] = bake(x, 0, z, tauB, 0, D)
+      // Baking (bake/src/slicing.rs) projects it along τ_b onto the centre plane.
+      const baked = x - tauB * (z - D)
       const offWorld = (baked / D - tau) * D
       return Math.abs(offWorld - (tau - tauB) * (z - D)) < 1e-6
     })
@@ -304,9 +305,9 @@ describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', T
   function parallaxOwners(cells: Cell[], cu: number, cz: number, slices: SliceBoundary[], dirStep: number): number[] {
     // The renderer's own face logic, on voxels (u, 0, z) of the face's lattice.
     const { right: R, forward: F } = face.lattice
-    const grid = VoxelGrid.fromVoxels(cells.map(({ u, z }) => ({
+    const baker = new ChunkBaker(VoxelGrid.fromVoxels(cells.map(({ u, z }) => ({
       x: (u * R.x + z * F.x) / 2, y: (u * R.y + z * F.y) / 2, z: (u * R.z + z * F.z) / 2, color: '#808080', type: 3,
-    })))
+    }))))
     const cellAt = new Map(cells.map(({ u, z }, cell) => [`${String(u)},${String(z)}`, cell]))
     const owner = rays.map(() => -1)
     for (const slice of [...slices].reverse()) {
@@ -319,8 +320,8 @@ describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', T
       }))
       for (const i of chunkCells) {
         const tan = dirStep === 0 ? 0 : Math.max(-1, Math.min(1, nearestDirection(((i + 0.5) * w - cu * LAYER) / distance, dirStep)))
-        const { data, count } = chunkFaces(slice, cellSurface(grid, face.lattice, slice.depth, slice.size, i, 0), i, 0, tan, 0)
-        for (let f = 0; f < count; f++) {
+        const data = baker.faces({ face: face.name, depth: slice.depth, size: slice.size, i, j: 0, tanX: tan, tanY: 0, fillDetail: 0 })
+        for (let f = 0; f < data.length / FACE; f++) {
           if (data[f * FACE + 9] === 0) continue
           const extent = onAxis(data.subarray(f * FACE, f * FACE + 8))
           if (!extent) continue

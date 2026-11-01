@@ -1,5 +1,5 @@
 name: Set up environment
-description: Install pnpm, set up Node.js with pnpm cache, and install dependencies
+description: Install pnpm, set up Node.js with pnpm cache, install dependencies, and add Rust's WebAssembly target
 
 runs:
   using: composite
@@ -16,3 +16,7 @@ runs:
     - name: Install dependencies
       shell: bash
       run: pnpm install --frozen-lockfile
+
+    - name: Add Rust's WebAssembly target
+      shell: bash
+      run: rustup target add wasm32-unknown-unknown && rustup component add clippy rustfmt

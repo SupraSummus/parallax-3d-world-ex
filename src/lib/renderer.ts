@@ -18,7 +18,7 @@ export interface Chunk extends ChunkImage {
    */
   tanX: number
   tanY: number
-  /** Slice detail the faces are grown for, to fill gaps; 0 if not. See chunkFaces. */
+  /** Slice detail the faces are grown for, to fill gaps; 0 if not. See chunk_faces in bake/src/faces.rs. */
   fillDetail: number
 }
 
@@ -287,7 +287,8 @@ export class ParallaxRenderer {
             const cellBox = boxOf(x0, x1, y0, y1, distance)
             if (!onScreen(view, cellBox)) continue
             // Bake along the grid direction nearest to the ray through the cell's centre,
-            // within the face's rays: the rays shown are, and baking needs it (see chunkFaces).
+            // within the face's rays: the rays shown are, and baking needs it
+            // (see chunk_faces in bake/src/faces.rs).
             const tanX = Math.max(-1, Math.min(1, nearestDirection(((i + 0.5) * w - camera.x) / distance, step)))
             const maxY = (1 - Math.abs(tanX)) * LAYER
             const tanY = Math.max(-maxY, Math.min(maxY, nearestDirection(((j + 0.5) * h - camera.y) / distance, step)))
@@ -451,7 +452,7 @@ export class ParallaxRenderer {
     this.maxLeak = Math.min(MAX_MAX_LEAK, Math.max(MIN_MAX_LEAK, pixels))
   }
 
-  /** Whether faces are grown to fill the gaps between slices (see chunkFaces). */
+  /** Whether faces are grown to fill the gaps between slices (see chunk_faces in bake/src/faces.rs). */
   setFillGaps(fill: boolean) {
     this.fillGaps = fill
   }
