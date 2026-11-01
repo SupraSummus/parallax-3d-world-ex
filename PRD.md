@@ -16,8 +16,10 @@ every frame. The demo exists to show (and measure) that idea.
 
 ## Features
 
-**Camera** – Fixed viewing direction (+z), no rotation. W/S forward/back,
-A/D left/right, Space/Shift up/down, adjustable move speed, field of view
+**Camera** – Looks roughly along +z: arrow keys or dragging on the scene
+turn it until the screen's edge is 63° off +z. W/S forward/back and A/D
+left/right along where it looks (level), Space/Shift up/down, adjustable
+move speed, field of view
 (5°–120° across the longer screen side) and render distance (20–400).
 
 **Slicing** – Slices are aligned powers of two thick and grow with viewing
@@ -52,11 +54,17 @@ slice detail, chunks in view reused vs rasterised, cached chunk pixels).
 
 ## Non-goals (for the POC)
 
-- Camera rotation. Slices are only valid for a fixed viewing direction.
+- Looking more than 63° away from +z, or rolling the camera. Slices are
+  cut along z; see the open ideas.
 - Mobile/touch controls.
 - Lighting beyond flat colours, distance fog and simple face shading.
 
 ## Open ideas
+
+- Look all around: six slice stacks, one per cube face (±x, ±y, ±z),
+  each drawn like the +z one and clipped to its face's 90° pyramid; only
+  faces in view baked. Needs radial fog and shading by world normal in
+  the stacks along x and y; seams between faces to be measured.
 
 - Budget chunk baking per frame: a frame that brings many new chunks
   into view still takes up to ~300 ms.

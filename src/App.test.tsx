@@ -74,6 +74,25 @@ describe('App', () => {
     expect(cameraPosition()).toEqual(moved)
   })
 
+  it('turns with the arrow keys, and then moves forward where it looks', async () => {
+    render(<App />)
+    const orientation = () => (screen.getByText('Yaw, Pitch').nextElementSibling?.textContent ?? '').split(',').map(parseFloat)
+    expect(orientation()).toEqual([0, 0])
+
+    fireEvent.keyDown(window, { key: 'ArrowRight' })
+    await waitFor(() => { expect(orientation()[0]).toBeGreaterThanOrEqual(10) })
+    fireEvent.keyUp(window, { key: 'ArrowRight' })
+    expect(orientation()[1]).toBe(0)
+
+    const start = cameraPosition()
+    fireEvent.keyDown(window, { key: 'w' })
+    await waitFor(() => { expect(cameraPosition()[2] - start[2]).toBeGreaterThanOrEqual(1) })
+    fireEvent.keyUp(window, { key: 'w' })
+    // Turned right, so forward also goes towards +x; level, so not up.
+    expect(cameraPosition()[0]).toBeGreaterThan(start[0])
+    expect(cameraPosition()[1]).toBe(start[1])
+  })
+
   it('ignores unrelated keys', async () => {
     render(<App />)
     const start = cameraPosition()
@@ -88,5 +107,6 @@ describe('App', () => {
     expect(screen.getByText('W/S - Forward/Back')).toBeInTheDocument()
     expect(screen.getByText('A/D - Left/Right')).toBeInTheDocument()
     expect(screen.getByText('Space/Shift - Up/Down')).toBeInTheDocument()
+    expect(screen.getByText('Arrows/Drag - Look around')).toBeInTheDocument()
   })
 })

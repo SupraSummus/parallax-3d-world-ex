@@ -1,6 +1,7 @@
 import { selectSlices, leakFreeDetail, directionStep, nearestDirection, sliceCentre } from './slice-selection'
 import { sliceSurface, chunkFaces, fillFaces, shadedPalette, type SliceSurface } from './bake'
 import { World, type Vec3, type WorldType } from './world'
+import { MAX_VIEW_TANGENT, focalLength, rectangleTest, turn, viewTangents, type Orientation, type View } from './view'
 
 export type Camera = Vec3
 
@@ -29,24 +30,27 @@ export interface Chunk {
   facesDrawn: number
 }
 
-/** Where a chunk lands on screen: its top-left corner, in CSS pixels, and screen pixels per chunk pixel. */
+/**
+ * A chunk in a frame: x, y of its top-left corner on its layer's plane,
+ * relative to the camera, in world units. It spans chunk.width /
+ * chunk.scale to the right and chunk.height / chunk.scale down.
+ */
 export interface Placement {
   chunk: Chunk
-  left: number
-  top: number
-  scale: number
+  x: number
+  y: number
 }
 
 /**
- * What to draw, in CSS pixels. Layers go near to far; nearer ones hide what
- * is behind them. `fog` is the share of the horizon colour mixed into a
- * layer's pixels, and into the sky where no layer is drawn.
+ * What to draw, seen through `View` (see projector() in view.ts). Layers go
+ * near to far; nearer ones hide what is behind them. A layer is the plane
+ * `distance` ahead of the camera along +z (its slice's centre). `fog` is
+ * the share of the horizon colour mixed into a layer's pixels, and into
+ * the sky where no layer is drawn.
  */
-export interface Frame {
-  width: number
-  height: number
+export interface Frame extends View {
   fog: number
-  layers: { placements: Placement[]; fog: number }[]
+  layers: { distance: number; placements: Placement[]; fog: number }[]
 }
 
 export interface Layer {
@@ -87,17 +91,10 @@ export interface SessionStats {
   lastUpdate: UpdateStats | null
 }
 
-// Field of view across the longer viewport side, in degrees. Pixels per
-// world unit at viewing distance d are focalLength / d, where the focal
-// length (in pixels) puts the longer side's edges at ±fov / 2.
+// Field of view across the longer viewport side, in degrees (see focalLength).
 export const DEFAULT_FOV = 90
 export const MIN_FOV = 5
 export const MAX_FOV = 120
-
-/** Focal length in pixels: the longer viewport side spans `fov` degrees. */
-export function focalLength(fov: number, width: number, height: number): number {
-  return Math.max(width, height) / 2 / Math.tan((fov * Math.PI) / 360)
-}
 
 // Pixels per world unit used when rasterising the nearest (size-1) slices.
 // Chunks are rasterised camera-independently so they can be cached and
@@ -166,6 +163,7 @@ function chunkKey(x: number, y: number, tanX: number, tanY: number): string {
 export class ParallaxRenderer {
   private world: World
   private camera: Camera
+  private orientation: Orientation = { yaw: 0, pitch: 0 }
   private fov = DEFAULT_FOV
   private maxLeak = DEFAULT_MAX_LEAK
   private renderDistance = DEFAULT_RENDER_DISTANCE
@@ -201,7 +199,12 @@ export class ParallaxRenderer {
     const step = directionStep(detail)
     const boundaries = selectSlices(this.camera.z, NEAR_DEPTH, this.renderDistance, detail)
     const distances = boundaries.map(s => sliceCentre(s) - this.camera.z)
-    const focal = focalLength(this.fov, this.width, this.height)
+    const view = this.view()
+    // Screen extent on a plane at distance d: tangents · d around the camera.
+    // Null only for an empty viewport, which shows nothing.
+    const tangents = viewTangents(view) ?? { minX: 0, maxX: 0, minY: 0, maxY: 0 }
+    const onScreen = rectangleTest(view)
+    const { x: cx, y: cy } = this.camera
 
     let chunksRegenerated = 0
     let chunksReused = 0
@@ -209,11 +212,10 @@ export class ParallaxRenderer {
     const inView = new Set<Chunk>()
     const slicesInView: Slice[] = []
     const frame: Frame = {
-      width: this.width,
-      height: this.height,
+      ...view,
       // The last slice may reach past the render distance; the sky is behind it.
       fog: this.fog(Math.max(this.renderDistance, ...distances)),
-      layers: distances.map(d => ({ placements: [], fog: this.fog(d) })),
+      layers: distances.map(d => ({ distance: d, placements: [], fog: this.fog(d) })),
     }
 
     boundaries.forEach(({ depth, size }, index) => {
@@ -225,18 +227,19 @@ export class ParallaxRenderer {
 
       // Slices start at least NEAR_DEPTH ahead of the camera, so this is > 0.
       const distance = distances[index]
-      const scale = focal / distance
-      // The part of the slice's plane that is on screen, in world units.
-      const left = this.camera.x - this.width / 2 / scale
-      const right = this.camera.x + this.width / 2 / scale
-      const bottom = this.camera.y - this.height / 2 / scale
-      const top = this.camera.y + this.height / 2 / scale
+      // The part of the slice's plane that is on screen (its bounding box), in world units.
+      const left = this.camera.x + tangents.minX * distance
+      const right = this.camera.x + tangents.maxX * distance
+      const bottom = this.camera.y + tangents.minY * distance
+      const top = this.camera.y + tangents.maxY * distance
       const w = slice.surface.width
       // Voxel x covers [x - 0.5, x + 0.5], so chunk x0 covers [x0 - 0.5, x0 + w - 0.5).
       const firstX = Math.floor((left + 0.5) / w) * w
       const firstY = Math.floor((bottom + 0.5) / w) * w
       for (let x = firstX; x - 0.5 < right; x += w) {
         for (let y = firstY; y - 0.5 < top; y += w) {
+          // A turned view shows a quadrilateral, less than its bounding box.
+          if (!onScreen(x - 0.5 - cx, x + w - 0.5 - cx, y - 0.5 - cy, y + w - 0.5 - cy, distance)) continue
           // Bake along the grid direction nearest to the ray through the cell's centre.
           const tanX = nearestDirection((x + w / 2 - 0.5 - this.camera.x) / distance, step)
           const tanY = nearestDirection((y + w / 2 - 0.5 - this.camera.y) / distance, step)
@@ -250,18 +253,14 @@ export class ParallaxRenderer {
           }
           if (chunk.facesDrawn === 0) continue
           // The chunk's content, not just its cell, must reach the screen.
-          if (chunk.originX >= right || chunk.originX + chunk.width / chunk.scale <= left) continue
-          if (chunk.originY <= bottom || chunk.originY - chunk.height / chunk.scale >= top) continue
+          const contentLeft = chunk.originX - cx
+          const contentTop = chunk.originY - cy
+          if (!onScreen(contentLeft, contentLeft + chunk.width / chunk.scale, contentTop - chunk.height / chunk.scale, contentTop, distance)) continue
           if (cached) chunksReused++
           else chunksRegenerated++
           layer.chunks.push(chunk)
           inView.add(chunk)
-          frame.layers[index].placements.push({
-            chunk,
-            left: this.width / 2 + (chunk.originX - this.camera.x) * scale,
-            top: this.height / 2 - (chunk.originY - this.camera.y) * scale,
-            scale: scale / chunk.scale,
-          })
+          frame.layers[index].placements.push({ chunk, x: contentLeft, y: contentTop })
         }
       }
     })
@@ -301,6 +300,15 @@ export class ParallaxRenderer {
     this.camera = { ...this.camera, ...camera }
   }
 
+  getOrientation(): Orientation {
+    return { ...this.orientation }
+  }
+
+  /** Turns the view towards `orientation`, as far as the slices reach (see turn()). */
+  setOrientation(orientation: Partial<Orientation>) {
+    this.orientation = turn(this.view(), { ...this.orientation, ...orientation })
+  }
+
   getWorld(): World {
     return this.world
   }
@@ -313,6 +321,7 @@ export class ParallaxRenderer {
   resize(width: number, height: number) {
     this.width = width
     this.height = height
+    this.setOrientation({})
   }
 
   /** Replaces the world and moves the camera to its spawn point. */
@@ -335,6 +344,7 @@ export class ParallaxRenderer {
    */
   setFov(fov: number) {
     this.fov = Math.min(MAX_FOV, Math.max(MIN_FOV, fov))
+    this.setOrientation({})
   }
 
   getRenderDistance(): number {
@@ -359,10 +369,22 @@ export class ParallaxRenderer {
     this.maxLeak = Math.min(MAX_MAX_LEAK, Math.max(MIN_MAX_LEAK, pixels))
   }
 
-  /** Slice detail that keeps occlusion leaks within the tolerance on the current viewport. */
+  /**
+   * Slice detail that keeps occlusion leaks within the tolerance on the
+   * current viewport. It does not depend on the orientation, so turning
+   * keeps the slices.
+   */
   getDetail(): number {
-    const tanHalfFov = Math.tan((this.fov * Math.PI) / 360)
-    return leakFreeDetail(focalLength(this.fov, this.width, this.height), tanHalfFov, this.maxLeak)
+    return leakFreeDetail(focalLength(this.fov, this.width, this.height), MAX_VIEW_TANGENT, this.maxLeak)
+  }
+
+  private view(): View {
+    return {
+      orientation: this.orientation,
+      width: this.width,
+      height: this.height,
+      focal: focalLength(this.fov, this.width, this.height),
+    }
   }
 
   /** Layers of the most recent render, sorted near to far. */
