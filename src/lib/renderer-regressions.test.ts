@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { ParallaxRenderer, type Frame } from './renderer'
 import { World } from './world'
+import { projector } from './view'
 
 /**
  * Behavioral regression tests for previously fixed rendering bugs. They check
@@ -20,14 +21,19 @@ function makeWorldWithVoxels(voxels: World['voxels']): World {
 
 /** Screen positions (CSS pixels) of the centres of all drawn chunk pixels. */
 function drawnPixels(frame: Frame): { x: number; y: number }[] {
-  return frame.layers.flatMap(l => l.placements).flatMap(({ chunk, left, top, scale }) => {
+  return frame.layers.flatMap(({ distance, placements }) => placements.flatMap(({ chunk, x, y }) => {
     const points: { x: number; y: number }[] = []
     chunk.pixels.forEach((pixel, i) => {
       if (pixel === 0) return
-      points.push({ x: left + ((i % chunk.width) + 0.5) * scale, y: top + (Math.floor(i / chunk.width) + 0.5) * scale })
+      const point = projector(frame)({
+        x: x + ((i % chunk.width) + 0.5) / chunk.scale,
+        y: y - (Math.floor(i / chunk.width) + 0.5) / chunk.scale,
+        z: distance,
+      })
+      if (point) points.push(point)
     })
     return points
-  })
+  }))
 }
 
 describe('Renderer regressions', () => {

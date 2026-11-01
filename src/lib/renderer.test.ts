@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { ParallaxRenderer, DEFAULT_RENDER_DISTANCE, type Chunk, type Frame } from './renderer'
 import { World } from './world'
 import { selectSlices, leakFreeDetail, chunkWidth, directionStep } from './slice-selection'
+import { MAX_VIEW_TANGENT, projector } from './view'
 
 // A small world with trees: rasterising the forest (~700k voxels) in jsdom
 // takes seconds per test. The renderer never modifies its world.
@@ -21,9 +22,27 @@ describe('ParallaxRenderer', () => {
   const allChunks = () => renderer.getLayers().flatMap(l => l.chunks)
   const placed = () => frame.layers.flatMap(l => l.placements)
   const placementOf = (chunk: Chunk) => {
-    const placement = placed().find(p => p.chunk === chunk)
-    if (!placement) throw new Error('chunk not in the last frame')
-    return placement
+    const layer = frame.layers.find(l => l.placements.some(p => p.chunk === chunk))
+    const placement = layer?.placements.find(p => p.chunk === chunk)
+    if (!layer || !placement) throw new Error('chunk not in the last frame')
+    return { ...placement, distance: layer.distance }
+  }
+
+  /** Screen position of world point (x, y) on a chunk, per its placement. */
+  const screenOf = (chunk: Chunk, x: number, y: number) => {
+    const { x: px, y: py, distance } = placementOf(chunk)
+    const point = projector(frame)({ x: px + x - chunk.originX, y: py + y - chunk.originY, z: distance })
+    if (!point) throw new Error('point behind the camera')
+    return point
+  }
+
+  /** Screen bounding box of a chunk's projected corners. */
+  const screenBox = (chunk: Chunk) => {
+    const corners = [[0, 0], [1, 0], [0, 1], [1, 1]].map(([i, j]) =>
+      screenOf(chunk, chunk.originX + (i * chunk.width) / chunk.scale, chunk.originY - (j * chunk.height) / chunk.scale))
+    const xs = corners.map(c => c.x)
+    const ys = corners.map(c => c.y)
+    return { left: Math.min(...xs), right: Math.max(...xs), top: Math.min(...ys), bottom: Math.max(...ys) }
   }
 
   beforeEach(() => {
@@ -115,19 +134,22 @@ describe('ParallaxRenderer', () => {
       expect(scales[0]).toBeGreaterThan(scales[scales.length - 1])
     })
 
-    it('only rasterises chunks that are at least partly on screen', () => {
+    it.each([[0, 0], [10, -10]])('only rasterises chunks that are at least partly on screen (yaw %s°, pitch %s°)', (yaw, pitch) => {
+      renderer.setOrientation({ yaw, pitch })
       render()
       const wide = lastUpdate()
-      for (const { chunk, left, top, scale } of placed()) {
-        expect(left).toBeLessThan(800)
-        expect(top).toBeLessThan(600)
-        expect(left + chunk.width * scale).toBeGreaterThan(0)
-        expect(top + chunk.height * scale).toBeGreaterThan(0)
+      for (const { chunk } of placed()) {
+        const box = screenBox(chunk)
+        expect(box.left).toBeLessThan(800)
+        expect(box.top).toBeLessThan(600)
+        expect(box.right).toBeGreaterThan(0)
+        expect(box.bottom).toBeGreaterThan(0)
       }
       // A narrower view shows less of every slice.
       const narrow = new ParallaxRenderer(world)
       narrow.resize(800, 600)
       narrow.setFov(20)
+      narrow.setOrientation({ yaw, pitch })
       narrow.render()
       const narrowUpdate = narrow.getStats().lastUpdate
       expect(narrowUpdate?.chunkCount).toBeLessThan(wide.chunkCount)
@@ -147,7 +169,7 @@ describe('ParallaxRenderer', () => {
       renderer.toggleLayerVisibility(layer.depth)
       render()
       expect(layer.visible).toBe(false)
-      expect(frame.layers[index]).toEqual({ placements: [], fog: before.fog })
+      expect(frame.layers[index]).toEqual({ distance: before.distance, placements: [], fog: before.fog })
       renderer.toggleLayerVisibility(layer.depth)
       render()
       expect(frame.layers[index]).toEqual(before)
@@ -159,14 +181,8 @@ describe('ParallaxRenderer', () => {
     /** First chunk of every layer with chunks in view, near to far. */
     const firstChunks = () => renderer.getLayers().flatMap(l => l.chunks.slice(0, 1).map(chunk => ({ layer: l, chunk })))
 
-    /** Screen position of world point (x, y) on a chunk, per its placement. */
-    const project = (chunk: Chunk, x: number, y: number) => {
-      const { left, top, scale } = placementOf(chunk)
-      return {
-        sx: left + (x - chunk.originX) * chunk.scale * scale,
-        sy: top + (chunk.originY - y) * chunk.scale * scale,
-      }
-    }
+    /** Screen pixels per world unit on a chunk's plane, at its top-left corner, looking straight ahead. */
+    const pixelsPerUnit = (chunk: Chunk) => screenOf(chunk, chunk.originX + 1, chunk.originY).x - screenOf(chunk, chunk.originX, chunk.originY).x
 
     beforeEach(() => {
       renderer.setCamera({ x: 0, y: 15, z: -30 })
@@ -174,26 +190,30 @@ describe('ParallaxRenderer', () => {
 
     it('scales nearer layers up more than farther ones', () => {
       render()
-      const pixelsPerUnit = firstChunks().map(({ chunk }) => placementOf(chunk).scale * chunk.scale)
-      expect(pixelsPerUnit.length).toBeGreaterThan(3)
-      expect(pixelsPerUnit).toEqual([...pixelsPerUnit].sort((a, b) => b - a))
+      const scales = firstChunks().map(({ chunk }) => pixelsPerUnit(chunk))
+      expect(scales.length).toBeGreaterThan(3)
+      expect(scales).toEqual([...scales].sort((a, b) => b - a))
     })
 
-    it('projects the point in front of the camera to the viewport centre on every chunk', () => {
+    it.each([[0, 0], [10, -10]])('projects the point the camera looks at (yaw %s°, pitch %s°) to the viewport centre on every chunk', (yaw, pitch) => {
+      renderer.setOrientation({ yaw, pitch })
       render()
-      for (const chunk of allChunks()) {
-        const { sx, sy } = project(chunk, 0, 15)
-        expect(sx).toBeCloseTo(400)
-        expect(sy).toBeCloseTo(300)
+      const [y, p] = [yaw, pitch].map(a => (a * Math.PI) / 180)
+      for (const { distance, placements } of frame.layers) {
+        // Where the view direction meets the layer's plane; the camera is at (0, 15).
+        const ahead = { x: Math.tan(y) * distance, y: 15 + (Math.tan(p) / Math.cos(y)) * distance }
+        for (const { chunk } of placements) {
+          expect(screenOf(chunk, ahead.x, ahead.y)).toEqual({ x: expect.closeTo(400) as number, y: expect.closeTo(300) as number })
+        }
       }
     })
 
     it('moves nearer layers further on sideways camera movement (parallax)', () => {
       render()
-      const tracked = firstChunks().map(({ chunk }) => ({ chunk, before: project(chunk, 0, 0).sx }))
+      const tracked = firstChunks().map(({ chunk }) => ({ chunk, before: screenOf(chunk, 0, 0).x }))
       renderer.setCamera({ x: 1 })
       render()
-      const shifts = tracked.filter(t => placed().some(p => p.chunk === t.chunk)).map(t => t.before - project(t.chunk, 0, 0).sx)
+      const shifts = tracked.filter(t => placed().some(p => p.chunk === t.chunk)).map(t => t.before - screenOf(t.chunk, 0, 0).x)
       expect(shifts.length).toBeGreaterThan(3)
       expect(shifts.every(s => s > 0)).toBe(true)
       expect(shifts).toEqual([...shifts].sort((a, b) => b - a))
@@ -205,7 +225,7 @@ describe('ParallaxRenderer', () => {
       const camera = renderer.getCamera()
       for (const { layer, chunk } of firstChunks()) {
         const distance = layer.depth + (layer.size - 1) / 2 - camera.z
-        const focalLength = placementOf(chunk).scale * chunk.scale * distance
+        const focalLength = pixelsPerUnit(chunk) * distance
         expect(focalLength).toBeCloseTo(400 / Math.tan((fov * Math.PI) / 360))
       }
     })
@@ -218,9 +238,9 @@ describe('ParallaxRenderer', () => {
       render()
       expect(renderer.getLayers().map(l => [l.depth, l.size])).toEqual(slices)
       for (const chunk of allChunks()) {
-        const { sx, sy } = project(chunk, 0, 15)
-        expect(sx).toBeCloseTo(300)
-        expect(sy).toBeCloseTo(400)
+        const { x, y } = screenOf(chunk, 0, 15)
+        expect(x).toBeCloseTo(300)
+        expect(y).toBeCloseTo(400)
       }
     })
 
@@ -270,6 +290,20 @@ describe('ParallaxRenderer', () => {
       expect(lastUpdate().cacheEfficiency).toBe(100)
     })
 
+    it('keeps the slices when turning, rasterising only chunks that come into view', () => {
+      render()
+      const slices = renderer.getLayers().map(l => [l.depth, l.size])
+      const chunks = new Set(allChunks())
+      renderer.setOrientation({ yaw: 10, pitch: 5 })
+      render()
+      expect(renderer.getLayers().map(l => [l.depth, l.size])).toEqual(slices)
+      expect(lastUpdate().chunksReused).toBeGreaterThan(lastUpdate().chunksRegenerated)
+      expect(allChunks().filter(c => !chunks.has(c))).toHaveLength(lastUpdate().chunksRegenerated)
+      renderer.setOrientation({ yaw: 0, pitch: 0 })
+      render()
+      expect(lastUpdate().chunksRegenerated).toBe(0)
+    })
+
     it('rebuilds every chunk after world regeneration', () => {
       render()
       renderer.regenerateWorld(99999, 'hills_with_trees')
@@ -286,8 +320,8 @@ describe('ParallaxRenderer', () => {
         renderer.setFov(fov)
         renderer.setMaxLeak(pixels)
         const tan = Math.tan((fov * Math.PI) / 360)
-        // The longer viewport side is 800 px.
-        expect(renderer.getDetail()).toBe(leakFreeDetail(400 / tan, tan, pixels))
+        // The longer viewport side is 800 px; rays may be turned up to MAX_VIEW_TANGENT.
+        expect(renderer.getDetail()).toBe(leakFreeDetail(400 / tan, MAX_VIEW_TANGENT, pixels))
       }
     })
 
@@ -314,6 +348,17 @@ describe('ParallaxRenderer', () => {
       const last = layers[layers.length - 1]
       expect(last.depth + last.size).toBeGreaterThanOrEqual(camera.z + 50)
       expect(last.depth).toBeLessThan(camera.z + 50)
+    })
+  })
+
+  describe('orientation', () => {
+    it('turns as far as the slices reach, and turns back when the view widens', () => {
+      renderer.setOrientation({ yaw: 90 })
+      const { yaw } = renderer.getOrientation()
+      // 90° across 800 px puts the side edge at 45°; it may turn to atan(2).
+      expect(yaw).toBeCloseTo((Math.atan(MAX_VIEW_TANGENT) * 180) / Math.PI - 45, 3)
+      renderer.setFov(110)
+      expect(renderer.getOrientation().yaw).toBeLessThan(yaw)
     })
   })
 

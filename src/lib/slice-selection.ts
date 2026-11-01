@@ -51,7 +51,8 @@ export function chunkWidth(size: number): number {
 
 /**
  * The largest angle error (as a tangent) between a ray and the direction its
- * chunk is baked along, given the focal length in pixels, tan(fov / 2) and
+ * chunk is baked along, given the focal length in pixels, the largest
+ * tangent of a ray on screen (tan(fov / 2) looking straight along +z) and
  * the leak tolerance ε in pixels.
  *
  * A slice [a, a + s] drawn at its centre misplaces an edge seen at tangent
@@ -60,11 +61,11 @@ export function chunkWidth(size: number): number {
  * s ≤ a / detail that is τ_err·focal/detail ≤ ε, so detail = τ_err·focal/ε.
  * Chunks span at most C / detail and directions are at most that far apart
  * (directionStep), so τ_err ≤ C / detail. Both hold for
- * τ_err = √(C·ε / focal). Rays on screen are never more than tan(fov/2)
+ * τ_err = √(C·ε / focal). Rays on screen are never more than maxTangent
  * off a straight-ahead bake, so τ_err is at most that.
  */
-export function bakeAngleError(focal: number, tanHalfFov: number, maxLeakPixels: number): number {
-  return Math.min(tanHalfFov, Math.sqrt((CHUNK_WIDTH_PER_SIZE * maxLeakPixels) / focal))
+export function bakeAngleError(focal: number, maxTangent: number, maxLeakPixels: number): number {
+  return Math.min(maxTangent, Math.sqrt((CHUNK_WIDTH_PER_SIZE * maxLeakPixels) / focal))
 }
 
 /**
@@ -74,8 +75,8 @@ export function bakeAngleError(focal: number, tanHalfFov: number, maxLeakPixels:
  * Rounded up to a quarter octave (denser slices are always safe), so small
  * changes of the viewport keep the slicing and the cache.
  */
-export function leakFreeDetail(focal: number, tanHalfFov: number, maxLeakPixels: number): number {
-  const detail = (bakeAngleError(focal, tanHalfFov, maxLeakPixels) * focal) / maxLeakPixels
+export function leakFreeDetail(focal: number, maxTangent: number, maxLeakPixels: number): number {
+  const detail = (bakeAngleError(focal, maxTangent, maxLeakPixels) * focal) / maxLeakPixels
   return detail <= 1 ? 1 : 2 ** (Math.ceil(4 * Math.log2(detail)) / 4)
 }
 

@@ -1,6 +1,7 @@
-import { useEffect, useEffectEvent, useRef, useState, useCallback, type ReactNode } from 'react'
+import { useEffect, useEffectEvent, useRef, useState, useCallback, type PointerEvent, type ReactNode } from 'react'
 import { ParallaxRenderer, DEFAULT_FOV, MAX_FOV, MIN_FOV, DEFAULT_RENDER_DISTANCE, MAX_RENDER_DISTANCE, MIN_RENDER_DISTANCE, DEFAULT_MAX_LEAK, MAX_MAX_LEAK, MIN_MAX_LEAK, type Camera, type Layer, type SessionStats } from '@/lib/renderer'
 import { World, WORLD_TYPES, type WorldType } from '@/lib/world'
+import type { Orientation } from '@/lib/view'
 import { Compositor } from '@/lib/compositor'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -10,7 +11,11 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { LayerPreview } from '@/components/LayerPreview'
 import { Box, ChartLine, Crosshair, ExternalLink, Eye, EyeOff, History, Layers, Move, RefreshCw } from 'lucide-react'
 
-/** Key -> movement direction (x, y, z) for held keys. Keys are lower-cased. */
+/**
+ * Key -> movement direction for held keys: right, up, forward relative to
+ * where the camera looks (level: looking up does not lift W). Keys are
+ * lower-cased.
+ */
 const MOVEMENT_KEYS: Record<string, [number, number, number]> = {
   w: [0, 0, 1],
   s: [0, 0, -1],
@@ -19,6 +24,17 @@ const MOVEMENT_KEYS: Record<string, [number, number, number]> = {
   ' ': [0, 1, 0],
   shift: [0, -1, 0],
 }
+
+/** Key -> turn (yaw, pitch) per frame, in degrees, for held keys. */
+const LOOK_KEYS: Record<string, [number, number]> = {
+  arrowleft: [-1, 0],
+  arrowright: [1, 0],
+  arrowup: [0, 1],
+  arrowdown: [0, -1],
+}
+
+/** Degrees of turn per CSS pixel of mouse drag. */
+const DRAG_DEGREES_PER_PIXEL = 0.15
 
 function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -30,6 +46,7 @@ function App() {
   const [sessionStats, setSessionStats] = useState<SessionStats | null>(null)
   // Replaced by the world's spawn point on the first render.
   const [camera, setCamera] = useState<Camera>({ x: 0, y: 0, z: 0 })
+  const [orientation, setOrientation] = useState<Orientation>({ yaw: 0, pitch: 0 })
   const [showStats, setShowStats] = useState(true)
   const [showLayers, setShowLayers] = useState(true)
   const [layers, setLayers] = useState<Layer[]>([])
@@ -50,6 +67,7 @@ function App() {
     setSessionStats(renderer.getStats())
     setLayers(renderer.getLayers())
     setCamera(renderer.getCamera())
+    setOrientation(renderer.getOrientation())
   }, [])
 
   // Renderer lifecycle.
@@ -75,7 +93,7 @@ function App() {
     }
   }, [requestRender, hasWebGL2])
 
-  // Keyboard movement: one animation-frame loop runs while any movement key is held.
+  // Keyboard movement and turning: one animation-frame loop runs while any such key is held.
   useEffect(() => {
     const held = new Set<string>()
     let frame: number | undefined
@@ -89,13 +107,22 @@ function App() {
       if (renderer) {
         const speed = getMoveSpeed()
         const cam = renderer.getCamera()
+        const { yaw, pitch } = renderer.getOrientation()
+        const [sin, cos] = [Math.sin((yaw * Math.PI) / 180), Math.cos((yaw * Math.PI) / 180)]
+        let [turnYaw, turnPitch] = [0, 0]
         for (const key of held) {
-          const [dx, dy, dz] = MOVEMENT_KEYS[key]
-          cam.x += dx * speed
-          cam.y += dy * speed
-          cam.z += dz * speed
+          if (key in LOOK_KEYS) {
+            turnYaw += LOOK_KEYS[key][0]
+            turnPitch += LOOK_KEYS[key][1]
+            continue
+          }
+          const [right, up, forward] = MOVEMENT_KEYS[key]
+          cam.x += (right * cos + forward * sin) * speed
+          cam.y += up * speed
+          cam.z += (forward * cos - right * sin) * speed
         }
         renderer.setCamera(cam)
+        renderer.setOrientation({ yaw: yaw + turnYaw, pitch: pitch + turnPitch })
         requestRender()
       }
       frame = requestAnimationFrame(tick)
@@ -109,7 +136,7 @@ function App() {
 
     const handleKeyDown = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase()
-      if (!(key in MOVEMENT_KEYS)) return
+      if (!(key in MOVEMENT_KEYS) && !(key in LOOK_KEYS)) return
       // Don't hijack typing/space activation inside form controls.
       if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [role="combobox"]')) return
       e.preventDefault()
@@ -134,6 +161,18 @@ function App() {
     }
   }, [requestRender])
 
+  // Dragging on the scene turns the camera: right turns right, up looks up.
+  const handlePointerMove = (e: PointerEvent) => {
+    const renderer = rendererRef.current
+    if (!renderer || (e.buttons & 1) === 0) return
+    const { yaw, pitch } = renderer.getOrientation()
+    renderer.setOrientation({
+      yaw: yaw + e.movementX * DRAG_DEGREES_PER_PIXEL,
+      pitch: pitch - e.movementY * DRAG_DEGREES_PER_PIXEL,
+    })
+    requestRender()
+  }
+
   const handleRegenerateWorld = (type: WorldType = worldType) => {
     setWorldType(type)
     rendererRef.current?.regenerateWorld(Date.now(), type)
@@ -146,10 +185,12 @@ function App() {
     if (!renderer) return
     const { seed, worldType } = renderer.getWorld()
     const { x, y, z } = renderer.getCamera()
+    const { yaw, pitch } = renderer.getOrientation()
     const query = new URLSearchParams({
       seed: String(seed),
       world: worldType,
       camera: [x, y, z].join(','),
+      look: [yaw, pitch].join(','),
       fov: String(renderer.getFov()),
       distance: String(renderer.getRenderDistance()),
     })
@@ -188,7 +229,12 @@ function App() {
 
   return (
     <div className="relative h-screen w-screen overflow-hidden bg-background text-foreground">
-      <canvas ref={canvasRef} className="absolute inset-0 h-full w-full" />
+      <canvas
+        ref={canvasRef}
+        // Keep the drag when it passes over a panel.
+        onPointerDown={e => { e.currentTarget.setPointerCapture(e.pointerId) }}
+        onPointerMove={handlePointerMove}
+        className="absolute inset-0 h-full w-full touch-none" />
       {!hasWebGL2 && (
         <div className="absolute inset-0 flex items-center justify-center p-4 text-center text-sm text-white">
           Can't draw the scene: this browser has no WebGL 2.
@@ -209,6 +255,9 @@ function App() {
           <Panel icon={<Crosshair size={16} />} title="Camera">
             <StatRow label="Position">
               {camera.x.toFixed(1)}, {camera.y.toFixed(1)}, {camera.z.toFixed(1)}
+            </StatRow>
+            <StatRow label="Yaw, Pitch">
+              {orientation.yaw.toFixed(1)}°, {orientation.pitch.toFixed(1)}°
             </StatRow>
             <SliderRow
               label={`Move Speed: ${moveSpeed.toFixed(1)}`}
@@ -246,6 +295,7 @@ function App() {
               <div className="flex items-center gap-2"><Move size={14} /><span>W/S - Forward/Back</span></div>
               <div className="pl-[22px]">A/D - Left/Right</div>
               <div className="pl-[22px]">Space/Shift - Up/Down</div>
+              <div className="pl-[22px]">Arrows/Drag - Look around</div>
             </div>
           </Panel>
 

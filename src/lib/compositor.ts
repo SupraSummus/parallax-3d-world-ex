@@ -1,21 +1,39 @@
 import type { Chunk, Frame } from './renderer'
+import { viewBasis } from './view'
 
-// Sky gradient: from the top edge down to the horizon colour at eye level
-// (screen centre), then flat. Fog has the horizon colour.
+// Sky gradient: from the horizon colour at eye level up to SKY_TOP at
+// SKY_TOP_TANGENT (tangent of the elevation; 32°), flat above and below.
+// Fog has the horizon colour.
 export const SKY_TOP = '#3f73b8'
 export const SKY_HORIZON = '#b9d3e8'
+const SKY_TOP_TANGENT = 0.625
 
-// One rectangle per chunk, positioned in CSS pixels at a layer's depth. The
-// four corners come from gl_VertexID, so there are no vertex buffers.
+// One rectangle per chunk on its layer's plane, projected like
+// projector() in view.ts; `view` has the camera's axes as columns. The
+// corners come from gl_VertexID, so there are no vertex buffers. The sky
+// covers the screen; `ray` is each pixel's world direction.
 const VERTEX_SHADER = `#version 300 es
 uniform vec2 viewport;
-uniform vec4 rect; // left, top, width, height
+uniform float focal;
+uniform mat3 view;
+uniform vec4 rect; // x, y of the top-left corner, width, height (world units, camera-relative)
+uniform float distance;
 uniform float depth;
+uniform bool sky;
 out vec2 uv;
+out vec3 ray;
 void main() {
   uv = vec2(gl_VertexID & 1, gl_VertexID >> 1);
-  vec2 p = (rect.xy + uv * rect.zw) / viewport;
-  gl_Position = vec4(p.x * 2.0 - 1.0, 1.0 - p.y * 2.0, depth, 1.0);
+  vec2 half_viewport = viewport / 2.0;
+  if (sky) {
+    vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    ray = view * vec3(ndc * half_viewport / focal, 1.0);
+    gl_Position = vec4(ndc, depth, 1.0);
+    return;
+  }
+  vec3 p = transpose(view) * vec3(rect.x + uv.x * rect.z, rect.y - uv.y * rect.w, distance);
+  // Homogeneous, so the GPU clips what is behind the camera and interpolates in perspective.
+  gl_Position = vec4(p.xy * focal / half_viewport, depth * p.z, p.z);
 }`
 
 // Chunk pixels are opaque or empty, so nothing is blended: empty pixels are
@@ -29,11 +47,13 @@ uniform vec3 horizon;
 uniform float fog;
 uniform bool sky;
 in vec2 uv;
+in vec3 ray;
 out vec4 color;
 void main() {
   vec3 rgb;
   if (sky) {
-    rgb = mix(skyTop, horizon, min(uv.y * 2.0, 1.0));
+    float elevation = ray.y / length(ray.xz);
+    rgb = mix(horizon, skyTop, clamp(elevation / ${String(SKY_TOP_TANGENT)}, 0.0, 1.0));
   } else {
     vec4 texel = texture(image, uv);
     // Smoothing a minified chunk blends in its empty pixels; keep only the mostly opaque.
@@ -45,7 +65,8 @@ void main() {
 
 const rgb = (hex: string) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255) as [number, number, number]
 
-type Uniform = 'viewport' | 'rect' | 'depth' | 'skyTop' | 'horizon' | 'fog' | 'sky'
+const UNIFORMS = ['viewport', 'focal', 'view', 'rect', 'distance', 'depth', 'skyTop', 'horizon', 'fog', 'sky'] as const
+type Uniform = (typeof UNIFORMS)[number]
 
 /**
  * Draws Frames with WebGL 2 onto one canvas, near to far with a depth test,
@@ -95,25 +116,30 @@ export class Compositor {
     // The sky covers every pixel, so only depth needs clearing.
     gl.clear(gl.DEPTH_BUFFER_BIT)
     gl.uniform2f(u.viewport, frame.width, frame.height)
+    gl.uniform1f(u.focal, frame.focal)
+    // Columns: the camera's right, up and forward axes in world coordinates.
+    const { right, up, forward } = viewBasis(frame.orientation)
+    gl.uniformMatrix3fv(u.view, false, [right, up, forward].flatMap(v => [v.x, v.y, v.z]))
 
-    // Layer i at depth z(i); the sky behind all of them, still in front of the cleared depth.
-    const z = (i: number) => (2 * i) / (frame.layers.length + 1) - 1
+    // Layer i at depth z(i), strictly inside (-1, 1) so rounding never clips
+    // it; the sky behind all of them, still in front of the cleared depth.
+    const z = (i: number) => (2 * i + 1) / (frame.layers.length + 2) - 1
     const drawn = new Set<Chunk>()
     gl.uniform1i(u.sky, 0)
-    frame.layers.forEach(({ placements, fog }, i) => {
+    frame.layers.forEach(({ distance, placements, fog }, i) => {
       gl.uniform1f(u.depth, z(i))
+      gl.uniform1f(u.distance, distance)
       gl.uniform1f(u.fog, fog)
-      for (const { chunk, left, top, scale } of placements) {
+      for (const { chunk, x, y } of placements) {
         gl.bindTexture(gl.TEXTURE_2D, this.texture(chunk))
         drawn.add(chunk)
-        gl.uniform4f(u.rect, left, top, chunk.width * scale, chunk.height * scale)
+        gl.uniform4f(u.rect, x, y, chunk.width / chunk.scale, chunk.height / chunk.scale)
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
       }
     })
     gl.uniform1i(u.sky, 1)
     gl.uniform1f(u.depth, z(frame.layers.length))
     gl.uniform1f(u.fog, frame.fog)
-    gl.uniform4f(u.rect, 0, 0, frame.width, frame.height)
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
 
     for (const [chunk, texture] of this.textures) {
@@ -136,7 +162,7 @@ export class Compositor {
     gl.linkProgram(program)
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(program) ?? 'WebGL link failed')
     gl.useProgram(program)
-    for (const name of ['viewport', 'rect', 'depth', 'skyTop', 'horizon', 'fog', 'sky'] as const) {
+    for (const name of UNIFORMS) {
       this.uniforms[name] = gl.getUniformLocation(program, name)
     }
     gl.uniform3f(this.uniforms.skyTop, ...rgb(SKY_TOP))

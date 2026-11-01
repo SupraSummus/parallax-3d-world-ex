@@ -1,13 +1,14 @@
 /**
  * Reference viewer: renders a World as an ordinary triangle mesh with
  * three.js, to check what the scene looks like independently of the slice
- * renderer. Opened from the app with ?seed=&world=&camera=x,y,z&fov=&distance=.
+ * renderer. Opened from the app with ?seed=&world=&camera=x,y,z&look=yaw,pitch&fov=&distance=.
  */
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { World, WORLD_TYPES, type Vec3, type WorldType } from '@/lib/world'
-import { DEFAULT_FOV, DEFAULT_RENDER_DISTANCE, FOG_PER_RENDER_DISTANCE, focalLength } from '@/lib/renderer'
+import { DEFAULT_FOV, DEFAULT_RENDER_DISTANCE, FOG_PER_RENDER_DISTANCE } from '@/lib/renderer'
 import { SKY_HORIZON, SKY_TOP } from '@/lib/compositor'
+import { focalLength, viewBasis } from '@/lib/view'
 import { buildVoxelMesh } from './mesh'
 
 const params = new URLSearchParams(location.search)
@@ -26,6 +27,7 @@ const [cx, cy, cz] = (params.get('camera') ?? '').split(',').map(Number)
 const parallaxCamera: Vec3 = Number.isFinite(cx) && Number.isFinite(cy) && Number.isFinite(cz)
   ? { x: cx, y: cy, z: cz }
   : world.spawn
+const [yaw = 0, pitch = 0] = (params.get('look') ?? '').split(',').map(Number).map(a => (Number.isFinite(a) ? a : 0))
 
 const geometry = new THREE.BufferGeometry()
 geometry.setAttribute('position', new THREE.BufferAttribute(mesh.positions, 3))
@@ -53,8 +55,9 @@ controls.addEventListener('change', draw)
 /** World +z maps to three.js -z (see mesh.ts). */
 function toParallaxView() {
   camera.position.set(parallaxCamera.x, parallaxCamera.y, -parallaxCamera.z)
-  // OrbitControls looks at its target; put it straight ahead.
-  controls.target.set(parallaxCamera.x, parallaxCamera.y, -parallaxCamera.z - 10)
+  // OrbitControls looks at its target; put it ahead, where the parallax camera looks.
+  const { forward } = viewBasis({ yaw, pitch })
+  controls.target.set(parallaxCamera.x + forward.x * 10, parallaxCamera.y + forward.y * 10, -parallaxCamera.z - forward.z * 10)
   controls.update()
   draw()
 }

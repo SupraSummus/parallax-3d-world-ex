@@ -18,9 +18,10 @@ pnpm exec vitest -t "cache"     # filter by test name
 | `src/lib/world.test.ts` | Toy world types: determinism, bounds |
 | `src/lib/forest.test.ts` | Forest: determinism, coverage, voxel budget, tree heights in metres, clear spawn |
 | `src/viewer/mesh.test.ts` | Reference viewer mesh: face culling, coordinates, winding, shading |
-| `src/lib/renderer.test.ts` | Layer and chunk contents, culling to the view, baking directions, frame order and fog, perspective/parallax placement, cache reuse and invalidation, stats (on a small world: the forest is slow in jsdom) |
+| `src/lib/view.test.ts` | Camera basis, projection against screen rays, culling bounds, turning stops at the slices' reach |
+| `src/lib/renderer.test.ts` | Layer and chunk contents, culling to the view, baking directions, frame order and fog, perspective/parallax placement (straight ahead and turned), cache reuse and invalidation, stats (on a small world: the forest is slow in jsdom) |
 | `src/lib/renderer-regressions.test.ts` | Previously fixed rendering bugs, checked on chunk pixels and their placement |
-| `src/App.test.tsx` | UI panels and keyboard movement (with a stub forest, for speed) |
+| `src/App.test.tsx` | UI panels, keyboard movement and turning (with a stub forest, for speed) |
 
 `src/test-setup.ts` stubs what jsdom lacks: a no-op 2D canvas context
 (no WebGL, so `compositor.ts` is only checked in the browser),
