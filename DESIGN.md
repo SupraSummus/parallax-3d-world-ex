@@ -142,7 +142,8 @@ width `chunkWidth(s)` = 16·s: chunk (x0, y0) is the cell
 centre plane, x0 and y0 multiples of w (NAPOT again). A chunk is a
 16s × 16s × s block; since a slice's size is about its distance / detail,
 every chunk covers about the same part of the screen. Only chunks whose
-cell reaches the screen are rasterised, and empty ones are not shown.
+cell reaches the screen are rasterised; empty ones are cached too, so
+their cells are not searched again, but not shown.
 
 **Directed baking.** Chunk (x0, y0) is baked as the parallel projection of
 its slice along (τx, τy, 1), the grid direction nearest to the ray through
