@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { FACES, faceTangents, onScreen, projector, screenBox, screenRay, toLocal, viewBasis, type Face, type View } from './view'
+import { FACES, LAYER, faceTangents, inFace, onScreen, projector, screenBox, screenRay, toLocal, viewBasis, type Face, type View } from './view'
 import type { Vec3 } from './world'
 
 /** Seeded uniform samples in [lo, hi), so failures reproduce. */
@@ -15,6 +15,9 @@ const dot = (a: Vec3, b: Vec3) => a.x * b.x + a.y * b.y + a.z * b.z
 const cross = (a: Vec3, b: Vec3): Vec3 => ({ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x })
 const view = (yaw: number, pitch: number, focal = 400): View => ({ orientation: { yaw, pitch }, width: 800, height: 600, focal })
 const face = (name: string) => FACES.find(f => f.name === name) as Face
+// Not a face of the renderer: face coordinates are world coordinates.
+const axes = { right: { x: 1, y: 0, z: 0 }, up: { x: 0, y: 1, z: 0 }, forward: { x: 0, y: 0, z: 1 } }
+const identity: Face = { name: 'world', ...axes, lattice: axes }
 
 describe('viewBasis', () => {
   it('is orthonormal, keeps right level, and turns right and up for positive yaw and pitch', () => {
@@ -34,10 +37,29 @@ describe('viewBasis', () => {
 
 describe('FACES', () => {
   // A mirrored face would draw its world mirrored.
-  it('are rotations, one looking along each axis', () => {
-    for (const { right, up, forward } of FACES) expect(dot(cross(right, up), forward)).toBe(1)
-    const forwards = FACES.map(({ forward: { x, y, z } }) => `${String(x)},${String(y)},${String(z)}`)
-    expect(new Set(forwards).size).toBe(6)
+  it('are rotations, one looking at each nearest neighbour, with integer lattice axes', () => {
+    for (const { right, up, forward, lattice } of FACES) {
+      expect(dot(cross(right, up), forward)).toBeCloseTo(1)
+      for (const [unit, int, scale] of [[right, lattice.right, LAYER], [up, lattice.up, 1], [forward, lattice.forward, LAYER]] as const) {
+        for (const k of ['x', 'y', 'z'] as const) {
+          expect(Number.isInteger(int[k])).toBe(true)
+          expect(unit[k]).toBeCloseTo(int[k] * scale)
+        }
+      }
+    }
+    const forwards = FACES.map(({ lattice: { forward: { x, y, z } } }) => `${String(x)},${String(y)},${String(z)}`)
+    expect(new Set(forwards).size).toBe(12)
+  })
+
+  // Each ray belongs to the face whose axis is nearest; inFace must agree.
+  it('share out the rays: each is in the face of the nearest axis', () => {
+    const random = sampler(4)
+    for (let i = 0; i < 1000; i++) {
+      const ray = { x: random(-1, 1), y: random(-1, 1), z: random(-1, 1) }
+      const nearest = FACES.reduce((best, f) => (dot(ray, f.forward) > dot(ray, best.forward) ? f : best))
+      const owners = FACES.filter(f => { const p = toLocal(f, ray); return inFace(p.x, p.y, p.z) })
+      expect(owners).toEqual([nearest])
+    }
   })
 })
 
@@ -46,7 +68,7 @@ describe('projector', () => {
     const random = sampler(2)
     for (let i = 0; i < 100; i++) {
       const v = view(random(-180, 180), random(-90, 90))
-      const f = FACES[Math.floor(random(0, 6))]
+      const f = FACES[Math.floor(random(0, 12))]
       const [sx, sy] = [random(0, 800), random(0, 600)]
       const ray = screenRay(v, f, sx, sy)
       const d = random(0.5, 100)
@@ -58,22 +80,21 @@ describe('projector', () => {
 })
 
 describe('faceTangents', () => {
-  it('is the screen edges over the focal length straight ahead, and nothing of the other faces', () => {
-    expect(faceTangents(view(0, 0), face('+z'))).toEqual({ minX: -1, maxX: 1, minY: -0.75, maxY: 0.75 })
-    // ±x only touch the screen's side edges.
-    for (const f of FACES.slice(1)) expect(faceTangents(view(0, 0), f)).toBeNull()
+  it("is the screen within the face's rhombus, and nothing of faces behind", () => {
+    // Looking along +x+z: the screen reaches past the face's rays at its sides.
+    const t = faceTangents(view(45, 0), face('+x+z'))
+    expect(t?.minX).toBeCloseTo(-1)
+    expect(t?.maxX).toBeCloseTo(1)
+    expect(t?.maxY).toBeCloseTo(LAYER)
+    expect(faceTangents(view(45, 0), face('-x-z'))).toBeNull()
   })
 
-  // Each ray belongs to the face of its largest component; that face must search where the ray lands.
   it('covers every ray on screen by the face it belongs to', () => {
     const random = sampler(3)
     for (let i = 0; i < 300; i++) {
       const v = view(random(-180, 180), random(-90, 90), random(150, 1000))
-      const world = screenRay(v, FACES[0], random(0, 800), random(0, 600))
-      const f = FACES.find(candidate => {
-        const local = toLocal(candidate, world)
-        return local.z >= Math.abs(local.x) && local.z >= Math.abs(local.y)
-      }) as Face
+      const world = screenRay(v, identity, random(0, 800), random(0, 600))
+      const f = FACES.find(candidate => { const p = toLocal(candidate, world); return inFace(p.x, p.y, p.z) }) as Face
       const ray = toLocal(f, world)
       const t = faceTangents(v, f)
       expect(t).not.toBeNull()
@@ -88,7 +109,7 @@ describe('faceTangents', () => {
 
 describe('screenBox', () => {
   const visible = (v: View, left: number, right: number, bottom: number, top: number, distance: number) =>
-    onScreen(v, screenBox(v, FACES[0])(left, right, bottom, top, distance))
+    onScreen(v, screenBox(v, identity)(left, right, bottom, top, distance))
 
   it('shows a rectangle around the view direction, not one to the side or behind', () => {
     // The view direction meets z = 10 at about (1.76, -1.79).

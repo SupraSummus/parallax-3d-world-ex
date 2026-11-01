@@ -1,9 +1,10 @@
 /**
- * Slice selection: decides which z-slices of the world the camera renders,
- * how they are split into chunks, and along which direction each chunk is
- * baked. Voxels are rhombic dodecahedra on the FCC lattice (fcc.ts): voxel
- * (x, y, z) reaches from z − 1 to z + 1, so a slice of `size` layers is
- * size + 1 thick, and neighbouring slices interlock.
+ * Slice selection: decides which slices of a face's layers (view.ts) the
+ * camera renders, how they are split into chunks, and along which
+ * direction each chunk is baked. Depths count layers, LAYER apart. A voxel
+ * (a rhombic dodecahedron, fcc.ts) in layer c reaches from layer c − 1 to
+ * c + 1, so a slice of `size` layers is size + 1 thick, and neighbouring
+ * slices interlock.
  *
  * Constraints (see DESIGN.md for the derivation and worked examples):
  *
@@ -23,38 +24,44 @@
  * not thicker than the occlusion limit. Thinner is always allowed, so
  * alignment never breaks the occlusion bound.
  *
- * Slices are split in x and y into aligned square chunks (chunkWidth), and
+ * Slices are split in x and y into aligned chunks (chunkCell), and
  * each chunk is baked as a parallel projection along a direction from a
  * power-of-two grid (directionStep) close to the camera's view of it. The
  * smaller the angle between that direction and the actual rays, the
  * thicker slices may be.
  */
+import { LAYER } from './view'
 
 export interface SliceBoundary {
-  /** First integer z of the slice (absolute, camera-independent). */
+  /** First layer of the slice (absolute, camera-independent). */
   depth: number
-  /** Number of layers: the slice holds voxels with z in [depth, depth + size), and reaches from depth − 1 to depth + size. */
+  /** Number of layers: the slice holds voxels of layers [depth, depth + size), and reaches from depth − 1 to depth + size. */
   size: number
 }
 
 const MAX_SIZE = 64
-/** C: a chunk is a C·s × C·s × s block. */
+/** C: a chunk spans at most C · size layer spacings across. */
 const CHUNK_WIDTH_PER_SIZE = 16
 
 /**
- * Width (in x and y) of the aligned chunks a slice of `size` is split into:
- * chunk (x0, y0) holds voxels with x in [x0, x0 + width), y likewise, and
- * x0, y0 are multiples of width. A slice's size s is at most its distance
- * / detail, so a chunk spans at most C / detail radians on screen.
+ * The aligned cells a slice of `size` is split into, in lattice units of
+ * its face (view.ts): chunk (i, j) holds the voxels with a in
+ * [i · columns, (i + 1) · columns) and b in [j · rows, (j + 1) · rows), and
+ * draws [i · width, (i + 1) · width) × [j · height, (j + 1) · height) of the
+ * plane, in face coordinates: 16 · size layer spacings (11.3 · size) by
+ * 8 · size. A slice's thickness, (size + 1) layer spacings, is at most its
+ * distance / detail, so a chunk spans at most C / detail radians on screen.
  */
-export function chunkWidth(size: number): number {
-  return CHUNK_WIDTH_PER_SIZE * size
+export function chunkCell(size: number): { columns: number; rows: number; width: number; height: number } {
+  const columns = CHUNK_WIDTH_PER_SIZE * size
+  const rows = (CHUNK_WIDTH_PER_SIZE / 2) * size
+  return { columns, rows, width: columns * LAYER, height: rows }
 }
 
 /**
  * The largest angle error (as a tangent) between a ray and the direction its
  * chunk is baked along, given the focal length in pixels, the largest
- * tangent of a ray the slices are drawn for (1 for a cube face) and the
+ * tangent of a ray the slices are drawn for (1 for a face, see inFace) and the
  * leak tolerance ε in pixels.
  *
  * A slice [a, a + s] drawn at its centre misplaces an edge seen at tangent
@@ -106,9 +113,9 @@ export function nearestDirection(tangent: number, step: number): number {
   return Math.round(tangent / step) * step
 }
 
-/** z of a slice's centre plane, the plane its chunks are baked onto and drawn at. */
+/** z (face coordinates) of a slice's centre plane, the plane its chunks are baked onto and drawn at. */
 export function sliceCentre({ depth, size }: SliceBoundary): number {
-  return depth + (size - 1) / 2
+  return (depth + (size - 1) / 2) * LAYER
 }
 
 /**
@@ -137,10 +144,10 @@ export function getSliceAtDepth(depth: number, minSize: number): SliceBoundary {
 }
 
 /**
- * Contiguous slices covering voxels with z from cameraZ + minRelativeDepth
- * to cameraZ + maxRelativeDepth, sorted near to far. No slice is thicker
- * (size + 1) than max(2, a / detail), where a is the distance to its near
- * side (depth - 1, the near tips of its first layer's voxels).
+ * Contiguous slices covering layers from cameraZ + minRelativeDepth to
+ * cameraZ + maxRelativeDepth, sorted near to far; all in layers. No slice
+ * is thicker (size + 1) than max(2, a / detail), where a is the distance to
+ * its near side (depth - 1, the near tips of its first layer's voxels).
  */
 export function selectSlices(
   cameraZ: number,

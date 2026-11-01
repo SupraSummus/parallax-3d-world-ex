@@ -34,7 +34,7 @@ src/
     ├── city.ts              # City scene generator: streets, buildings, maze of rooms
     ├── noise.ts             # Seeded hash, value noise and PRNG for the generators
     ├── slice-selection.ts   # Slices, chunks and baking directions (pure functions)
-    ├── view.ts              # Camera orientation, cube faces, projection
+    ├── view.ts              # Camera orientation, the 12 faces (FCC directions), projection
     ├── renderer.ts          # Slices and chunks in view, caching, screen placement (no DOM)
     ├── occlusion.ts         # Which screen cells nearer layers cover, to skip chunks behind them
     ├── chunk-baker.ts       # Bakes whole chunks; the bake worker's message protocol

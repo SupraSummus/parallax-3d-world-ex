@@ -1,12 +1,25 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { ParallaxRenderer, DEFAULT_RENDER_DISTANCE, type Chunk, type Frame } from './renderer'
 import { World } from './world'
-import { selectSlices, leakFreeDetail, chunkWidth, directionStep } from './slice-selection'
-import { projector, toLocal, viewBasis } from './view'
+import { selectSlices, leakFreeDetail, chunkCell, directionStep, nearestDirection, sliceCentre } from './slice-selection'
+import { FACES, LAYER, faceTangents, focalLength, inFace, projector, toLocal, viewBasis, type Face, type Orientation } from './view'
+import type { Vec3 } from './world'
 
 // A small world with trees: rasterising the forest (~700k voxels) in jsdom
 // takes seconds per test. The renderer never modifies its world.
 const world = new World(12345, 'hills_with_trees')
+
+const faceNamed = (name: string) => FACES.find(f => f.name === name) as Face
+// Looking along +x+z (yaw 45°), that face's layers are parallel to the
+// screen, as a cube face's were looking straight at it.
+const ALONG = faceNamed('+x+z')
+
+/** The slices the renderer should show, face by face (in FACES order), near to far, for a 800 × 600 view. */
+function expectedSlices(camera: Vec3, orientation: Orientation, detail: number, distance = DEFAULT_RENDER_DISTANCE) {
+  const view = { orientation, width: 800, height: 600, focal: focalLength(90, 800, 600) }
+  return FACES.filter(face => faceTangents(view, face)).flatMap(face =>
+    selectSlices(toLocal(face, camera).z / LAYER, 2 / LAYER, distance / LAYER, detail).map(s => ({ face: face.name, ...s })))
+}
 
 describe('ParallaxRenderer', () => {
   let renderer: ParallaxRenderer
@@ -68,11 +81,12 @@ describe('ParallaxRenderer', () => {
   })
 
   describe('layers', () => {
-    it('renders one layer per selected slice, near to far', () => {
+    it('renders one layer per selected slice, face by face, near to far', () => {
       render()
-      const camera = renderer.getCamera()
-      const expected = selectSlices(camera.z, 2, DEFAULT_RENDER_DISTANCE, renderer.getDetail())
-      expect(renderer.getLayers().map(l => ({ depth: l.depth, size: l.size }))).toEqual(expected)
+      const expected = expectedSlices(renderer.getCamera(), renderer.getOrientation(), renderer.getDetail())
+      // Looking along a world axis, four faces meet in the middle of the screen.
+      expect(new Set(expected.map(s => s.face)).size).toBeGreaterThanOrEqual(4)
+      expect(renderer.getLayers().map(l => ({ face: l.face, depth: l.depth, size: l.size }))).toEqual(expected)
       expect(lastUpdate().layerCount).toBe(expected.length)
     })
 
@@ -81,7 +95,11 @@ describe('ParallaxRenderer', () => {
       const layers = renderer.getLayers()
       expect(layers.some(l => l.voxelCount > 0)).toBe(true)
       for (const layer of layers) {
-        const inSlice = world.voxels.filter(v => v.z >= layer.depth && v.z < layer.depth + layer.size)
+        const { forward } = faceNamed(layer.face).lattice
+        const inSlice = world.voxels.filter(v => {
+          const c = v.x * forward.x + v.y * forward.y + v.z * forward.z
+          return c >= layer.depth && c < layer.depth + layer.size
+        })
         expect(layer.voxelCount).toBe(inSlice.length)
       }
     })
@@ -91,47 +109,46 @@ describe('ParallaxRenderer', () => {
       const chunks = allChunks()
       expect(chunks.length).toBeGreaterThan(10)
       for (const layer of renderer.getLayers()) {
-        const w = chunkWidth(layer.size)
+        const { width: w, height: h } = chunkCell(layer.size)
         for (const chunk of layer.chunks) {
-          expect(Math.abs(chunk.x % w)).toBe(0)
-          expect(Math.abs(chunk.y % w)).toBe(0)
+          expect(Number.isInteger(chunk.i) && Number.isInteger(chunk.j)).toBe(true)
           expect(chunk.facesDrawn).toBeGreaterThan(0)
           // Sizes are rounded up to whole pixels.
           const slack = 1 / chunk.scale
-          expect(chunk.originX).toBeGreaterThanOrEqual(chunk.x - 0.5)
-          expect(chunk.originX + chunk.width / chunk.scale).toBeLessThanOrEqual(chunk.x + w - 0.5 + slack)
-          expect(chunk.originY).toBeLessThanOrEqual(chunk.y + w - 0.5)
-          expect(chunk.originY - chunk.height / chunk.scale).toBeGreaterThanOrEqual(chunk.y - 0.5 - slack)
+          expect(chunk.originX).toBeGreaterThanOrEqual(chunk.i * w)
+          expect(chunk.originX + chunk.width / chunk.scale).toBeLessThanOrEqual((chunk.i + 1) * w + slack)
+          expect(chunk.originY).toBeLessThanOrEqual((chunk.j + 1) * h)
+          expect(chunk.originY - chunk.height / chunk.scale).toBeGreaterThanOrEqual(chunk.j * h - slack)
         }
       }
       expect(lastUpdate().voxelsRendered).toBeGreaterThanOrEqual(chunks.reduce((n, c) => n + c.facesDrawn, 0))
     })
 
-    it('bakes each chunk along the grid direction nearest to the ray through its centre, within 45°', () => {
+    it("bakes each chunk along the grid direction nearest to the ray through its centre, among the face's rays", () => {
       render()
       const step = directionStep(renderer.getDetail())
-      const camera = renderer.getCamera()
-      let oblique = 0
+      let [oblique, onGrid] = [0, 0]
       for (const layer of renderer.getLayers()) {
-        const w = chunkWidth(layer.size)
-        const distance = layer.depth + (layer.size - 1) / 2 - camera.z
+        const { width: w, height: h } = chunkCell(layer.size)
+        const camera = toLocal(faceNamed(layer.face), renderer.getCamera())
+        const distance = sliceCentre(layer) - camera.z
         for (const chunk of layer.chunks) {
-          const clamp = (t: number) => Math.max(-1, Math.min(1, t))
-          const tanX = clamp((chunk.x + w / 2 - 0.5 - camera.x) / distance)
-          const tanY = clamp((chunk.y + w / 2 - 0.5 - camera.y) / distance)
-          expect(Math.abs(chunk.tanX - tanX)).toBeLessThanOrEqual(step / 2 + 1e-9)
-          expect(Math.abs(chunk.tanY - tanY)).toBeLessThanOrEqual(step / 2 + 1e-9)
-          expect(Number.isInteger(chunk.tanX / step) && Number.isInteger(chunk.tanY / step)).toBe(true)
-          expect(Math.max(Math.abs(chunk.tanX), Math.abs(chunk.tanY))).toBeLessThanOrEqual(1)
+          expect(inFace(chunk.tanX, chunk.tanY, 1 + 1e-9)).toBe(true)
+          const nearest = [((chunk.i + 0.5) * w - camera.x) / distance, ((chunk.j + 0.5) * h - camera.y) / distance].map(t => nearestDirection(t, step))
+          if (inFace(nearest[0], nearest[1], 1)) {
+            expect([chunk.tanX, chunk.tanY]).toEqual(nearest)
+            onGrid++
+          }
           if (chunk.tanX !== 0 || chunk.tanY !== 0) oblique++
         }
       }
       expect(oblique).toBeGreaterThan(0)
+      expect(onGrid).toBeGreaterThan(0)
     })
 
     it('rasterises fewer pixels for farther, thicker slices', () => {
       render()
-      const scales = renderer.getLayers().filter(l => l.chunks.length > 0).map(l => l.chunks[0].scale)
+      const scales = renderer.getLayers().filter(l => l.face === '+x+z' && l.chunks.length > 0).map(l => l.chunks[0].scale)
       expect(scales).toEqual([...scales].sort((a, b) => b - a))
       expect(scales[0]).toBeGreaterThan(scales[scales.length - 1])
     })
@@ -179,14 +196,17 @@ describe('ParallaxRenderer', () => {
   })
 
   describe('compositing', () => {
-    /** First chunk of every layer with chunks in view, near to far. */
-    const firstChunks = () => renderer.getLayers().flatMap(l => l.chunks.slice(0, 1).map(chunk => ({ layer: l, chunk })))
+    /** First chunk of every layer of the face looked along with chunks in view, near to far. */
+    const firstChunks = () => renderer.getLayers().filter(l => l.face === ALONG.name)
+      .flatMap(l => l.chunks.slice(0, 1).map(chunk => ({ layer: l, chunk })))
 
-    /** Screen pixels per world unit on a chunk's plane, at its top-left corner, looking straight ahead. */
+    /** Screen pixels per unit on a chunk's plane, at its top-left corner, looking along its face. */
     const pixelsPerUnit = (chunk: Chunk) => screenOf(chunk, chunk.originX + 1, chunk.originY).x - screenOf(chunk, chunk.originX, chunk.originY).x
 
     beforeEach(() => {
-      renderer.setCamera({ x: 0, y: 30, z: -60 })
+      // Looking along +x+z at the middle of the world, 60 away.
+      renderer.setCamera({ x: -42, y: 30, z: -42 })
+      renderer.setOrientation({ yaw: 45, pitch: 0 })
       // Near layers hide most of the view; keep chunks of many layers to compare.
       renderer.setSkipCovered(false)
     })
@@ -201,7 +221,7 @@ describe('ParallaxRenderer', () => {
     it.each([[0, 0], [10, -10], [135, 30]])('projects the point the camera looks at (yaw %s°, pitch %s°) to the viewport centre on every chunk', (yaw, pitch) => {
       renderer.setOrientation({ yaw, pitch })
       render()
-      if (yaw !== 0) expect(new Set(frame.layers.map(l => l.face)).size).toBeGreaterThan(1)
+      expect(new Set(frame.layers.map(l => l.face)).size).toBeGreaterThan(1)
       for (const { face, distance, placements } of frame.layers) {
         // Where the view direction meets the layer's plane, in the face's coordinates.
         const forward = toLocal(face, viewBasis({ yaw, pitch }).forward)
@@ -217,7 +237,9 @@ describe('ParallaxRenderer', () => {
     it('moves nearer layers further on sideways camera movement (parallax)', () => {
       render()
       const tracked = firstChunks().map(({ chunk }) => ({ chunk, before: screenOf(chunk, 0, 0).x }))
-      renderer.setCamera({ x: 1 })
+      // A unit along the screen's right.
+      const { x, z } = renderer.getCamera()
+      renderer.setCamera({ x: x + ALONG.right.x, z: z + ALONG.right.z })
       render()
       const shifts = tracked.filter(t => placed().some(p => p.chunk === t.chunk)).map(t => t.before - screenOf(t.chunk, 0, 0).x)
       expect(shifts.length).toBeGreaterThan(3)
@@ -228,10 +250,8 @@ describe('ParallaxRenderer', () => {
     it.each([90, 45])('puts the longer viewport side at the edge of a %s° field of view', fov => {
       renderer.setFov(fov)
       render()
-      const camera = renderer.getCamera()
-      for (const { layer, chunk } of firstChunks()) {
-        const distance = layer.depth + (layer.size - 1) / 2 - camera.z
-        const focalLength = pixelsPerUnit(chunk) * distance
+      for (const { chunk } of firstChunks()) {
+        const focalLength = pixelsPerUnit(chunk) * placementOf(chunk).distance
         expect(focalLength).toBeCloseTo(400 / Math.tan((fov * Math.PI) / 360))
       }
     })
@@ -243,21 +263,24 @@ describe('ParallaxRenderer', () => {
       renderer.resize(600, 800)
       render()
       expect(renderer.getLayers().map(l => [l.depth, l.size])).toEqual(slices)
-      for (const chunk of allChunks()) {
-        const { x, y } = screenOf(chunk, 0, 30)
+      // Straight ahead, on the face looked along.
+      const ahead = toLocal(ALONG, renderer.getCamera())
+      for (const { chunk } of firstChunks()) {
+        const { x, y } = screenOf(chunk, ahead.x, ahead.y)
         expect(x).toBeCloseTo(300)
         expect(y).toBeCloseTo(400)
       }
     })
 
     it('draws nothing for empty slices and fogs farther slices more', () => {
-      renderer.setCamera({ z: -140 })
+      // Outside the world.
+      renderer.setCamera({ x: -120, z: -120 })
       render()
       const layers = renderer.getLayers()
       expect(layers.some(l => l.voxelCount === 0 && l.chunks.length === 0)).toBe(true)
 
-      const fogs = frame.layers.map(l => l.fog)
-      expect(fogs).toHaveLength(layers.length)
+      const fogs = frame.layers.filter(l => l.face === ALONG).map(l => l.fog)
+      expect(frame.layers).toHaveLength(layers.length)
       expect(fogs[0]).toBeGreaterThan(0)
       expect(fogs).toEqual([...fogs].sort((a, b) => a - b))
       // The sky, behind every slice, is fogged most.
@@ -297,12 +320,15 @@ describe('ParallaxRenderer', () => {
     })
 
     it('keeps the slices when turning, rasterising only chunks that come into view', () => {
+      const slicesOf = (face: string) => renderer.getLayers().filter(l => l.face === face).map(l => [l.depth, l.size])
       render()
-      const slices = renderer.getLayers().map(l => [l.depth, l.size])
+      const before = new Map(FACES.map(f => [f.name, slicesOf(f.name)]))
       const chunks = new Set(allChunks())
       renderer.setOrientation({ yaw: 10, pitch: 5 })
       render()
-      expect(renderer.getLayers().filter(l => l.face === '+z').map(l => [l.depth, l.size])).toEqual(slices)
+      const kept = FACES.filter(f => slicesOf(f.name).length > 0 && (before.get(f.name)?.length ?? 0) > 0)
+      expect(kept.length).toBeGreaterThan(1)
+      for (const f of kept) expect(slicesOf(f.name)).toEqual(before.get(f.name))
       expect(lastUpdate().chunksReused).toBeGreaterThan(lastUpdate().chunksRegenerated)
       expect(allChunks().filter(c => !chunks.has(c))).toHaveLength(lastUpdate().chunksRegenerated)
       renderer.setOrientation({ yaw: 0, pitch: 0 })
@@ -339,7 +365,7 @@ describe('ParallaxRenderer', () => {
       render()
       expect(lastUpdate().detail).toBeLessThan(strict.detail)
       expect(lastUpdate().layerCount).toBeLessThan(strict.layerCount)
-      expect(lastUpdate().layerCount).toBe(selectSlices(world.spawn.z, 2, DEFAULT_RENDER_DISTANCE, lastUpdate().detail).length)
+      expect(lastUpdate().layerCount).toBe(expectedSlices(world.spawn, renderer.getOrientation(), lastUpdate().detail).length)
     })
   })
 
@@ -349,22 +375,27 @@ describe('ParallaxRenderer', () => {
       render()
       const camera = renderer.getCamera()
       const layers = renderer.getLayers()
-      expect(layers.map(l => ({ depth: l.depth, size: l.size })))
-        .toEqual(selectSlices(camera.z, 2, 50, renderer.getDetail()))
-      const last = layers[layers.length - 1]
-      expect(last.depth + last.size).toBeGreaterThanOrEqual(camera.z + 50)
-      expect(last.depth).toBeLessThan(camera.z + 50)
+      expect(layers.map(l => ({ face: l.face, depth: l.depth, size: l.size })))
+        .toEqual(expectedSlices(camera, renderer.getOrientation(), renderer.getDetail(), 50))
+      for (const face of FACES) {
+        const last = layers.filter(l => l.face === face.name).pop()
+        if (!last) continue
+        const end = (toLocal(face, camera).z + 50) / LAYER
+        expect(last.depth + last.size).toBeGreaterThanOrEqual(end)
+        expect(last.depth).toBeLessThan(end)
+      }
     })
   })
 
   describe('orientation', () => {
-    it('looks all around: behind the camera with the -z face, straight up with +y', () => {
+    it('looks all around, each way with the face of the nearest neighbour direction', () => {
       // In the middle of the world, so there is something in every direction.
       renderer.setCamera({ x: 0, y: 16, z: 0 })
-      for (const [yaw, pitch, face] of [[180, 0, '-z'], [0, 90, '+y'], [-90, 0, '-x']] as const) {
+      // A narrow view straight at a face shows no other.
+      renderer.setFov(30)
+      for (const [yaw, pitch, face] of [[-135, 0, '-x-z'], [0, 45, '+y+z'], [90, -45, '+x-y']] as const) {
         renderer.setOrientation({ yaw, pitch })
         render()
-        // A 90° view straight at a face shows no other.
         expect(new Set(renderer.getLayers().map(l => l.face))).toEqual(new Set([face]))
         expect(lastUpdate().chunkCount).toBeGreaterThan(0)
       }

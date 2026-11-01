@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { FACES, toLocal } from './view'
+import { FACES } from './view'
 import { VoxelGrid, faceReader, isSite } from './voxel-grid'
 import { World } from './world'
 
@@ -31,33 +31,37 @@ describe('VoxelGrid', () => {
   })
 })
 
+const dot = (p: { x: number; y: number; z: number }, v: { x: number; y: number; z: number }) => p.x * v.x + p.y * v.y + p.z * v.z
+
 describe('faceReader', () => {
-  it("reads every voxel at its face coordinates, within the face's bounds", () => {
+  it("reads every voxel at its lattice coordinates, within the face's bounds", () => {
     for (const face of FACES) {
-      const { min, max, at } = faceReader(grid, face)
+      const { min, max, at } = faceReader(grid, face.lattice)
+      const { right, up, forward } = face.lattice
       const misplaced = voxels.filter(v => {
-        const { x, y, z } = toLocal(face, v)
-        const inside = x >= min.x && x <= max.x && y >= min.y && y <= max.y && z >= min.z && z <= max.z
-        return !inside || at(x, y, z) !== grid.get(v.x, v.y, v.z)
+        const [a, b, c] = [dot(v, right), dot(v, up), dot(v, forward)]
+        const inside = a >= min.x && a <= max.x && b >= min.y && b <= max.y && c >= min.z && c <= max.z
+        return !inside || at(a, b, c) !== grid.get(v.x, v.y, v.z)
       })
       expect(misplaced).toEqual([])
     }
   })
 
   it('reads empty outside the grid and off the lattice', () => {
-    const { min, at } = faceReader(grid, FACES[0])
+    const { min, at } = faceReader(grid, FACES[0].lattice)
     expect(at(min.x - 2, min.y, min.z)).toBe(0)
+    const { right, up, forward } = FACES[0].lattice
     const v = voxels[0]
-    expect(at(v.x + 1, v.y, v.z)).toBe(0)
+    expect(at(dot(v, right) + 1, dot(v, up), dot(v, forward))).toBe(0)
   })
 })
 
 describe('countAlong', () => {
-  it('counts the voxels of a face slice', () => {
+  it('counts the voxels of a slice of layers', () => {
     for (const face of FACES) {
       for (const [from, to] of [[-3, 5], [0, 64], [-100, -40]]) {
-        const inSlice = voxels.filter(v => { const z = toLocal(face, v).z; return z >= from && z < to })
-        expect(grid.countAlong(face.forward, from, to)).toBe(inSlice.length)
+        const inSlice = voxels.filter(v => { const c = dot(v, face.lattice.forward); return c >= from && c < to })
+        expect(grid.countAlong(face.lattice.forward, from, to)).toBe(inSlice.length)
       }
     }
   })

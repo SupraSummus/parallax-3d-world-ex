@@ -10,10 +10,9 @@ const SKY_TOP_TANGENT = 0.625
 
 // One rectangle per chunk on its layer's plane, projected like
 // projector() in view.ts; `view` has the camera's axes as columns, in the
-// layer's face coordinates; `position` is the camera-relative point on the
-// plane. The corners come from gl_VertexID, so there are no vertex
-// buffers. The sky covers the screen; `ray` is each pixel's world
-// direction.
+// layer's face coordinates (the world's for the sky). The corners come
+// from gl_VertexID, so there are no vertex buffers. The sky covers the
+// screen.
 const VERTEX_SHADER = `#version 300 es
 uniform vec2 viewport;
 uniform float focal;
@@ -23,45 +22,44 @@ uniform float distance;
 uniform float depth;
 uniform bool sky;
 out vec2 uv;
-out vec3 ray;
-out vec3 position;
 void main() {
   uv = vec2(gl_VertexID & 1, gl_VertexID >> 1);
-  vec2 half_viewport = viewport / 2.0;
   if (sky) {
-    vec2 ndc = vec2(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-    ray = view * vec3(ndc * half_viewport / focal, 1.0);
-    gl_Position = vec4(ndc, depth, 1.0);
+    gl_Position = vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
     return;
   }
-  position = vec3(rect.x + uv.x * rect.z, rect.y - uv.y * rect.w, distance);
-  vec3 p = transpose(view) * position;
+  vec3 p = transpose(view) * vec3(rect.x + uv.x * rect.z, rect.y - uv.y * rect.w, distance);
   // Homogeneous, so the GPU clips what is behind the camera and interpolates in perspective.
-  gl_Position = vec4(p.xy * focal / half_viewport, depth * p.z, p.z);
+  gl_Position = vec4(p.xy * focal / (viewport / 2.0), depth * p.z, p.z);
 }`
 
-// A face draws only its own rays, within 45° of its axis: the faces tile
-// the screen. Chunk pixels are opaque or empty, so nothing is blended:
-// empty pixels are discarded and the depth test hides what nearer layers
-// cover. The sky is one more rectangle, behind every layer.
+// `ray` is the pixel's direction in face coordinates, the same for every
+// layer of a face. A face draws only its own rays (inFace in view.ts), so
+// the faces tile the screen; they overlap by a hair, so rounding never
+// leaves a seam pixel to neither. Chunk pixels are opaque or empty, so
+// nothing is blended: empty pixels are discarded and the depth test hides
+// what nearer layers cover. The sky is one more rectangle, behind every layer.
 const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
+uniform vec2 viewport;
+uniform vec2 resolution; // the canvas in device pixels
+uniform float focal;
+uniform mat3 view;
 uniform sampler2D image;
 uniform vec3 skyTop;
 uniform vec3 horizon;
 uniform float fog;
 uniform bool sky;
 in vec2 uv;
-in vec3 ray;
-in vec3 position;
 out vec4 color;
 void main() {
+  vec3 ray = view * vec3((gl_FragCoord.xy / resolution - 0.5) * viewport / focal, 1.0);
   vec3 rgb;
   if (sky) {
     float elevation = ray.y / length(ray.xz);
     rgb = mix(horizon, skyTop, clamp(elevation / ${String(SKY_TOP_TANGENT)}, 0.0, 1.0));
   } else {
-    if (max(abs(position.x), abs(position.y)) > position.z) discard;
+    if (abs(ray.x) + sqrt(2.0) * abs(ray.y) > ray.z * 1.001) discard;
     vec4 texel = texture(image, uv);
     // Smoothing a minified chunk blends in its empty pixels; keep only the mostly opaque.
     if (texel.a < 0.5) discard;
@@ -72,7 +70,7 @@ void main() {
 
 const rgb = (hex: string) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255) as [number, number, number]
 
-const UNIFORMS = ['viewport', 'focal', 'view', 'rect', 'distance', 'depth', 'skyTop', 'horizon', 'fog', 'sky'] as const
+const UNIFORMS = ['viewport', 'resolution', 'focal', 'view', 'rect', 'distance', 'depth', 'skyTop', 'horizon', 'fog', 'sky'] as const
 type Uniform = (typeof UNIFORMS)[number]
 
 /**
@@ -123,6 +121,7 @@ export class Compositor {
     // The sky covers every pixel, so only depth needs clearing.
     gl.clear(gl.DEPTH_BUFFER_BIT)
     gl.uniform2f(u.viewport, frame.width, frame.height)
+    gl.uniform2f(u.resolution, width, height)
     gl.uniform1f(u.focal, frame.focal)
     // Columns: the camera's right, up and forward axes.
     const setView = ({ right, up, forward }: Basis) => {

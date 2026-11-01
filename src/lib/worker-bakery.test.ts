@@ -44,8 +44,8 @@ class RecordingBakery extends WorkerBakery {
   }
 }
 
-/** A chunk's cell: its slice and corner. */
-const cell = ({ depth, size, x, y }: ChunkRequest) => [depth, size, x, y].join()
+/** A chunk's cell: its face, slice and position. */
+const cell = ({ face, depth, size, i, j }: ChunkRequest) => [face, depth, size, i, j].join()
 
 const pending = (renderer: ParallaxRenderer) => renderer.getStats().lastUpdate?.chunksPending ?? 0
 
@@ -67,7 +67,7 @@ function checksum(pixels: Uint32Array): number {
 
 /** Each layer's chunks: content and where they go. */
 const shown = (frame: Frame) => frame.layers.map(l => l.placements.map(({ chunk, x, y }) =>
-  ({ cellX: chunk.x, cellY: chunk.y, tanX: chunk.tanX, tanY: chunk.tanY, pixels: checksum(chunk.pixels), x, y })))
+  ({ i: chunk.i, j: chunk.j, tanX: chunk.tanX, tanY: chunk.tanY, pixels: checksum(chunk.pixels), x, y })))
 
 /** What baking on the main thread shows. */
 function reference(camera?: Camera, from = world, orientation?: Orientation) {
@@ -88,7 +88,8 @@ describe('WorkerBakery', () => {
     expect(shown(renderer.render()).flat()).toEqual([])
     expect(shown(await settle(renderer))).toEqual(reference(camera, world, { yaw, pitch }))
     const faces = new Set(renderer.getLayers().filter(l => l.chunks.length > 0).map(l => l.face))
-    expect(faces.size).toBe(yaw === 0 ? 1 : 3)
+    // Straight along +z, four faces meet in the middle of the screen.
+    expect(faces.size).toBeGreaterThanOrEqual(yaw === 0 ? 4 : 3)
   })
 
   it("shows a cell's older bake while its new direction is baking", async () => {
@@ -99,7 +100,7 @@ describe('WorkerBakery', () => {
     const baking = shown(renderer.render())
     const target = reference(renderer.getCamera())
     const standIns = baking.flatMap((layer, i) => layer.filter(c =>
-      target[i].some(t => t.cellX === c.cellX && t.cellY === c.cellY && (t.tanX !== c.tanX || t.tanY !== c.tanY))))
+      target[i].some(t => t.i === c.i && t.j === c.j && (t.tanX !== c.tanX || t.tanY !== c.tanY))))
     expect(standIns.length).toBeGreaterThan(0)
     expect(shown(await settle(renderer))).toEqual(target)
   })
@@ -166,7 +167,7 @@ describe('WorkerBakery', () => {
 
     // Every cell in view has a bake, if only an older one.
     renderer.setSkipCovered(false)
-    const cells = (frame: Frame) => frame.layers.flatMap((l, i) => l.placements.map(({ chunk }) => `${String(i)}:${String(chunk.x)},${String(chunk.y)}`))
+    const cells = (frame: Frame) => frame.layers.flatMap((l, i) => l.placements.map(({ chunk }) => `${String(i)}:${String(chunk.i)},${String(chunk.j)}`))
     const showing = new Set(cells(renderer.render()))
     const target = new ParallaxRenderer(world)
     target.resize(800, 600)
@@ -176,7 +177,7 @@ describe('WorkerBakery', () => {
   })
 
   it('drops chunks baked from a replaced world', async () => {
-    const request = { face: '+z', depth: 0, size: 64, x: 0, y: 0, tanX: 0, tanY: 0, fillDetail: 0 }
+    const request = { face: '+x+z', depth: 0, size: 64, i: 0, j: 0, tanX: 0, tanY: 0, fillDetail: 0 }
     expect(new ChunkBaker(world.grid).bake(request).facesDrawn).toBeGreaterThan(0)
 
     const bakery = new WorkerBakery([new FakeWorker()])

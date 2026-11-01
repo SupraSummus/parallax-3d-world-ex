@@ -6,12 +6,11 @@
  * A voxel is a site's Voronoi cell, a rhombic dodecahedron: the points p
  * with |px| + |py|, |py| + |pz| and |px| + |pz| all ≤ 1 relative to the
  * site. Its 12 faces are rhombi, one towards each nearest neighbour,
- * (±1, ±1, 0) and permutations, √2 away. A voxel's volume is 2. Each
- * reaches 1 along the axes, so a layer of sites (z fixed) interlocks with
- * the layers before and after it. The world axes are the lattice's 4-fold
- * axes: turning the world to look along any of them (the cube faces of
- * view.ts) maps sites to sites, and walls and floors along them look the
- * same in every direction.
+ * (±1, ±1, 0) and permutations, √2 away. A voxel's volume is 2. The world
+ * axes are the lattice's 4-fold axes, so walls and floors along them look
+ * the same in every direction. The renderer looks along the neighbour
+ * directions instead (the faces of view.ts), where the lattice is a stack
+ * of flat layers.
  */
 
 type Triple = [number, number, number]

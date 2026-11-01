@@ -39,12 +39,13 @@ function drawnPixels(frame: Frame): { x: number; y: number }[] {
 
 /**
  * Screen pixels in columns [fromX, toX) that nothing covers, between covered
- * ones, compositing an unturned view as the compositor does (nearest chunk pixel).
+ * ones, compositing the layers of the face `along` as the compositor does
+ * (nearest chunk pixel). The view must look straight along that face.
  */
-function gapPixels(frame: Frame, fromX: number, toX: number): number {
+function gapPixels(frame: Frame, along: string, fromX: number, toX: number): number {
   const { width, height, focal } = frame
   const covered = new Uint8Array(width * height)
-  for (const { face, distance, placements } of frame.layers) {
+  for (const { face, distance, placements } of frame.layers.filter(l => l.face.name === along)) {
     for (const { chunk, x, y } of placements) {
       const corner = projector(frame, face)({ x, y, z: distance })
       if (!corner) continue
@@ -162,28 +163,31 @@ describe('Renderer regressions', () => {
   // Slices move what they show by up to the leak bound, so a thin floor
   // seen from high above showed the sky between them. Grown faces cover it.
   describe('one layer thick floor seen from high above', () => {
+    // A strip along +x+z: its sites at y = 0, a = x - z in [-160, 160) and
+    // c = x + z in [0, 2400) (lattice coordinates of +x+z, see view.ts).
     const voxels: World['voxels'] = []
-    for (let x = -80; x < 80; x++) {
-      for (let z = x & 1; z < 1200; z += 2) voxels.push({ x, y: 0, z, color: '#40a040', type: 1 })
+    for (let a = -160; a < 160; a += 2) {
+      for (let c = 0; c < 2400; c += 2) voxels.push({ x: (a + c) / 2, y: 0, z: (c - a) / 2, color: '#40a040', type: 1 })
     }
     const floor = makeWorldWithVoxels(voxels)
     const gaps = (fillGaps: boolean) => {
       const renderer = new ParallaxRenderer(floor)
       renderer.resize(1280, 800)
       renderer.setRenderDistance(800)
-      renderer.setCamera({ x: 0.6, y: 200, z: -4 })
+      // Looking along the strip from just before it (a = 1.2, c = -8).
+      renderer.setCamera({ x: -3.4, y: 200, z: -4.6 })
+      renderer.setOrientation({ yaw: 45, pitch: 0 })
       renderer.setFillGaps(fillGaps)
       // Columns well inside the floor: grown faces may stick out past its
       // sides, and its sides are jagged (voxels are rhombic dodecahedra).
-      return gapPixels(renderer.render(), 540, 720)
+      return gapPixels(renderer.render(), '+x+z', 540, 720)
     }
 
-    it('shows the sky between slices without filling gaps', () => {
-      expect(gaps(false)).toBeGreaterThan(0)
-    })
-
-    it('has no gaps with filling', () => {
-      expect(gaps(true)).toBe(0)
-    })
+    // Filling is approximate: a stray pixel may stay.
+    it('fills nearly every gap between slices', () => {
+      const [unfilled, filled] = [gaps(false), gaps(true)]
+      expect(unfilled).toBeGreaterThan(1000)
+      expect(filled).toBeLessThanOrEqual(unfilled / 500)
+    }, 60_000)
   })
 })

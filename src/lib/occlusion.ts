@@ -3,7 +3,7 @@
  * them need not be drawn. See DESIGN.md, section 4.
  */
 import type { Chunk, Placement } from './renderer'
-import { faceBasis, screenBox, type Face, type ScreenBox, type View } from './view'
+import { screenBox, screenRay, tangentBox, type Face, type ScreenBox, type TangentBox, type View } from './view'
 
 /** Side of a coverage cell, in CSS pixels. */
 const CELL = 16
@@ -14,9 +14,13 @@ const CELL = 16
 const MARGIN = 8
 
 /**
- * The screen in cells of CELL pixels, each covered or not. Conservative: a
- * cell is covered once every pixel of it shows an opaque pixel of a layer
- * drawn so far. Faces come one by one, each with its layers near to far.
+ * The screen in cells of CELL pixels, each covered or not, for the face
+ * being drawn. Each pixel shows one face (but for a hair at seams), so a
+ * face only needs its own part of a cell covered, and cells outside it
+ * count as covered. Conservative:
+ * a cell is covered once every pixel of the face's part of it shows an
+ * opaque pixel of a layer drawn so far. Faces come one by one, each with
+ * its layers near to far.
  */
 export class Coverage {
   private cols: number
@@ -26,9 +30,8 @@ export class Coverage {
   // current face could still cover it, else towards the next such cell in
   // its row (see next()).
   private open: Int32Array
-  // Per cell, for the current face: bounds of x / z and y / z of the rays
-  // through it (minX, maxX, minY, maxY), or NaN if some of them are
-  // outside the face's pyramid, where its layers are not drawn.
+  // Per cell, for the current face: bounds of x / z and y / z of the face's
+  // rays through it (minX, maxX, minY, maxY).
   private tangents: Float64Array
   private box: ReturnType<typeof screenBox> | null = null
   // Per cell, for the layer being covered: area of the plane under it
@@ -47,35 +50,35 @@ export class Coverage {
 
   /** Starts a face; its layers follow, near to far. */
   setFace(face: Face) {
-    const { view, cols, rows, tangents, open } = this
+    const { view, cols, rows, tangents, open, covered } = this
     this.box = screenBox(view, face)
-    const { right, up, forward } = faceBasis(face, view.orientation)
-    // Tangents of the rays through the cell corners, NaN outside the pyramid.
-    const tx = new Float64Array((cols + 1) * (rows + 1))
-    const ty = new Float64Array(tx.length)
-    for (let j = 0; j <= rows; j++) {
-      const b = view.height / 2 - j * CELL
-      for (let i = 0; i <= cols; i++) {
-        const a = i * CELL - view.width / 2
-        const x = forward.x * view.focal + right.x * a + up.x * b
-        const y = forward.y * view.focal + right.y * a + up.y * b
-        const z = forward.z * view.focal + right.z * a + up.z * b
-        const inside = z > 0 && Math.abs(x) <= z && Math.abs(y) <= z
-        tx[j * (cols + 1) + i] = inside ? x / z : NaN
-        ty[j * (cols + 1) + i] = inside ? y / z : NaN
-      }
-    }
-    // Tangents are extreme at a cell's corners (they are ratios of linear
-    // functions of the screen position). Math.min and max keep a NaN.
+    // Rays through the cell corners, and which of the face's sides (bits of
+    // PYRAMID_SIDES, see inFace) each is outside of.
+    const rays = Array.from({ length: (cols + 1) * (rows + 1) }, (_, k) =>
+      screenRay(view, face, (k % (cols + 1)) * CELL, Math.floor(k / (cols + 1)) * CELL))
+    const outside = rays.map(({ x, y, z }) => (z < x + Math.SQRT2 * y ? 1 : 0) | (z < -x + Math.SQRT2 * y ? 2 : 0) |
+      (z < x - Math.SQRT2 * y ? 4 : 0) | (z < -x - Math.SQRT2 * y ? 8 : 0))
     for (let j = 0; j < rows; j++) {
       for (let i = 0; i < cols; i++) {
         const k = j * (cols + 1) + i
-        const c = (j * cols + i) * 4
-        tangents[c] = Math.min(tx[k], tx[k + 1], tx[k + cols + 1], tx[k + cols + 2])
-        tangents[c + 1] = Math.max(tx[k], tx[k + 1], tx[k + cols + 1], tx[k + cols + 2])
-        tangents[c + 2] = Math.min(ty[k], ty[k + 1], ty[k + cols + 1], ty[k + cols + 2])
-        tangents[c + 3] = Math.max(ty[k], ty[k + 1], ty[k + cols + 1], ty[k + cols + 2])
-        open[k] = this.covered[j * cols + i] || Number.isNaN(tangents[c]) ? k + 1 : k
+        const c = j * cols + i
+        const corners = [k, k + 1, k + cols + 2, k + cols + 1]
+        let box: TangentBox | null = null
+        // All corners outside one side: the cell is outside the face. All
+        // inside: its tangents are extreme at its corners (ratios of linear
+        // functions of the screen position). Otherwise clip.
+        if ((outside[k] & outside[k + 1] & outside[k + cols + 1] & outside[k + cols + 2]) === 0) {
+          if ((outside[k] | outside[k + 1] | outside[k + cols + 1] | outside[k + cols + 2]) === 0) {
+            const xs = corners.map(n => rays[n].x / rays[n].z)
+            const ys = corners.map(n => rays[n].y / rays[n].z)
+            box = { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) }
+          } else {
+            box = tangentBox(corners.map(n => rays[n]))
+          }
+        }
+        if (box) [tangents[4 * c], tangents[4 * c + 1], tangents[4 * c + 2], tangents[4 * c + 3]] = [box.minX, box.maxX, box.minY, box.maxY]
+        covered[c] = box ? 0 : 1
+        open[k] = covered[c] ? k + 1 : k
       }
       open[j * (cols + 1) + cols] = j * (cols + 1) + cols
     }
@@ -102,10 +105,10 @@ export class Coverage {
 
   /**
    * Adds what a layer of the current face draws opaque: its placements
-   * (from the same aligned chunk grid, cells of `width`) on the plane
+   * (from the same aligned chunk grid, see chunkCell) on the plane
    * z = distance. `camera` is the camera's position in face coordinates.
    */
-  cover(placements: Placement[], distance: number, width: number, camera: { x: number; y: number }) {
+  cover(placements: Placement[], distance: number, cell: { width: number; height: number }, camera: { x: number; y: number }) {
     const { box: boxOf, cols, covered, tangents, area } = this
     if (!boxOf) throw new Error('setFace first')
     const touched: number[] = []
@@ -113,12 +116,12 @@ export class Coverage {
       const { solid, scale } = chunk
       // The all-drawn blocks, clipped to the chunk's grid cell so pieces of
       // a screen cell from different chunks don't overlap.
-      const cellLeft = chunk.x - 0.5 - camera.x
-      const cellBottom = chunk.y - 0.5 - camera.y
+      const cellLeft = chunk.i * cell.width - camera.x
+      const cellBottom = chunk.j * cell.height - camera.y
       const left = Math.max(x + solid.left / scale, cellLeft)
-      const right = Math.min(x + solid.right / scale, cellLeft + width)
+      const right = Math.min(x + solid.right / scale, cellLeft + cell.width)
       const bottom = Math.max(y - solid.bottom / scale, cellBottom)
-      const top = Math.min(y - solid.top / scale, cellBottom + width)
+      const top = Math.min(y - solid.top / scale, cellBottom + cell.height)
       if (left >= right || bottom >= top) continue
       const box = boxOf(left, right, bottom, top, distance)
       if (!box) continue

@@ -4,22 +4,30 @@
  * filling them into pixels. See DESIGN.md, section 3.
  *
  * Voxels are rhombic dodecahedra on the FCC lattice (fcc.ts), so faces are
- * rhombi, drawn as the parallelograms they project to.
+ * rhombi, drawn as the parallelograms they project to. A slice is read in
+ * its face's lattice coordinates (a, b, c) (view.ts), the same for every
+ * face, and placed in face coordinates (a · LAYER, b, c · LAYER).
  *
  * No DOM and no objects per voxel or face: flat typed arrays in and out,
  * so it ports directly to a worker or to Rust/WASM.
  */
 import { VOXEL_FACES } from './fcc'
-import { bake, chunkWidth, directionError, directionStep, sliceCentre } from './slice-selection'
+import { bake, chunkCell, directionError, directionStep, sliceCentre, type SliceBoundary } from './slice-selection'
 import { faceReader, type Material, type VoxelData } from './voxel-grid'
-import type { Basis } from './view'
+import { FACES, LAYER, type Basis } from './view'
 import type { Vec3 } from './world'
 
 /** Kinds of faces: their index in VOXEL_FACES. */
 const FACE_KINDS = VOXEL_FACES.length
-// VOXEL_FACES flattened: normal k is NORMALS[3k ..], its corner i CORNERS[12k + 3i ..].
-const NORMALS = Int8Array.from(VOXEL_FACES.flatMap(f => f.normal))
-const CORNERS = Float64Array.from(VOXEL_FACES.flatMap(f => f.corners.flat()))
+// The faces in a face's lattice coordinates (any face's: they see the same
+// lattice). Kind k's neighbour is OFFSETS[3k ..] away (a, b, c); its normal
+// is NORMALS[3k ..] and its corner i CORNERS[12k + 3i ..], in face coordinates.
+const { right: R, up: U, forward: F } = FACES[0].lattice
+const latticeOf = ([x, y, z]: readonly number[]) => [R, U, F].map(v => v.x * x + v.y * y + v.z * z)
+const OFFSETS = Int8Array.from(VOXEL_FACES.flatMap(f => latticeOf(f.normal)))
+const placed = ([a, b, c]: number[]) => [a * LAYER, b, c * LAYER]
+const NORMALS = Float64Array.from(VOXEL_FACES.flatMap(f => placed(latticeOf(f.normal))))
+const CORNERS = Float64Array.from(VOXEL_FACES.flatMap(f => f.corners.flatMap(c => placed(latticeOf(c)))))
 // A surface record's mask: bit k (< 12) if face k is open (no neighbour across
 // it); bit CUT + k if face k is drawn because the slice is cut there (its
 // neighbour is in the previous slice); ON_FAR if a neighbour is in the next slice.
@@ -43,16 +51,18 @@ export function faceShade({ x, y, z }: Vec3): number {
 /**
  * Pixel colour of each (material, face kind) at index material · 12 + kind:
  * the material's colour times the face's shade, as opaque RGBA
- * (little-endian Uint32, as in ImageData). `axes` are the face's axes in the
- * world (see faceReader), so a kind is shaded by the way it faces in the
- * world.
+ * (little-endian Uint32, as in ImageData). `lattice` is the face's (see
+ * Face in view.ts), so a kind is shaded by the way it faces in the world.
  */
 export function shadedPalette(materials: readonly Material[], { right, up, forward }: Basis): Uint32Array {
-  const shades = VOXEL_FACES.map(({ normal: [a, b, c] }) => faceShade({
-    x: a * right.x + b * up.x + c * forward.x,
-    y: a * right.y + b * up.y + c * forward.y,
-    z: a * right.z + b * up.z + c * forward.z,
-  }))
+  const shades = VOXEL_FACES.map((_, k) => {
+    const [a, b, c] = OFFSETS.subarray(3 * k, 3 * k + 3)
+    return faceShade({
+      x: (a * right.x + c * forward.x) / 2 + b * up.x,
+      y: (a * right.y + c * forward.y) / 2 + b * up.y,
+      z: (a * right.z + c * forward.z) / 2 + b * up.z,
+    })
+  })
   const palette = new Uint32Array(materials.length * FACE_KINDS)
   materials.forEach(({ color }, id) => {
     const rgb = parseInt(color.slice(1, 7), 16)
@@ -67,123 +77,100 @@ export function shadedPalette(materials: readonly Material[], { right, up, forwa
 }
 
 /**
- * Ints per surface voxel record: x, y, z, material id, and a mask of its
+ * Ints per surface voxel record: a, b, c, material id, and a mask of its
  * open faces, the faces the slice's near plane cuts, and whether it goes on
  * past the far plane (see OPEN_MASK, CUT, ON_FAR).
  */
 export const RECORD = 5
 
+/** The largest growth chunkFaces looks for, as a tangent (directionError is about 0.5 with the defaults). */
+const MAX_REACH = 1
+
 /**
- * The voxels of one slice that have a face to draw, grouped by chunk cell.
- * Cell (i, j) is the chunk with corner ((cellX + i) · width, (cellY + j) · width);
- * its records are records[cellStart[k] · RECORD ..] up to cellStart[k + 1],
- * k = j · cellsX + i, ordered far to near.
+ * How far around its cell, in face units, a chunk of a slice of `size`
+ * may draw voxels: rays through it reach |tan| ≤ 1 in x and LAYER in y,
+ * and gap filling MAX_REACH more, over half the slice's thickness, plus
+ * the extent of a voxel.
  */
-export interface SliceSurface {
-  depth: number
-  size: number
-  /** Chunk width, see chunkWidth. */
-  width: number
-  cellX: number
-  cellY: number
-  cellsX: number
-  cellsY: number
-  cellStart: Uint32Array
-  records: Int32Array
+function cellMargin(size: number): { x: number; y: number } {
+  const half = ((size + 1) / 2) * LAYER
+  return { x: (1 + MAX_REACH) * half + 1.5, y: (LAYER + MAX_REACH) * half + 1.5 }
 }
 
 /**
- * Indexes the slice [depth, depth + size) of `grid` seen along `axes`
- * (in the face's coordinates, see faceReader): the voxels with an open face
- * (one no neighbour covers), or a front face whose neighbour is in the
- * previous slice (the slice is cut there and the cut must show), by chunk
- * cell. Buried voxels are dropped. Voxels with a neighbour in the next slice
- * are marked (see chunkFaces).
+ * Indexes the voxels of chunk cell (i, j) (chunkCell) of the slice
+ * [depth, depth + size) of a face's layers (`lattice`, see Face in
+ * view.ts), and of the margin around it its chunks may show (cellMargin),
+ * that have an open face (one no neighbour covers), or a face towards the
+ * camera whose neighbour is in the previous slice (the slice is cut there
+ * and the cut must show). Buried voxels are dropped. Voxels with a
+ * neighbour in the next slice are marked (see chunkFaces). Records
+ * (RECORD ints each) go by layer, far to near.
  */
-export function sliceSurface(grid: VoxelData, axes: Basis, depth: number, size: number): SliceSurface {
-  const width = chunkWidth(size)
-  const { min, max, at } = faceReader(grid, axes)
-  const empty = min.x > max.x || min.y > max.y || min.z > max.z
-  const cellX = Math.floor(min.x / width)
-  const cellY = Math.floor(min.y / width)
-  const cellsX = empty ? 0 : Math.floor(max.x / width) - cellX + 1
-  const cellsY = empty ? 0 : Math.floor(max.y / width) - cellY + 1
-
-  // Layers of sites as dense planes with a border of empty sites, so
-  // neighbours need no bounds checks: site (u, v) at (v - min.y + 1) · stride + u - min.x + 1.
-  const stride = max.x - min.x + 3
-  const planeSize = empty ? 0 : stride * (max.y - min.y + 3)
-  const offsets = VOXEL_FACES.map(({ normal: [a, b] }) => b * stride + a)
-  const fill = (plane: Uint8Array, w: number) => {
-    plane.fill(0)
-    if (w < min.z || w > max.z) return
-    for (let v = min.y; v <= max.y; v++) {
-      const row = (v - min.y + 1) * stride - min.x + 1
-      for (let u = min.x + ((min.x + v + w) & 1); u <= max.x; u += 2) plane[row + u] = at(u, v, w)
-    }
-  }
-
-  // Records in scan order (far to near), with their cell, then grouped by
-  // cell with a stable counting sort.
-  let scanned = new Int32Array(1024 * RECORD)
-  let cellOf = new Int32Array(1024)
-  let count = 0
+export function cellSurface(grid: VoxelData, lattice: Basis, depth: number, size: number, i: number, j: number): Int32Array {
+  const { columns, rows } = chunkCell(size)
+  const { min, max, at } = faceReader(grid, lattice)
+  const margin = cellMargin(size)
+  const [ma, mb] = [Math.ceil(margin.x / LAYER), Math.ceil(margin.y)]
+  // The sites, clipped to the grid's.
+  const [a0, a1] = [Math.max(i * columns - ma, min.x), Math.min((i + 1) * columns + ma, max.x + 1)]
+  const [b0, b1] = [Math.max(j * rows - mb, min.y), Math.min((j + 1) * rows + mb, max.y + 1)]
   const top = Math.min(depth + size, max.z + 1) - 1
   const bottom = Math.max(depth, min.z)
-  // Planes of layers z + 1, z and z − 1.
-  let [next, current, previous] = [new Uint8Array(planeSize), new Uint8Array(planeSize), new Uint8Array(planeSize)]
-  if (top >= bottom) {
-    fill(next, top + 1)
-    fill(current, top)
-    fill(previous, top - 1)
-  }
-  for (let z = top; z >= bottom; z--) {
-    if (z < top) {
-      ;[next, current, previous] = [current, previous, next]
-      fill(previous, z - 1)
+  if (a0 >= a1 || b0 >= b1 || top < bottom) return new Int32Array(0)
+
+  // Layers as dense planes of the cell and the neighbours of its sites (up
+  // to 2 away in a, 1 in b): site (a, b) at (b - b0 + 1) · stride + a - a0 + 2.
+  const stride = a1 - a0 + 4
+  const planeSize = stride * (b1 - b0 + 2)
+  const offsets = VOXEL_FACES.map((_, k) => OFFSETS[3 * k + 1] * stride + OFFSETS[3 * k])
+  const fill = (plane: Uint8Array, c: number) => {
+    plane.fill(0)
+    // A layer's sites have a and b of the parity of c.
+    for (let b = b0 - 1 + ((b0 - 1 + c) & 1); b <= b1; b += 2) {
+      const row = (b - b0 + 1) * stride - a0 + 2
+      for (let a = a0 - 2 + ((a0 + c) & 1); a < a1 + 2; a += 2) plane[row + a] = at(a, b, c)
     }
-    for (let y = min.y; y <= max.y; y++) {
-      const row = (y - min.y + 1) * stride - min.x + 1
-      for (let x = min.x + ((min.x + y + z) & 1); x <= max.x; x += 2) {
-        const i = row + x
-        const material = current[i]
+  }
+
+  let records = new Int32Array(256 * RECORD)
+  let count = 0
+  // Planes of layers c - 2 to c + 2: a voxel's neighbours (OFFSETS).
+  const planes = Array.from({ length: 5 }, () => new Uint8Array(planeSize))
+  for (let d = -2; d <= 2; d++) fill(planes[d + 2], top + d)
+  for (let c = top; c >= bottom; c--) {
+    if (c < top) {
+      planes.unshift(...planes.splice(4, 1))
+      fill(planes[0], c - 2)
+    }
+    const current = planes[2]
+    for (let b = b0 + ((b0 + c) & 1); b < b1; b += 2) {
+      const row = (b - b0 + 1) * stride - a0 + 2
+      for (let a = a0 + ((a0 + c) & 1); a < a1; a += 2) {
+        const n = row + a
+        const material = current[n]
         if (material === 0) continue
         let open = 0
         let cut = 0
         let onFar = false
         for (let k = 0; k < FACE_KINDS; k++) {
-          const c = NORMALS[3 * k + 2]
-          const neighbour = (c < 0 ? previous : c > 0 ? next : current)[i + offsets[k]]
-          if (neighbour === 0) open |= 1 << k
-          else if (c < 0 && z === depth) cut |= 1 << k
-          else if (c > 0 && z === depth + size - 1) onFar = true
+          const dc = OFFSETS[3 * k + 2]
+          if (planes[dc + 2][n + offsets[k]] === 0) open |= 1 << k
+          else if (c + dc < depth) cut |= 1 << k
+          else if (c + dc >= depth + size) onFar = true
         }
         if (open === 0 && cut === 0) continue
-        if (count === cellOf.length) {
-          scanned = grow(scanned, scanned.length * 2)
-          cellOf = grow(cellOf, cellOf.length * 2)
-        }
-        const o = count * RECORD
-        scanned[o] = x
-        scanned[o + 1] = y
-        scanned[o + 2] = z
-        scanned[o + 3] = material
-        scanned[o + 4] = open | (cut << CUT) | (onFar ? ON_FAR : 0)
-        cellOf[count++] = (Math.floor(y / width) - cellY) * cellsX + Math.floor(x / width) - cellX
+        if ((count + 1) * RECORD > records.length) records = grow(records, records.length * 2)
+        const o = count++ * RECORD
+        records[o] = a
+        records[o + 1] = b
+        records[o + 2] = c
+        records[o + 3] = material
+        records[o + 4] = open | (cut << CUT) | (onFar ? ON_FAR : 0)
       }
     }
   }
-
-  const cellStart = new Uint32Array(cellsX * cellsY + 1)
-  for (let n = 0; n < count; n++) cellStart[cellOf[n] + 1]++
-  for (let k = 0; k < cellsX * cellsY; k++) cellStart[k + 1] += cellStart[k]
-  const nextOf = cellStart.slice(0, -1)
-  const records = new Int32Array(count * RECORD)
-  for (let n = 0; n < count; n++) {
-    const to = nextOf[cellOf[n]]++ * RECORD
-    for (let k = 0; k < RECORD; k++) records[to + k] = scanned[n * RECORD + k]
-  }
-  return { depth, size, width, cellX, cellY, cellsX, cellsY, cellStart, records }
+  return records.slice(0, count * RECORD)
 }
 
 function grow(array: Int32Array, length: number): Int32Array<ArrayBuffer> {
@@ -195,12 +182,12 @@ function grow(array: Int32Array, length: number): Int32Array<ArrayBuffer> {
 /**
  * Floats per baked face: its four corners on the centre plane (x0, y0, …,
  * x3, y3, in order around it), its colour (an index into shadedPalette),
- * the index of its voxel's record, 1 if a ray along the baking direction
- * reaches it (0 if only other rays through the chunk do), and how far past
- * each side of its bounding box (minX, minY, maxX, maxY) it is grown to fill
- * gaps (see fillFaces).
+ * 1 if a ray along the baking direction reaches it (0 if only other rays
+ * through the chunk do), how far past each side of its bounding box (minX,
+ * minY, maxX, maxY) it is grown to fill gaps (see fillFaces), and its
+ * voxel's site (a, b, c).
  */
-export const FACE = 15
+export const FACE = 17
 
 /** The faces of one chunk, in painting order, and the extent of their grown outlines. */
 export interface ChunkFaces {
@@ -214,49 +201,43 @@ export interface ChunkFaces {
 }
 
 let scratch = new Float64Array(4096 * FACE)
-let order = new Int32Array(1024)
-
-// The chunk's own cell and its neighbours.
-const NEIGHBOURS = [[0, 0], [-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1], [1, 0], [1, 1]]
 
 /**
- * The faces of chunk (x0, y0) of `surface` that a ray along (tanX, tanY, 1)
+ * The faces of chunk (i, j) of a slice that a ray along (tanX, tanY, 1)
  * can reach, baked onto the slice's centre plane, in painting order: far to
  * near. A face is reached if it faces against the ray (normal · direction
- * < 0). |tanX| and |tanY| must be at most 1.
+ * < 0). The direction must be one of the face's rays (inFace in view.ts).
  *
- * Painting order. Along a ray, each voxel it passes is followed by one
- * across a face whose normal n has n · (tanX, tanY, 1) > 0, so with tangents
- * at most 1 the next voxel is in the same layer (z) or the next one. Layers
- * are painted far to near, and within one layer voxels by tanX · x + tanY · y,
- * largest first: on a ray it grows from voxel to voxel. (Sorting by the
- * site's distance along the direction orders any Voronoi tiling like this.)
- * A voxel's faces facing the ray never overlap, so their order is free.
+ * Painting order: layers far to near. Along such a ray, each voxel it
+ * passes is followed by one across a face whose normal n has
+ * n · (tanX, tanY, 1) > 0: one or two layers on, or a neighbour in the
+ * same layer, (±2, 0, 0) away (OFFSETS). The face to that neighbour is
+ * parallel to the axis and as deep as the voxel, so a ray crosses at most
+ * one such face per layer: it enters the neighbour through a face that is
+ * not drawn. So voxels of one layer never cover each other, and a voxel's
+ * faces facing the ray never overlap either.
  *
  * Given the slice `detail` (0 for none), faces are also grown to close the
  * gaps that open between slices (DESIGN.md, section 3): the open faces of
  * voxels with a neighbour in the next or previous slice, including ones
- * only rays a little off the baking direction reach (marked as not
- * reached). They grow about directionError · (size + 1) / 2, so only
- * voxels within (|tan| + directionError) · (size + 1) / 2 + 1.5 of the cell
- * (the slack covers faces just outside it, which grow a little more), less
- * than a cell width, are looked at: the cell and its eight neighbours.
+ * only rays up to directionError (at most MAX_REACH) off the baking
+ * direction reach (marked as not reached).
+ *
+ * `records` is the cell's surface (cellSurface), with the margin around
+ * the cell that its chunks may show.
  */
 export function chunkFaces(
-  surface: SliceSurface, x0: number, y0: number, tanX: number, tanY: number, detail = 0,
+  { depth, size }: SliceBoundary, records: Int32Array, i0: number, j0: number, tanX: number, tanY: number, detail = 0,
 ): ChunkFaces {
-  const { depth, size, width: w, records } = surface
-  const centre = sliceCentre(surface)
-  // A voxel reaches 1 past its layer, so a slice reaches this far from its centre plane.
-  const half = (size + 1) / 2
-  const reach = detail > 0 ? directionError(detail) : 0
-  const marginX = (Math.abs(tanX) + reach) * half + 1.5
-  const marginY = (Math.abs(tanY) + reach) * half + 1.5
-  const near = (x: number, y: number) =>
-    x > x0 - 1 - marginX && x < x0 + w + marginX && y > y0 - 1 - marginY && y < y0 + w + marginY
+  const { width: w, height: h } = chunkCell(size)
+  const centre = sliceCentre({ depth, size })
+  // A voxel reaches a layer past its own, so a slice reaches this far from its centre plane.
+  const half = ((size + 1) / 2) * LAYER
+  const reach = detail > 0 ? Math.min(MAX_REACH, directionError(detail)) : 0
+  const [left, bottom] = [i0 * w, j0 * h]
 
-  // A ray through the plane at p, from a camera at distance D ≥ size · detail,
-  // has tangent σ = τc + (p − cell centre) / D, and the cell's centre ray τc is
+  // A ray through the plane at p, from a camera at distance D ≥ size · detail
+  // layer spacings, has tangent σ = τc + (p − cell centre) / D, and the cell's centre ray τc is
   // within half a direction step of the baking direction. A face at depth z′
   // is drawn (σ − tan) · (z′ − centre) off. On the slice's near or far
   // boundary (d = z′ − centre = −half or half) that pulls the slice's edge
@@ -264,7 +245,7 @@ export function chunkFaces(
   // than tan, so the face grows back by that much, for the largest such
   // σ − tan over a face spanning [lo, hi] along an axis. Returns the growth
   // below and above.
-  const perUnit = detail > 0 ? 1 / (size * detail) : 0
+  const perUnit = detail > 0 ? 1 / (size * detail * LAYER) : 0
   const halfStep = detail > 0 ? directionStep(detail) / 2 : 0
   const growth = (tan: number, cellCentre: number, lo: number, hi: number, d0: number, d1: number): [number, number] => {
     const above = Math.max(0, (hi - cellCentre) * perUnit) + halfStep
@@ -274,19 +255,9 @@ export function chunkFaces(
     const down = below > Math.max(0, tan) ? below : 0
     return [Math.max(up * d1, down * -d0), Math.max(up * -d0, down * d1)]
   }
-  const cellX = x0 + w / 2 - 0.5
-  const cellY = y0 + w / 2 - 0.5
+  const cellX = left + w / 2
+  const cellY = bottom + h / 2
 
-  // Record ranges of the cells, each far to near; neighbours' voxels are
-  // checked for being near.
-  const cells: { next: number; end: number; check: boolean }[] = []
-  for (const [di, dj] of NEIGHBOURS) {
-    const i = x0 / w - surface.cellX + di
-    const j = y0 / w - surface.cellY + dj
-    if (i < 0 || i >= surface.cellsX || j < 0 || j >= surface.cellsY) continue
-    const k = j * surface.cellsX + i
-    cells.push({ next: surface.cellStart[k], end: surface.cellStart[k + 1], check: di !== 0 || dj !== 0 })
-  }
 
   const faces: ChunkFaces = { data: scratch, count: 0, minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
   const corners = new Float64Array(8)
@@ -300,12 +271,14 @@ export function chunkFaces(
     const o = faces.count++ * FACE
     d.set(corners, o)
     d[o + 8] = records[r * RECORD + 3] * FACE_KINDS + kind
-    d[o + 9] = r
-    d[o + 10] = reached ? 1 : 0
-    d[o + 11] = gl
-    d[o + 12] = gb
-    d[o + 13] = gr
-    d[o + 14] = gt
+    d[o + 9] = reached ? 1 : 0
+    d[o + 10] = gl
+    d[o + 11] = gb
+    d[o + 12] = gr
+    d[o + 13] = gt
+    d[o + 14] = records[r * RECORD]
+    d[o + 15] = records[r * RECORD + 1]
+    d[o + 16] = records[r * RECORD + 2]
     for (let c = 0; c < 4; c++) {
       faces.minX = Math.min(faces.minX, corners[2 * c] - gl)
       faces.maxX = Math.max(faces.maxX, corners[2 * c] + gr)
@@ -314,33 +287,14 @@ export function chunkFaces(
     }
   }
 
-  for (let z = depth + size - 1; z >= depth; z--) {
+  let next = 0
+  for (let c = depth + size - 1; c >= depth; c--) {
     // Baking moves the layer's sites by (nearX, nearY), and each unit of depth from them by (−tanX, −tanY).
-    const [nearX, nearY] = bake(0, 0, z, tanX, tanY, centre)
-    // This layer's voxels within reach of the chunk, painted by tanX · x + tanY · y, largest first.
-    let n = 0
-    for (const cell of cells) {
-      let r = cell.next
-      for (; r < cell.end && records[r * RECORD + 2] === z; r++) {
-        if (cell.check && !near(records[r * RECORD], records[r * RECORD + 1])) continue
-        if (n === order.length) {
-          const grown = new Int32Array(order.length * 2)
-          grown.set(order)
-          order = grown
-        }
-        order[n++] = r
-      }
-      cell.next = r
-    }
-    const layer = order.subarray(0, n)
-    if (tanX !== 0 || tanY !== 0) {
-      layer.sort((a, b) => tanX * (records[b * RECORD] - records[a * RECORD]) + tanY * (records[b * RECORD + 1] - records[a * RECORD + 1]))
-    }
-
-    for (let q = 0; q < n; q++) {
-      const r = layer[q]
+    const [nearX, nearY] = bake(0, 0, c * LAYER, tanX, tanY, centre)
+    for (; next * RECORD < records.length && records[next * RECORD + 2] === c; next++) {
+      const r = next
       const o = r * RECORD
-      const x = records[o]
+      const x = records[o] * LAYER
       const y = records[o + 1]
       const mask = records[o + 4]
       const open = mask & OPEN_MASK
@@ -527,7 +481,7 @@ export function fillFaces(
   }
   const covered = new Uint8Array(faces.count)
   for (let f = 0; f < faces.count; f++) {
-    if (data[f * FACE + 10] === 0) continue
+    if (data[f * FACE + 9] === 0) continue
     outline(f)
     const color = palette[data[f * FACE + 8]]
     const count = rasterise(polygon, 4, width, height)
@@ -550,13 +504,13 @@ export function fillFaces(
   }
   for (let f = faces.count - 1; f >= 0; f--) {
     const o = f * FACE
-    const gl = data[o + 11] * scale
-    const gb = data[o + 12] * scale
-    const gr = data[o + 13] * scale
-    const gt = data[o + 14] * scale
+    const gl = data[o + 10] * scale
+    const gb = data[o + 11] * scale
+    const gr = data[o + 12] * scale
+    const gt = data[o + 13] * scale
     const flat = gl === 0 && gb === 0 && gr === 0 && gt === 0
     // A reached face that is not grown is painted already.
-    if (flat && data[o + 10] === 1) continue
+    if (flat && data[o + 9] === 1) continue
     outline(f)
     let n = 4
     if (!flat) {

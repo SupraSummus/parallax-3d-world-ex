@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { ParallaxRenderer, type Frame } from './renderer'
-import { screenBox, screenRay } from './view'
+import { inFace, screenBox, screenRay } from './view'
 import { World } from './world'
 
 const world = new World(12345, 'hills_with_trees')
@@ -8,7 +8,7 @@ const [WIDTH, HEIGHT, STEP] = [800, 600, 3]
 
 /**
  * The frame's colour at every STEP-th pixel, as the compositor draws it
- * (nearest texel, nearer layers first, pixels within a face's pyramid).
+ * (nearest texel, nearer layers first, each face's own rays).
  */
 function picture(frame: Frame): Uint32Array {
   const cols = Math.ceil(WIDTH / STEP)
@@ -24,7 +24,7 @@ function picture(frame: Frame): Uint32Array {
           const k = j * cols + i
           if (depth[k] < index) continue
           const ray = screenRay(frame, face, i * STEP + 0.5, j * STEP + 0.5)
-          if (Math.abs(ray.x) > ray.z || Math.abs(ray.y) > ray.z) continue
+          if (!inFace(ray.x, ray.y, ray.z)) continue
           const px = Math.floor(((ray.x / ray.z) * distance - x) * chunk.scale)
           const py = Math.floor((y - (ray.y / ray.z) * distance) * chunk.scale)
           if (px < 0 || py < 0 || px >= chunk.width || py >= chunk.height) continue

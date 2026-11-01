@@ -1,7 +1,8 @@
 /**
- * The camera's view and the six faces of the cube around it. Each face
+ * The camera's view and the 12 faces of a rhombic dodecahedron around it,
+ * one towards each nearest neighbour of the FCC lattice (fcc.ts). Each face
  * has its own stack of slices, cut along its axis, and draws the rays
- * within 45° of that axis. See DESIGN.md, section 4.
+ * closer to its axis than to any other's. See DESIGN.md, section 4.
  */
 import type { Vec3 } from './world'
 
@@ -29,23 +30,52 @@ export function viewBasis({ yaw, pitch }: Orientation): Basis {
 }
 
 /**
- * A face of the cube: the camera's axes looking straight at it. Its slices
- * are cut along `forward`, in face coordinates (x, y, z) = world
- * x · right + y · up + z · forward; +z is the world itself.
+ * A face: the camera's axes looking straight at it. Its slices are cut
+ * along `forward`, in face coordinates (x, y, z) = world x · right + y · up
+ * + z · forward.
+ *
+ * `lattice` holds integer vectors R, U, F: R = √2 · right, U = up (a world
+ * axis), F = √2 · forward. World site p is at lattice coordinates
+ * (a, b, c) = (p · R, p · U, p · F), with a, b and c all even or all odd,
+ * and back at p = (a · R + c · F) / 2 + b · U. Layer c is the plane
+ * z = c · LAYER of face coordinates, and site (a, b, c) is at
+ * (a · LAYER, b, c · LAYER). Every face sees the same lattice: the faces
+ * are turns of each other that map sites to sites.
  */
 export interface Face extends Basis {
   name: string
+  lattice: Basis
 }
 
-const axis = (x: number, y: number, z: number): Vec3 => ({ x, y, z })
-export const FACES: readonly Face[] = [
-  { name: '+z', right: axis(1, 0, 0), up: axis(0, 1, 0), forward: axis(0, 0, 1) },
-  { name: '+x', right: axis(0, 0, -1), up: axis(0, 1, 0), forward: axis(1, 0, 0) },
-  { name: '-z', right: axis(-1, 0, 0), up: axis(0, 1, 0), forward: axis(0, 0, -1) },
-  { name: '-x', right: axis(0, 0, 1), up: axis(0, 1, 0), forward: axis(-1, 0, 0) },
-  { name: '+y', right: axis(1, 0, 0), up: axis(0, 0, -1), forward: axis(0, 1, 0) },
-  { name: '-y', right: axis(1, 0, 0), up: axis(0, 0, 1), forward: axis(0, -1, 0) },
-]
+/** Spacing of a face's layers, and of its lattice along `right`: half of a neighbour's distance, √2. */
+export const LAYER = Math.SQRT1_2
+
+const vector = ([x, y, z]: number[]): Vec3 => ({ x, y, z })
+const scaled = (v: Vec3, s: number): Vec3 => ({ x: v.x * s, y: v.y * s, z: v.z * s })
+const crossProduct = (a: Vec3, b: Vec3): Vec3 => ({ x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x })
+
+/** One face per neighbour direction F; up is the world axis across F, right is up × forward. */
+export const FACES: readonly Face[] = [1, 0, 2].flatMap(k => [[1, 1], [-1, 1], [1, -1], [-1, -1]].map(([s, t]) => {
+  const f = [0, 0, 0]
+  f[(k + 1) % 3] = s
+  f[(k + 2) % 3] = t
+  const u = [0, 0, 0]
+  u[k] = 1
+  const [F, U] = [vector(f), vector(u)]
+  const R = crossProduct(U, F)
+  const name = f.map((v, i) => (v === 0 ? '' : `${v > 0 ? '+' : '-'}${'xyz'[i]}`)).join('')
+  return { name, right: scaled(R, LAYER), up: U, forward: scaled(F, LAYER), lattice: { right: R, up: U, forward: F } }
+}))
+
+/**
+ * Whether a ray (x, y, z) in face coordinates is the face's: as close to
+ * its axis as to any other face's, |x| + √2 · |y| ≤ z. The face's rays are
+ * a rhombus of tangents, reaching 1 along x (towards the world axes) and
+ * 1/√2 along y (towards the cube's diagonals).
+ */
+export function inFace(x: number, y: number, z: number): boolean {
+  return Math.abs(x) + Math.SQRT2 * Math.abs(y) <= z
+}
 
 const dot = (a: Vec3, b: Vec3) => a.x * b.x + a.y * b.y + a.z * b.z
 
@@ -108,20 +138,26 @@ function clip(polygon: Vec3[], distance: (p: Vec3) => number): Vec3[] {
   return out
 }
 
-const PYRAMID_SIDES = [(p: Vec3) => p.z - p.x, (p: Vec3) => p.z + p.x, (p: Vec3) => p.z - p.y, (p: Vec3) => p.z + p.y]
+// The sides of a face's pyramid of rays (see inFace).
+const PYRAMID_SIDES = [1, -1].flatMap(s => [1, -1].map(t => (p: Vec3) => p.z - s * p.x - t * Math.SQRT2 * p.y))
+
+/** Bounds of x / z and y / z of a face's rays within a convex cone of rays (see faceTangents). */
+export interface TangentBox {
+  minX: number
+  maxX: number
+  minY: number
+  maxY: number
+}
 
 /**
- * Where the screen meets a face's pyramid of rays (|x| ≤ z, |y| ≤ z):
- * bounds of x / z and y / z there, within [-1, 1]. On the face's plane
- * z = d, the face draws (part of) [minX·d, maxX·d] × [minY·d, maxY·d].
- * Null if the screen shows none of the face.
+ * Bounds of x / z and y / z of the face's rays (see inFace) within the
+ * convex cone spanned by `rays` (in order around it), or null if it has
+ * none of them, or only along an edge.
  */
-export function faceTangents(view: View, face: Face): { minX: number; maxX: number; minY: number; maxY: number } | null {
-  const { width: w, height: h } = view
-  let rays = [[0, 0], [w, 0], [w, h], [0, h]].map(([sx, sy]) => screenRay(view, face, sx, sy))
+export function tangentBox(rays: Vec3[]): TangentBox | null {
   for (const side of PYRAMID_SIDES) rays = clip(rays, side)
   const tangents = rays.map(r => ({ x: r.x / r.z, y: r.y / r.z }))
-  // Shoelace area: a face the screen only touches along an edge shows nothing.
+  // Shoelace area: a cone the face only touches along an edge shows nothing of it.
   const area = tangents.reduce((sum, p, i) => {
     const q = tangents[(i + 1) % tangents.length]
     return sum + p.x * q.y - q.x * p.y
@@ -130,6 +166,17 @@ export function faceTangents(view: View, face: Face): { minX: number; maxX: numb
   const xs = tangents.map(t => t.x)
   const ys = tangents.map(t => t.y)
   return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) }
+}
+
+/**
+ * Where the screen meets a face's pyramid of rays (see inFace):
+ * bounds of x / z and y / z there. On the face's plane
+ * z = d, the face draws (part of) [minX·d, maxX·d] × [minY·d, maxY·d].
+ * Null if the screen shows none of the face.
+ */
+export function faceTangents(view: View, face: Face): TangentBox | null {
+  const { width: w, height: h } = view
+  return tangentBox([[0, 0], [w, 0], [w, h], [0, h]].map(([sx, sy]) => screenRay(view, face, sx, sy)))
 }
 
 /**

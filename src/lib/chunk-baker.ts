@@ -3,23 +3,24 @@
  * renderer directly (without workers) and inside bake workers, through the
  * message protocol below. No DOM.
  */
-import { sliceSurface, chunkFaces, fillFaces, shadedPalette, type SliceSurface } from './bake'
+import { cellSurface, chunkFaces, fillFaces, shadedPalette } from './bake'
+import { chunkCell } from './slice-selection'
 import { solidBlocks, type Solid } from './occlusion'
 import { FACES, type Face } from './view'
 import type { VoxelData } from './voxel-grid'
 
 /**
- * A chunk to bake: corner (x, y) of the slice [depth, depth + size) of a
- * face (by name, see FACES), seen along (tanX, tanY, 1), in the face's
- * coordinates, with faces grown to fill gaps for slices of `fillDetail`
- * (0 for none; see chunkFaces).
+ * A chunk to bake: cell (i, j) (see chunkCell) of the slice
+ * [depth, depth + size) of a face (by name, see FACES), seen along
+ * (tanX, tanY, 1), in the face's coordinates, with faces grown to fill
+ * gaps for slices of `fillDetail` (0 for none; see chunkFaces).
  */
 export interface ChunkRequest {
   face: string
   depth: number
   size: number
-  x: number
-  y: number
+  i: number
+  j: number
   tanX: number
   tanY: number
   fillDetail: number
@@ -34,7 +35,7 @@ export interface ChunkImage {
   pixels: Uint32Array
   /** Which blocks of pixels are all drawn, for finding what the chunk hides. */
   solid: Solid
-  /** World x, y of the top-left pixel's corner. */
+  /** x, y of the top-left pixel's corner, in face coordinates. */
   originX: number
   originY: number
   /** Pixels per world unit (see renderScale). */
@@ -43,37 +44,38 @@ export interface ChunkImage {
   facesDrawn: number
 }
 
-// Pixels per lattice unit used when rasterising the nearest slices: 20
-// pixels across a voxel, 2 units wide, so that rhombi magnified near the
-// camera keep their slanted edges. Chunks are rasterised
-// camera-independently so they can be cached and reused as the camera
-// moves; perspective scaling is applied when compositing.
+// Pixels per unit used when rasterising the nearest slices: 20 pixels
+// across a voxel, 2 units wide, so that rhombi magnified near the camera
+// keep their slanted edges. Chunks are rasterised camera-independently so
+// they can be cached and reused as the camera moves; perspective scaling
+// is applied when compositing.
 const RENDER_SCALE = 10
 
 /**
- * Chunk pixels per lattice unit for a slice of `size`: 24 / size, between 1
+ * Chunk pixels per unit for a slice of `size`: 40 / (size + 1), between 1
  * (2 pixels across a voxel) and RENDER_SCALE. A slice of size s lies at
- * distance ≥ (s + 1) · detail, where a unit is at most
- * focal / ((s + 1) · detail) screen pixels, less than 24 / s with the
- * defaults; finer chunks would not show. Other settings just scale the
+ * distance ≥ (s + 1) · detail · LAYER, where a unit is at most
+ * focal / ((s + 1) · detail · LAYER) screen pixels, about 40 / (s + 1) with
+ * the defaults; finer chunks would not show. Other settings just scale the
  * chunks on screen.
  */
 function renderScale(size: number): number {
-  return Math.max(1, Math.min(RENDER_SCALE, Math.floor(24 / size)))
+  return Math.max(1, Math.min(RENDER_SCALE, Math.floor(40 / (size + 1))))
 }
 
-// Slice surfaces kept for baking more chunks of the same slice, least recently used dropped first.
-const MAX_SURFACES = 64
+// Cell surfaces kept for baking the same cell along other directions,
+// least recently used dropped first.
+const MAX_SURFACES = 1024
 
 /**
- * Bakes chunks of one world, keeping the surfaces of recently used slices
+ * Bakes chunks of one world, keeping the surfaces of recently used cells
  * and the palette of each face baked so far.
  */
 export class ChunkBaker {
   private grid: VoxelData
   private faces = new Map<string, { axes: Face; palette: Uint32Array }>()
-  // Keyed by `face:depth:size`; insertion order is LRU order.
-  private surfaces = new Map<string, SliceSurface>()
+  // Keyed by `face:depth:size:i:j`; insertion order is LRU order.
+  private surfaces = new Map<string, Int32Array>()
 
   constructor(grid: VoxelData) {
     this.grid = grid
@@ -84,17 +86,16 @@ export class ChunkBaker {
    * centre plane (see bake.ts), clipped to the chunk's cell and cropped to
    * what is drawn there. A chunk no face reaches has no pixels.
    */
-  bake({ face, depth, size, x: x0, y: y0, tanX, tanY, fillDetail }: ChunkRequest): ChunkImage {
+  bake({ face, depth, size, i, j, tanX, tanY, fillDetail }: ChunkRequest): ChunkImage {
     const { axes, palette } = this.face(face)
-    const surface = this.surface(axes, depth, size)
-    const faces = chunkFaces(surface, x0, y0, tanX, tanY, fillDetail)
+    const faces = chunkFaces({ depth, size }, this.surface(axes, depth, size, i, j), i, j, tanX, tanY, fillDetail)
 
-    // Drawn extent, clipped to the cell [x0 - 0.5, x0 + w - 0.5) × [y0 - 0.5, y0 + w - 0.5).
-    const w = surface.width
-    const minX = Math.max(faces.minX, x0 - 0.5)
-    const maxX = Math.min(faces.maxX, x0 + w - 0.5)
-    const minY = Math.max(faces.minY, y0 - 0.5)
-    const maxY = Math.min(faces.maxY, y0 + w - 0.5)
+    // Drawn extent, clipped to the cell.
+    const { width: w, height: h } = chunkCell(size)
+    const minX = Math.max(faces.minX, i * w)
+    const maxX = Math.min(faces.maxX, (i + 1) * w)
+    const minY = Math.max(faces.minY, j * h)
+    const maxY = Math.min(faces.maxY, (j + 1) * h)
 
     const scale = renderScale(size)
     const empty = maxX <= minX || maxY <= minY
@@ -112,17 +113,17 @@ export class ChunkBaker {
     if (!face) {
       const axes = FACES.find(f => f.name === name)
       if (!axes) throw new Error(`no face ${name}`)
-      face = { axes, palette: shadedPalette(this.grid.materials, axes) }
+      face = { axes, palette: shadedPalette(this.grid.materials, axes.lattice) }
       this.faces.set(name, face)
     }
     return face
   }
 
-  private surface(face: Face, depth: number, size: number): SliceSurface {
-    const key = `${face.name}:${String(depth)}:${String(size)}`
+  private surface(face: Face, depth: number, size: number, i: number, j: number): Int32Array {
+    const key = `${face.name}:${String(depth)}:${String(size)}:${String(i)}:${String(j)}`
     let surface = this.surfaces.get(key)
     if (surface) this.surfaces.delete(key)
-    else surface = sliceSurface(this.grid, face, depth, size)
+    else surface = cellSurface(this.grid, face.lattice, depth, size, i, j)
     this.surfaces.set(key, surface)
     for (const old of this.surfaces.keys()) {
       if (this.surfaces.size <= MAX_SURFACES) break
