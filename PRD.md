@@ -38,6 +38,11 @@ moves to the world's spawn point.
 - *Forest* (default): a 96 m × 160 m autumn forest valley at 0.5 m per
   voxel: a winding path, spruces, birches and oaks, ferns, bushes, boulders
   and fallen logs, and a ridge closing the far end. ~700k voxels.
+- *City*: a 116 m × 116 m district at 0.25 m per voxel,
+  for checking flat walls, thin frames and openings:
+  3 × 3 blocks of 1–3 storey buildings whose rooms form a maze of doorways,
+  with windows, balconies, courtyards, furniture, street lamps and trees.
+  The camera starts in front of an open entrance. ~750k voxels.
 - Hills, mountains, hills with trees, lake with island: small 80×80 toy
   scenes without a real-world scale.
 
