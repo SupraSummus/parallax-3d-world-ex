@@ -276,7 +276,7 @@ render() with everything cached takes ~30 ms in Node.
 
 **Workers.** In the app, a frame never waits for chunks:
 each render lists the missing chunks in view,
-and up to 4 workers, each with a copy of the world, bake them
+and up to 8 workers, each with a copy of the world, bake them
 (`WorkerBakery`, `bake.worker.ts`, `ChunkBaker`).
 Until a chunk arrives, the cell's latest bake (along an older direction) stands in;
 if that one is covered (section 4), nothing is baked.
@@ -287,8 +287,16 @@ When the camera moves along a face's axis, its slices re-tile.
 in segments ending where both have a boundary;
 until a segment's new slices have a bake in every cell they show,
 the old ones are drawn instead.
-Each worker has a few dozen requests in flight,
-enough to keep baking while the main thread is busy.
+The list is split by cell between the workers,
+so a cell's surface is cached in one worker
+(rebaking it along a new direction then takes ~40% less).
+Each render's list replaces a worker's previous one;
+the worker bakes it one chunk per task, taking new lists in between,
+and posts each chunk at once,
+without waiting for the main thread, which may be busy for hundreds of milliseconds.
+Chunks posted but not yet taken when the list was made are skipped (`bakeHandler`).
+Racing ahead, workers also bake far chunks that nearer ones turn out to cover:
+on the forest, about a third more.
 Without a bakery (tests), `render()` bakes missing chunks itself.
 
 ## 4. Faces, turning and compositing (`view.ts`, `renderer.ts`, `compositor.ts`)
