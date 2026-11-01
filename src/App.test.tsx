@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { render, screen, fireEvent, waitFor } from '@testing-library/react'
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react'
 import App from './App'
 
 // These tests cover the UI; a few voxels render much faster than the full forest.
@@ -72,6 +72,26 @@ describe('App', () => {
     expect(moved.filter((_, i) => i !== axis)).toEqual(start.filter((_, i) => i !== axis))
     await settle()
     expect(cameraPosition()).toEqual(moved)
+  })
+
+  it('moves at the set speed however slow the frames are', () => {
+    vi.useFakeTimers()
+    // 10 frames per second.
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation(callback =>
+      window.setTimeout(() => { callback(performance.now()) }, 100))
+    vi.spyOn(window, 'cancelAnimationFrame').mockImplementation(id => { window.clearTimeout(id) })
+    try {
+      render(<App />)
+      const start = cameraPosition()
+      fireEvent.keyDown(window, { key: 'w' })
+      act(() => { vi.advanceTimersByTime(1000) })
+      fireEvent.keyUp(window, { key: 'w' })
+      // 30 voxels per second, less the first frame, which only starts the clock.
+      expect(cameraPosition()[2] - start[2]).toBeCloseTo(27)
+    } finally {
+      vi.useRealTimers()
+      vi.restoreAllMocks()
+    }
   })
 
   it('turns with the arrow keys, and then moves forward where it looks', async () => {

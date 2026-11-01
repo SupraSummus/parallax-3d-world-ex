@@ -27,13 +27,15 @@ const MOVEMENT_KEYS: Record<string, [number, number, number]> = {
   shift: [0, -1, 0],
 }
 
-/** Key -> turn (yaw, pitch) per frame, in degrees, for held keys. */
+/** Key -> turn direction (yaw, pitch) for held keys. */
 const LOOK_KEYS: Record<string, [number, number]> = {
   arrowleft: [-1, 0],
   arrowright: [1, 0],
   arrowup: [0, 1],
   arrowdown: [0, -1],
 }
+
+const TURN_DEGREES_PER_SECOND = 60
 
 /** Degrees of turn per CSS pixel of mouse drag. */
 const DRAG_DEGREES_PER_PIXEL = 0.15
@@ -42,6 +44,8 @@ function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const rendererRef = useRef<ParallaxRenderer | null>(null)
   const compositorRef = useRef<Compositor | null>(null)
+  // A render scheduled to show chunks baked since the last one.
+  const bakedFrameRef = useRef<number | undefined>(undefined)
   // Without it (e.g. jsdom) the panels still work, but the scene isn't drawn.
   const [hasWebGL2] = useState(() => document.createElement('canvas').getContext('webgl2') !== null)
 
@@ -52,7 +56,8 @@ function App() {
   const [showStats, setShowStats] = useState(true)
   const [showLayers, setShowLayers] = useState(true)
   const [layers, setLayers] = useState<Layer[]>([])
-  const [moveSpeed, setMoveSpeed] = useState(0.5)
+  // Voxels per second.
+  const [moveSpeed, setMoveSpeed] = useState(30)
   const [worldType, setWorldType] = useState<WorldType>('forest')
   const [fov, setFov] = useState(DEFAULT_FOV)
   const [renderDistance, setRenderDistance] = useState(DEFAULT_RENDER_DISTANCE)
@@ -65,6 +70,9 @@ function App() {
   const requestRender = useCallback(() => {
     const renderer = rendererRef.current
     if (!renderer) return
+    // This render shows the baked chunks too.
+    if (bakedFrameRef.current !== undefined) cancelAnimationFrame(bakedFrameRef.current)
+    bakedFrameRef.current = undefined
     const frame = renderer.render()
     compositorRef.current?.draw(frame)
     setSessionStats(renderer.getStats())
@@ -85,12 +93,8 @@ function App() {
       ? undefined
       : startBakeWorkers(Math.max(1, Math.min(4, navigator.hardwareConcurrency - 1)))
     // Baked chunks arrive one by one; show them at most once per frame.
-    let pending: number | undefined
     const onBaked = () => {
-      pending ??= requestAnimationFrame(() => {
-        pending = undefined
-        requestRender()
-      })
+      bakedFrameRef.current ??= requestAnimationFrame(requestRender)
     }
     const renderer = new ParallaxRenderer(new World(Date.now(), 'forest'), { bakery, onBaked })
     rendererRef.current = renderer
@@ -105,7 +109,7 @@ function App() {
     return () => {
       window.removeEventListener('resize', handleResize)
       bakery?.dispose()
-      if (pending !== undefined) cancelAnimationFrame(pending)
+      if (bakedFrameRef.current !== undefined) cancelAnimationFrame(bakedFrameRef.current)
       rendererRef.current = null
       compositorRef.current = null
     }
@@ -115,23 +119,28 @@ function App() {
   useEffect(() => {
     const held = new Set<string>()
     let frame: number | undefined
+    let lastTime: number | undefined
 
-    const tick = () => {
+    const tick = (time: number) => {
       if (held.size === 0) {
         frame = undefined
         return
       }
+      // Seconds since the previous frame, so a slow frame moves further.
+      // Capped, so that a stall doesn't jump the camera.
+      const dt = lastTime === undefined ? 0 : Math.min(0.1, (time - lastTime) / 1000)
+      lastTime = time
       const renderer = rendererRef.current
       if (renderer) {
-        const speed = getMoveSpeed()
+        const speed = getMoveSpeed() * dt
         const cam = renderer.getCamera()
         const { yaw, pitch } = renderer.getOrientation()
         const [sin, cos] = [Math.sin((yaw * Math.PI) / 180), Math.cos((yaw * Math.PI) / 180)]
         let [turnYaw, turnPitch] = [0, 0]
         for (const key of held) {
           if (key in LOOK_KEYS) {
-            turnYaw += LOOK_KEYS[key][0]
-            turnPitch += LOOK_KEYS[key][1]
+            turnYaw += LOOK_KEYS[key][0] * TURN_DEGREES_PER_SECOND * dt
+            turnPitch += LOOK_KEYS[key][1] * TURN_DEGREES_PER_SECOND * dt
             continue
           }
           const [right, up, forward] = MOVEMENT_KEYS[key]
@@ -150,6 +159,7 @@ function App() {
       held.clear()
       if (frame !== undefined) cancelAnimationFrame(frame)
       frame = undefined
+      lastTime = undefined
     }
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -284,11 +294,11 @@ function App() {
               {orientation.yaw.toFixed(1)}°, {orientation.pitch.toFixed(1)}°
             </StatRow>
             <SliderRow
-              label={`Move Speed: ${moveSpeed.toFixed(1)}`}
+              label={`Move Speed: ${String(moveSpeed)} voxels/s`}
               value={moveSpeed}
-              min={0.1}
-              max={2}
-              step={0.1}
+              min={5}
+              max={120}
+              step={5}
               onChange={([v]) => { setMoveSpeed(v) }}
             />
             <SliderRow
