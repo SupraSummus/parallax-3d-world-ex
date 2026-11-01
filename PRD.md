@@ -58,7 +58,8 @@ slice detail, chunks in view reused vs rasterised, cached chunk pixels).
 
 ## Open ideas
 
-- Throttle or budget slice regeneration during fast forward movement.
+- Budget chunk baking per frame: a frame that brings many new chunks
+  into view still takes up to ~300 ms.
 - Generate geometry on demand (chunks) instead of one fixed world.
 - Port the toy worlds to the forest's metric scale, or drop them.
 - Move baking to a worker (`bake.ts` is DOM-free), later to Rust/WASM.

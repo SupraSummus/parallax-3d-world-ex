@@ -244,9 +244,7 @@ export class ParallaxRenderer {
           let chunk = slice.chunks.get(key)
           const cached = chunk !== undefined
           if (!chunk) {
-            const rasterised = this.rasterise(slice, x, y, tanX, tanY)
-            if (!rasterised) continue
-            chunk = rasterised
+            chunk = this.rasterise(slice, x, y, tanX, tanY)
             slice.chunks.set(key, chunk)
             voxelsRendered += chunk.facesDrawn
           }
@@ -409,12 +407,12 @@ export class ParallaxRenderer {
   /**
    * Rasterises one chunk: the slice baked along (tanX, tanY, 1) onto its
    * centre plane (see bake.ts), clipped to the chunk's cell and cropped to
-   * what is drawn there. Null if no face reaches the chunk.
+   * what is drawn there. A chunk no face reaches has no pixels; it is
+   * cached all the same, so the cell is not searched again.
    */
-  private rasterise(slice: Slice, x0: number, y0: number, tanX: number, tanY: number): Chunk | null {
+  private rasterise(slice: Slice, x0: number, y0: number, tanX: number, tanY: number): Chunk {
     const { surface } = slice
     const faces = chunkFaces(surface, x0, y0, tanX, tanY)
-    if (faces.count === 0) return null
 
     // Drawn extent, clipped to the cell [x0 - 0.5, x0 + w - 0.5) × [y0 - 0.5, y0 + w - 0.5).
     const w = surface.width
