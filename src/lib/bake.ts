@@ -8,6 +8,8 @@
  */
 import { bake, chunkWidth, sliceCentre } from './slice-selection'
 import type { Material, VoxelData } from './voxel-grid'
+import type { Basis } from './view'
+import type { Vec3 } from './world'
 
 // Faces of a voxel a bake can show, by kind; the open-face mask has bit 1 << kind.
 const FRONT = 0
@@ -19,18 +21,30 @@ const FACE_KINDS = 5
 
 /** Brightness of each face, shared with the reference viewer. */
 export const FACE_SHADE = { front: 0.9, back: 0.65, left: 0.7, right: 0.8, bottom: 0.55, top: 1 }
-const KIND_SHADES = [FACE_SHADE.front, FACE_SHADE.left, FACE_SHADE.right, FACE_SHADE.bottom, FACE_SHADE.top]
+
+/** Shade of a voxel face by its outward normal in the world. */
+function shadeOf({ x, y, z }: Vec3): number {
+  if (x !== 0) return x < 0 ? FACE_SHADE.left : FACE_SHADE.right
+  if (y !== 0) return y < 0 ? FACE_SHADE.bottom : FACE_SHADE.top
+  return z < 0 ? FACE_SHADE.front : FACE_SHADE.back
+}
+
+const negate = ({ x, y, z }: Vec3): Vec3 => ({ x: -x, y: -y, z: -z })
 
 /**
  * Pixel colour of each (material, face kind) at index material · 5 + kind:
  * the material's colour times the face's shade, as opaque RGBA
- * (little-endian Uint32, as in ImageData).
+ * (little-endian Uint32, as in ImageData). `axes` are the grid's axes in
+ * the world (see rotateGrid), so a kind is shaded by the way it faces in
+ * the world.
  */
-export function shadedPalette(materials: readonly Material[]): Uint32Array {
+export function shadedPalette(materials: readonly Material[], { right, up, forward }: Basis): Uint32Array {
+  // Outward normals of FRONT, LEFT, RIGHT, BOTTOM, TOP.
+  const shades = [negate(forward), negate(right), right, negate(up), up].map(shadeOf)
   const palette = new Uint32Array(materials.length * FACE_KINDS)
   materials.forEach(({ color }, id) => {
     const rgb = parseInt(color.slice(1, 7), 16)
-    KIND_SHADES.forEach((shade, kind) => {
+    shades.forEach((shade, kind) => {
       const r = Math.round(((rgb >> 16) & 255) * shade)
       const g = Math.round(((rgb >> 8) & 255) * shade)
       const b = Math.round((rgb & 255) * shade)

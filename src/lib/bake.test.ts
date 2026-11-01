@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { sliceSurface, fillFaces, FACE, RECORD } from './bake'
+import { sliceSurface, shadedPalette, fillFaces, FACE, FACE_SHADE, RECORD } from './bake'
 import { chunkWidth } from './slice-selection'
+import { FACES } from './view'
 import { World } from './world'
 
 describe('sliceSurface', () => {
@@ -29,6 +30,23 @@ describe('sliceSurface', () => {
         }
       }
       expect(actual.sort()).toEqual(expected.sort())
+    }
+  })
+})
+
+describe('shadedPalette', () => {
+  it('shades each face kind by the way it faces in the world', () => {
+    const white = [{ color: '#000000', type: 0 }, { color: '#ffffff', type: 1 }]
+    const { front, back, left, right, bottom, top } = FACE_SHADE
+    // Kinds: front (towards the camera), left, right, bottom, top, in the face's coordinates.
+    const expected: Record<string, number[]> = {
+      '+z': [front, left, right, bottom, top],
+      '+x': [left, back, front, bottom, top],
+      '+y': [bottom, left, right, back, front],
+    }
+    for (const face of FACES.filter(f => f.name in expected)) {
+      const reds = [...shadedPalette(white, face).slice(5)].map(rgba => rgba & 255)
+      expect(reds).toEqual(expected[face.name].map(shade => Math.round(255 * shade)))
     }
   })
 })

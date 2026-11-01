@@ -16,7 +16,7 @@ pnpm dev
 ```
 
 Controls: W/S forward/back, A/D left/right, Space/Shift up/down, arrow
-keys or drag to look around (up to 63° off straight ahead).
+keys or drag to look around.
 "Open in 3D Viewer" shows the same scene with a conventional (three.js)
 renderer and an orbit camera.
 

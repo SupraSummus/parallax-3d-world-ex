@@ -16,14 +16,15 @@ every frame. The demo exists to show (and measure) that idea.
 
 ## Features
 
-**Camera** – Looks roughly along +z: arrow keys or dragging on the scene
-turn it until the screen's edge is 63° off +z. W/S forward/back and A/D
-left/right along where it looks (level), Space/Shift up/down, adjustable
-move speed, field of view
+**Camera** – Arrow keys or dragging on the scene turn it all around
+(up to straight up or down). W/S forward/back and A/D left/right along
+where it looks (level), Space/Shift up/down, adjustable move speed, field
+of view
 (5°–120° across the longer screen side) and render distance (20–400).
 
-**Slicing** – Slices are aligned powers of two thick and grow with viewing
-distance; each is split into chunks, rasterised only in view and as seen
+**Slicing** – Six stacks of slices, one per face of a cube around the
+camera, each cut along its face's axis. Slices are aligned powers of two
+thick and grow with viewing distance; each is split into chunks, rasterised only in view and as seen
 from a direction close to the camera's. Slices are thin enough that
 geometry perspective would hide (e.g. stone under the lake's water
 surface) never shows by more than a set number of screen pixels ("Max
@@ -46,7 +47,7 @@ parallax camera with the same perspective (field of view) and fog. It is
 the reference for checking what a scene looks like, independent of the
 slice renderer.
 
-**Layers panel** – Thumbnail (of the chunks in view), z range, thickness and
+**Layers panel** – Thumbnail (of the chunks in view), face and depth range, thickness and
 voxel count of every slice with something in view, with a visibility toggle
 per slice.
 
@@ -58,17 +59,16 @@ waits for them; meanwhile a cell shows an older bake, or nothing.
 
 ## Non-goals (for the POC)
 
-- Looking more than 63° away from +z, or rolling the camera. Slices are
-  cut along z; see the open ideas.
+- Rolling the camera.
 - Mobile/touch controls.
 - Lighting beyond flat colours, distance fog and simple face shading.
 
 ## Open ideas
 
-- Look all around: six slice stacks, one per cube face (±x, ±y, ±z),
-  each drawn like the +z one and clipped to its face's 90° pyramid; only
-  faces in view baked. Needs radial fog and shading by world normal in
-  the stacks along x and y; seams between faces to be measured.
+- Budget chunk baking per frame: a frame that brings many new chunks
+  into view (moving, or turning to new faces) still takes up to ~300 ms,
+  more in software WebGL.
+- Measure the seams between faces against ray-cast perspective.
 - Generate geometry on demand (chunks) instead of one fixed world.
 - Port the toy worlds to the forest's metric scale, or drop them.
 - Port baking (`bake.ts`, DOM-free) to Rust/WASM, if it becomes the bottleneck.

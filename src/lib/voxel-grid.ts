@@ -3,6 +3,9 @@
  * Plain typed arrays and integer ids, the same layout in TS or Rust/WASM.
  */
 
+import type { Basis } from './view'
+import type { Vec3 } from './world'
+
 export interface Voxel {
   x: number
   y: number
@@ -78,12 +81,26 @@ export class VoxelGrid {
     return i < 0 ? 0 : this.cells[i]
   }
 
-  /** Number of voxels with z in [fromZ, toZ). */
-  countInZ(fromZ: number, toZ: number): number {
-    const plane = this.nx * this.ny
-    const end = (Math.min(toZ, this.minZ + this.nz) - this.minZ) * plane
+  /**
+   * Number of voxels whose coordinate along `axis` (a unit vector along a
+   * world axis) is in [from, to): a slice of the grid turned by
+   * rotateGrid() with that axis as `forward`.
+   */
+  countAlong(axis: Vec3, from: number, to: number): number {
+    const lo = [this.minX, this.minY, this.minZ]
+    const hi = [this.minX + this.nx, this.minY + this.ny, this.minZ + this.nz]
+    // Clip the box along the axis's dimension k, counting from the far end for a negative axis.
+    const k = axis.x !== 0 ? 0 : axis.y !== 0 ? 1 : 2
+    const sign = [axis.x, axis.y, axis.z][k]
+    lo[k] = Math.max(lo[k], sign > 0 ? from : 1 - to)
+    hi[k] = Math.min(hi[k], sign > 0 ? to : 1 - from)
     let count = 0
-    for (let i = Math.max(0, fromZ - this.minZ) * plane; i < end; i++) if (this.cells[i] !== 0) count++
+    for (let z = lo[2]; z < hi[2]; z++) {
+      for (let y = lo[1]; y < hi[1]; y++) {
+        const row = ((z - this.minZ) * this.ny + (y - this.minY)) * this.nx - this.minX
+        for (let x = lo[0]; x < hi[0]; x++) if (this.cells[row + x] !== 0) count++
+      }
+    }
     return count
   }
 
@@ -134,4 +151,35 @@ export class VoxelGrid {
     voxels.forEach(({ x, y, z }, n) => { grid.cells[grid.index(x, y, z)] = voxelIds[n] })
     return grid
   }
+}
+
+/**
+ * The grid in the coordinates of `axes`, unit vectors along world axes:
+ * its cell (x, y, z) is the grid's cell x · right + y · up + z · forward.
+ * The identity is the grid itself.
+ */
+export function rotateGrid(grid: VoxelData, { right, up, forward }: Basis): VoxelData {
+  if (right.x === 1 && up.y === 1 && forward.z === 1) return grid
+  const { minX, minY, minZ, nx, ny, nz, cells } = grid
+  const range = (a: Vec3) => {
+    const ends = [a.x * minX + a.y * minY + a.z * minZ, a.x * (minX + nx - 1) + a.y * (minY + ny - 1) + a.z * (minZ + nz - 1)]
+    return { min: Math.min(...ends), max: Math.max(...ends) + 1 }
+  }
+  const [rx, ry, rz] = [range(right), range(up), range(forward)]
+  const turned = new VoxelGrid({ minX: rx.min, minY: ry.min, minZ: rz.min, maxX: rx.max, maxY: ry.max, maxZ: rz.max }, grid.materials)
+  if (cells.length === 0) return turned
+  let i = 0
+  for (let z = minZ; z < minZ + nz; z++) {
+    for (let y = minY; y < minY + ny; y++) {
+      for (let x = minX; x < minX + nx; x++, i++) {
+        const id = cells[i]
+        if (id === 0) continue
+        const u = right.x * x + right.y * y + right.z * z
+        const v = up.x * x + up.y * y + up.z * z
+        const w = forward.x * x + forward.y * y + forward.z * z
+        turned.cells[((w - turned.minZ) * turned.ny + (v - turned.minY)) * turned.nx + (u - turned.minX)] = id
+      }
+    }
+  }
+  return turned
 }

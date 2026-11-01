@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { ParallaxRenderer, DEFAULT_RENDER_DISTANCE, type Chunk, type Frame } from './renderer'
 import { World } from './world'
 import { selectSlices, leakFreeDetail, chunkWidth, directionStep } from './slice-selection'
-import { MAX_VIEW_TANGENT, projector } from './view'
+import { projector, toLocal, viewBasis } from './view'
 
 // A small world with trees: rasterising the forest (~700k voxels) in jsdom
 // takes seconds per test. The renderer never modifies its world.
@@ -25,13 +25,13 @@ describe('ParallaxRenderer', () => {
     const layer = frame.layers.find(l => l.placements.some(p => p.chunk === chunk))
     const placement = layer?.placements.find(p => p.chunk === chunk)
     if (!layer || !placement) throw new Error('chunk not in the last frame')
-    return { ...placement, distance: layer.distance }
+    return { ...placement, distance: layer.distance, face: layer.face }
   }
 
-  /** Screen position of world point (x, y) on a chunk, per its placement. */
+  /** Screen position of point (x, y) on a chunk's plane (face coordinates), per its placement. */
   const screenOf = (chunk: Chunk, x: number, y: number) => {
-    const { x: px, y: py, distance } = placementOf(chunk)
-    const point = projector(frame)({ x: px + x - chunk.originX, y: py + y - chunk.originY, z: distance })
+    const { x: px, y: py, distance, face } = placementOf(chunk)
+    const point = projector(frame, face)({ x: px + x - chunk.originX, y: py + y - chunk.originY, z: distance })
     if (!point) throw new Error('point behind the camera')
     return point
   }
@@ -165,11 +165,11 @@ describe('ParallaxRenderer', () => {
       const index = renderer.getLayers().findIndex(l => l.chunks.length > 0)
       const layer = renderer.getLayers()[index]
       const before = frame.layers[index]
-      renderer.toggleLayerVisibility(layer.depth)
+      renderer.toggleLayerVisibility(layer.face, layer.depth)
       render()
       expect(layer.visible).toBe(false)
-      expect(frame.layers[index]).toEqual({ distance: before.distance, placements: [], fog: before.fog })
-      renderer.toggleLayerVisibility(layer.depth)
+      expect(frame.layers[index]).toEqual({ ...before, placements: [] })
+      renderer.toggleLayerVisibility(layer.face, layer.depth)
       render()
       expect(frame.layers[index]).toEqual(before)
       expect(lastUpdate().chunksRegenerated).toBe(0)
@@ -194,13 +194,16 @@ describe('ParallaxRenderer', () => {
       expect(scales).toEqual([...scales].sort((a, b) => b - a))
     })
 
-    it.each([[0, 0], [10, -10]])('projects the point the camera looks at (yaw %s°, pitch %s°) to the viewport centre on every chunk', (yaw, pitch) => {
+    it.each([[0, 0], [10, -10], [135, 30]])('projects the point the camera looks at (yaw %s°, pitch %s°) to the viewport centre on every chunk', (yaw, pitch) => {
       renderer.setOrientation({ yaw, pitch })
       render()
-      const [y, p] = [yaw, pitch].map(a => (a * Math.PI) / 180)
-      for (const { distance, placements } of frame.layers) {
-        // Where the view direction meets the layer's plane; the camera is at (0, 15).
-        const ahead = { x: Math.tan(y) * distance, y: 15 + (Math.tan(p) / Math.cos(y)) * distance }
+      if (yaw !== 0) expect(new Set(frame.layers.map(l => l.face)).size).toBeGreaterThan(1)
+      for (const { face, distance, placements } of frame.layers) {
+        // Where the view direction meets the layer's plane, in the face's coordinates.
+        const forward = toLocal(face, viewBasis({ yaw, pitch }).forward)
+        if (forward.z <= 0) continue
+        const camera = toLocal(face, renderer.getCamera())
+        const ahead = { x: camera.x + (forward.x / forward.z) * distance, y: camera.y + (forward.y / forward.z) * distance }
         for (const { chunk } of placements) {
           expect(screenOf(chunk, ahead.x, ahead.y)).toEqual({ x: expect.closeTo(400) as number, y: expect.closeTo(300) as number })
         }
@@ -295,7 +298,7 @@ describe('ParallaxRenderer', () => {
       const chunks = new Set(allChunks())
       renderer.setOrientation({ yaw: 10, pitch: 5 })
       render()
-      expect(renderer.getLayers().map(l => [l.depth, l.size])).toEqual(slices)
+      expect(renderer.getLayers().filter(l => l.face === '+z').map(l => [l.depth, l.size])).toEqual(slices)
       expect(lastUpdate().chunksReused).toBeGreaterThan(lastUpdate().chunksRegenerated)
       expect(allChunks().filter(c => !chunks.has(c))).toHaveLength(lastUpdate().chunksRegenerated)
       renderer.setOrientation({ yaw: 0, pitch: 0 })
@@ -319,8 +322,8 @@ describe('ParallaxRenderer', () => {
         renderer.setFov(fov)
         renderer.setMaxLeak(pixels)
         const tan = Math.tan((fov * Math.PI) / 360)
-        // The longer viewport side is 800 px; rays may be turned up to MAX_VIEW_TANGENT.
-        expect(renderer.getDetail()).toBe(leakFreeDetail(400 / tan, MAX_VIEW_TANGENT, pixels))
+        // The longer viewport side is 800 px; a face draws rays up to tangent 1.
+        expect(renderer.getDetail()).toBe(leakFreeDetail(400 / tan, 1, pixels))
       }
     })
 
@@ -351,13 +354,21 @@ describe('ParallaxRenderer', () => {
   })
 
   describe('orientation', () => {
-    it('turns as far as the slices reach, and turns back when the view widens', () => {
-      renderer.setOrientation({ yaw: 90 })
-      const { yaw } = renderer.getOrientation()
-      // 90° across 800 px puts the side edge at 45°; it may turn to atan(2).
-      expect(yaw).toBeCloseTo((Math.atan(MAX_VIEW_TANGENT) * 180) / Math.PI - 45, 3)
-      renderer.setFov(110)
-      expect(renderer.getOrientation().yaw).toBeLessThan(yaw)
+    it('looks all around: behind the camera with the -z face, straight up with +y', () => {
+      // In the middle of the world, so there is something in every direction.
+      renderer.setCamera({ x: 0, y: 15, z: 0 })
+      for (const [yaw, pitch, face] of [[180, 0, '-z'], [0, 90, '+y'], [-90, 0, '-x']] as const) {
+        renderer.setOrientation({ yaw, pitch })
+        render()
+        // A 90° view straight at a face shows no other.
+        expect(new Set(renderer.getLayers().map(l => l.face))).toEqual(new Set([face]))
+        expect(lastUpdate().chunkCount).toBeGreaterThan(0)
+      }
+    })
+
+    it('stops pitch at straight up and down, and wraps yaw', () => {
+      renderer.setOrientation({ yaw: 190, pitch: 100 })
+      expect(renderer.getOrientation()).toEqual({ yaw: -170, pitch: 90 })
     })
   })
 

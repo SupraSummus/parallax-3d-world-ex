@@ -215,8 +215,8 @@ function App() {
     window.open(`${import.meta.env.BASE_URL}viewer.html?${query.toString()}`, '_blank', 'noopener')
   }
 
-  const handleToggleLayerVisibility = (depth: number) => {
-    rendererRef.current?.toggleLayerVisibility(depth)
+  const handleToggleLayerVisibility = (face: string, depth: number) => {
+    rendererRef.current?.toggleLayerVisibility(face, depth)
     requestRender()
   }
 

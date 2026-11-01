@@ -52,8 +52,8 @@ export function chunkWidth(size: number): number {
 /**
  * The largest angle error (as a tangent) between a ray and the direction its
  * chunk is baked along, given the focal length in pixels, the largest
- * tangent of a ray on screen (tan(fov / 2) looking straight along +z) and
- * the leak tolerance ε in pixels.
+ * tangent of a ray the slices are drawn for (1 for a cube face) and the
+ * leak tolerance ε in pixels.
  *
  * A slice [a, a + s] drawn at its centre misplaces an edge seen at tangent
  * τ_err off its baking direction by up to τ_err·s/2 world units; a leak
@@ -61,8 +61,8 @@ export function chunkWidth(size: number): number {
  * s ≤ a / detail that is τ_err·focal/detail ≤ ε, so detail = τ_err·focal/ε.
  * Chunks span at most C / detail and directions are at most that far apart
  * (directionStep), so τ_err ≤ C / detail. Both hold for
- * τ_err = √(C·ε / focal). Rays on screen are never more than maxTangent
- * off a straight-ahead bake, so τ_err is at most that.
+ * τ_err = √(C·ε / focal). Rays are never more than maxTangent off a
+ * straight-ahead bake, so τ_err is at most that.
  */
 export function bakeAngleError(focal: number, maxTangent: number, maxLeakPixels: number): number {
   return Math.min(maxTangent, Math.sqrt((CHUNK_WIDTH_PER_SIZE * maxLeakPixels) / focal))

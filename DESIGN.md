@@ -4,7 +4,9 @@ The world is cut into z-slices, and each slice into aligned square chunks;
 each chunk in view is rasterised once, flat, as seen from a direction
 close to the camera's, into a pixel buffer, and WebGL draws the buffers
 on their slices' planes in perspective.
-The camera looks roughly along +z (section 4). Voxel (x, y, z) is the unit cube centred on
+Sections 1–3 describe one such stack, looking along +z;
+the camera looks all around with six, one per face of a cube (section 4).
+Voxel (x, y, z) is the unit cube centred on
 (x, y, z).
 
 ```
@@ -85,8 +87,8 @@ hides, e.g. stone under the lake's water surface.
 Bound, with ε = the "max occlusion leak" setting in screen pixels (default
 16): **geometry that perspective hides never shows by more than ε pixels**
 (or, closer than `detail`, by more than T voxels; see below).
-T = 2 (`MAX_VIEW_TANGENT`) bounds the tangent of any ray on screen,
-in x and in y, however the camera is turned (section 4).
+T = 1: a stack only draws rays within 45° of its axis, in x and in y
+(section 4).
 
 **Derivation.** Every step below is stated and checked on random samples,
 plus end to end against ray-cast perspective, in
@@ -123,7 +125,7 @@ grow with distance. Slices are at least one voxel thick, though, so closer
 than `detail` the leak is bounded by τ ≤ T voxels instead, which
 can be more than ε pixels.
 
-These are pixels of the view straight along +z.
+These are pixels of the view straight along the stack's axis.
 A turned view draws a plane larger towards the screen's edges
 (by 1 / cos² of the angle from the screen centre),
 so leaks there can be up to 2× larger in a 90° view.
@@ -213,46 +215,53 @@ On the forest at 1280 × 800, 90°: 105 slices, ~1300 chunks, ~43 Mpx
 **Workers.** In the app, a frame never waits for chunks:
 each render lists the missing chunks in view,
 and up to 4 workers, each with a copy of the world, bake them
-(`WorkerBakery`, `bake.worker.ts`).
+(`WorkerBakery`, `bake.worker.ts`, `ChunkBaker`).
 Until a chunk arrives, the cell's latest bake (along an older direction) stands in;
 a cell never baked shows nothing yet, e.g. right after start or when slices re-tile.
-Those cells are baked first, then the rest, each near to far.
+Those cells are baked first, then the rest, each near to far across all faces.
 Each worker has a few dozen requests in flight,
 enough to keep baking while the main thread is busy.
 Without a bakery (tests), `render()` bakes missing chunks itself.
 
-## 4. Turning and compositing (`view.ts`, `renderer.ts`, `compositor.ts`)
+## 4. Faces, turning and compositing (`view.ts`, `renderer.ts`, `compositor.ts`)
 
-**Turning.** The camera has a yaw and a pitch, no roll (`viewBasis`).
+**Faces.** The camera has a yaw and a pitch, no roll (`viewBasis`).
+To look all around, the world gets six slice stacks,
+one per face of a cube around the camera (`FACES`: ±x, ±y, ±z).
+A face is a rotation:
+its stack is sections 1–3 on a copy of the world turned so the face
+looks along +z (`rotateGrid`, made by a baker when it first bakes the face),
+with faces shaded by the way they face in the world (`shadedPalette`).
+Each face draws only the rays within 45° of its axis,
+so the faces tile the screen;
+the fragment shader discards the rest of its chunks.
+
 A chunk's baking direction depends on where the chunk is,
 not on where the camera looks,
-and detail is worked out for T, not for the current orientation.
+and detail is worked out for T = 1, not for the current orientation.
 So turning keeps every slice and chunk;
-only chunks coming into view are baked.
-
-Slices are drawn for rays within T = 2 (63°) of +z, in x and in y.
-`turn()` stops where a screen corner would leave that pyramid
-(yaw first, then pitch, so the other still moves at the edge),
-and pulls the view back when a wider view no longer fits.
-Looking all around is an open idea in PRD.md.
+only chunks coming into view are baked,
+and faces coming into view are sliced.
 
 **Placement.** `render()` returns a `Frame`:
 the view (orientation, viewport W × H in CSS pixels,
 `focal = max(W, H) / 2 / tan(fov/2)` in pixels)
-and, for each slice near to far, its distance d (to its centre plane),
-its chunks and its fog.
-A chunk is a rectangle on the plane z = d,
+and, face by face, for each slice near to far,
+its distance d (to its centre plane), its chunks and its fog.
+A chunk is a rectangle on the plane z = d in its face's coordinates,
 its top-left corner at (originX − camera.x, originY − camera.y, d)
 relative to the camera, chunk pixels / renderScale wide and high.
-A camera-relative point p goes to (`projector`, and the vertex shader):
+A camera-relative point p goes to (`projector`, and the vertex shader;
+right, up and forward are the camera's axes in the face's coordinates):
 
 ```
 x = W/2 + focal · (p · right) / (p · forward)
 y = H/2 − focal · (p · up)    / (p · forward)
 ```
 
-The screen cuts each slice's plane in a quadrilateral.
-Chunk cells are searched in its bounding box (`viewTangents`);
+A face is skipped if the screen shows none of its pyramid.
+Chunk cells are searched in the bounding box of the part it shows
+(`faceTangents`);
 a cell, then its chunk's content, is kept
 if its projected corners' bounding box overlaps the viewport (`rectangleTest`).
 
@@ -261,32 +270,33 @@ textured rectangle per chunk, then the sky behind them. Chunk pixels are
 opaque or empty, so it draws near to far with a depth test and discards
 empty pixels: what nearer slices cover is rejected instead of blended
 (the forest stacks ~40 screens of chunks). Depth is the layer's index,
-not its distance: slices are parallel planes, so every ray meets them
-near to far. A chunk's texture is uploaded
+not its distance: a face's slices are parallel planes, so every ray
+meets them near to far, and faces never share a pixel. A chunk's texture is uploaded
 when it comes into view and deleted when it leaves. Magnified chunks are
 sampled nearest, to keep voxel edges crisp; minified ones smoothly.
 
 **Fog.** A slice at distance d keeps `exp(−d / F)` of its own colour;
 the rest is the horizon colour, mixed in per pixel.
 F is 0.7 × the render distance, so the far cut-off stays hazy.
-Fog follows depth along +z, not along the ray, so a turned view fogs
-its sides a little less than true distance would.
+d is measured along the face's axis, not the ray:
+fog is the same on both sides of a seam,
+but a little lighter towards the cube's edges than true distance would make it.
 The sky fades from the horizon colour at eye level (elevation 0) to blue
 at 32° up, along each pixel's ray, and gets the fog of the render
 distance (or of the last slice, if farther).
 
 ## 5. Caching
 
-Slices are keyed by `depth:size` and hold their chunks keyed by corner.
+Slices are keyed by `face:depth:size` and hold their chunks keyed by corner.
 Insertion order of the slice `Map` is the LRU order. Slices and chunks that
 leave the view lose their textures but stay cached so moving back
-reuses them: up to `MAX_CACHED_SLICES` = 64 slices, and hidden chunks
+reuses them: up to `MAX_CACHED_SLICES` = 256 slices, and hidden chunks
 up to `MAX_HIDDEN_CHUNK_PIXELS` = 32 Mpx (oldest slices' first).
 
 | Event | Effect |
 |---|---|
 | x/y movement | Chunks still in view reused unless their baking direction changes; chunks entering the view rasterised; placements update |
-| turning | Slices and chunks reused; chunks entering the view rasterised |
+| turning | Slices and chunks reused; chunks entering the view baked; a face baked for the first time turns the baker's copy of the world (forest: ~35 ms, in the workers) |
 | field of view change | Focal length, hence detail and directions, change: slices still needed are reused, chunks rebaked |
 | leak tolerance change | Slices still needed are reused |
 | small z movement | Far slices reused; a few near slices re-tile |
@@ -305,6 +315,8 @@ excludes baking in workers.
 A world is a dense voxel grid plus a spawn point (`voxel-grid.ts`):
 one material id byte per cell of a box, 0 for empty.
 Cells are z-major, so a slice is one contiguous range.
+Each baker (one per worker) keeps a turned copy for each other face it has baked
+(forest: ~9 MB each).
 A list of voxel objects is built only on request (reference viewer, tests).
 Renderer distances are in voxels.
 The forest's `VOXEL_SIZE` is 0.5 m,
@@ -332,8 +344,11 @@ so from the parallax camera's position both renderers should agree.
 - Side faces are drawn as rectangles: near the camera, towards the
   screen's corners, voxels lose their slanted edges.
 - Near slices are heavily upscaled from `RENDER_SCALE`.
-- Beside the camera, nearer than `NEAR_DEPTH` along +z, nothing is drawn,
-  and near voxels seen at a steep angle are the least accurate; a turned
-  view shows more of both at its edges.
+- Within `NEAR_DEPTH` of the camera along a face's axis nothing is
+  drawn, and near voxels seen at a steep angle are the least accurate.
+- Inside a voxel (the camera has no collisions), the cut faces of the
+  nearest slices fill the screen.
+- At a seam, the two faces slice the world differently: geometry
+  crossing it can be off by up to the leak bound on each side.
 - Closer than `detail`, chunks span more than `directionError`,
   so gap filling may leave gaps there.

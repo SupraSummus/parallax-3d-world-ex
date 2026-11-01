@@ -1,8 +1,7 @@
 /**
- * Where the camera looks: yaw and pitch away from +z, the direction the
- * world is sliced along. The slices only cover rays within MAX_VIEW_TANGENT
- * of +z, so the view may turn only as far as its corners stay inside that
- * pyramid. See DESIGN.md, section 4.
+ * The camera's view and the six faces of the cube around it. Each face
+ * has its own stack of slices, cut along its axis, and draws the rays
+ * within 45° of that axis. See DESIGN.md, section 4.
  */
 import type { Vec3 } from './world'
 
@@ -12,14 +11,7 @@ export interface Orientation {
   pitch: number
 }
 
-/**
- * The largest tangent (|x / z| or |y / z|) of a ray the slices are drawn
- * for. Until the other five directions get slices of their own, this is
- * how far the view may turn: 63° straight off +z.
- */
-export const MAX_VIEW_TANGENT = 2
-
-/** Camera axes in world coordinates: screen right, screen up, and the view direction. */
+/** Axes in world coordinates: screen right, screen up, and the view direction. */
 export interface Basis {
   right: Vec3
   up: Vec3
@@ -37,8 +29,40 @@ export function viewBasis({ yaw, pitch }: Orientation): Basis {
 }
 
 /**
+ * A face of the cube: the camera's axes looking straight at it. Its slices
+ * are cut along `forward`, in face coordinates (x, y, z) = world
+ * x · right + y · up + z · forward; +z is the world itself.
+ */
+export interface Face extends Basis {
+  name: string
+}
+
+const axis = (x: number, y: number, z: number): Vec3 => ({ x, y, z })
+export const FACES: readonly Face[] = [
+  { name: '+z', right: axis(1, 0, 0), up: axis(0, 1, 0), forward: axis(0, 0, 1) },
+  { name: '+x', right: axis(0, 0, -1), up: axis(0, 1, 0), forward: axis(1, 0, 0) },
+  { name: '-z', right: axis(-1, 0, 0), up: axis(0, 1, 0), forward: axis(0, 0, -1) },
+  { name: '-x', right: axis(0, 0, 1), up: axis(0, 1, 0), forward: axis(-1, 0, 0) },
+  { name: '+y', right: axis(1, 0, 0), up: axis(0, 0, -1), forward: axis(0, 1, 0) },
+  { name: '-y', right: axis(1, 0, 0), up: axis(0, 0, 1), forward: axis(0, -1, 0) },
+]
+
+const dot = (a: Vec3, b: Vec3) => a.x * b.x + a.y * b.y + a.z * b.z
+
+/** World vector v in the coordinates of `axes`. */
+export function toLocal(axes: Basis, v: Vec3): Vec3 {
+  return { x: dot(v, axes.right), y: dot(v, axes.up), z: dot(v, axes.forward) }
+}
+
+/** The camera's axes in a face's coordinates. */
+export function faceBasis(face: Face, orientation: Orientation): Basis {
+  const { right, up, forward } = viewBasis(orientation)
+  return { right: toLocal(face, right), up: toLocal(face, up), forward: toLocal(face, forward) }
+}
+
+/**
  * Focal length in pixels: the longer viewport side spans `fov` degrees.
- * Looking straight ahead, a plane d ahead is drawn at focal / d pixels per
+ * Looking straight at a plane d ahead, it is drawn at focal / d pixels per
  * world unit.
  */
 export function focalLength(fov: number, width: number, height: number): number {
@@ -53,116 +77,97 @@ export interface View {
   focal: number
 }
 
-/** World direction (camera-relative) through the screen point (sx, sy), in CSS pixels from the top-left. */
-export function screenRay({ orientation, width, height, focal }: View, sx: number, sy: number): Vec3 {
-  const { right, up, forward } = viewBasis(orientation)
-  const a = sx - width / 2
-  const b = height / 2 - sy
+/** Direction through the screen point (sx, sy), in CSS pixels from the top-left, in a face's coordinates. */
+export function screenRay(view: View, face: Face, sx: number, sy: number): Vec3 {
+  const { right, up, forward } = faceBasis(face, view.orientation)
+  const a = sx - view.width / 2
+  const b = view.height / 2 - sy
   return {
-    x: forward.x * focal + right.x * a + up.x * b,
-    y: forward.y * focal + right.y * a + up.y * b,
-    z: forward.z * focal + right.z * a + up.z * b,
+    x: forward.x * view.focal + right.x * a + up.x * b,
+    y: forward.y * view.focal + right.y * a + up.y * b,
+    z: forward.z * view.focal + right.z * a + up.z * b,
   }
 }
 
 /**
- * Bounds of x / z and y / z over the screen's rays: on the plane z = d
- * ahead of the camera, the screen shows (part of) the rectangle
- * [minX·d, maxX·d] × [minY·d, maxY·d]. Null if some screen ray does not
- * point ahead (z ≤ 0).
+ * Clips a convex polygon to the half-space distance(p) ≥ 0 (Sutherland–
+ * Hodgman), for a linear `distance`. Points can be rays: through the
+ * origin, a half-space of rays is a half-space of vectors.
  */
-export function viewTangents(view: View): { minX: number; maxX: number; minY: number; maxY: number } | null {
-  let minX = Infinity
-  let maxX = -Infinity
-  let minY = Infinity
-  let maxY = -Infinity
-  // The screen's corners span the view; the plane cuts the pyramid in a quadrilateral.
-  for (const [sx, sy] of [[0, 0], [view.width, 0], [0, view.height], [view.width, view.height]]) {
-    const ray = screenRay(view, sx, sy)
-    if (ray.z <= 0) return null
-    minX = Math.min(minX, ray.x / ray.z)
-    maxX = Math.max(maxX, ray.x / ray.z)
-    minY = Math.min(minY, ray.y / ray.z)
-    maxY = Math.max(maxY, ray.y / ray.z)
-  }
-  return { minX, maxX, minY, maxY }
-}
-
-/** Whether every ray on screen is within MAX_VIEW_TANGENT of +z. */
-function inReach(view: View): boolean {
-  const t = viewTangents(view)
-  return t !== null && Math.max(-t.minX, t.maxX, -t.minY, t.maxY) <= MAX_VIEW_TANGENT
-}
-
-/**
- * The orientation closest to `to` along the way from `from` (assumed in
- * reach) that keeps the view in reach.
- */
-function furthest(view: View, from: Orientation, to: Orientation): Orientation {
-  const at = (t: number) => ({ yaw: from.yaw + (to.yaw - from.yaw) * t, pitch: from.pitch + (to.pitch - from.pitch) * t })
-  if (inReach({ ...view, orientation: to })) return to
-  let lo = 0
-  let hi = 1
-  for (let i = 0; i < 24; i++) {
-    const mid = (lo + hi) / 2
-    if (inReach({ ...view, orientation: at(mid) })) lo = mid
-    else hi = mid
-  }
-  return at(lo)
-}
-
-/**
- * Turns `view` towards `target` as far as the view stays in reach: yaw
- * first, then pitch, so that pushing against the edge in one still moves
- * the other. If `view` itself is out of reach (after a resize or a wider
- * field of view), it is first pulled back towards straight ahead, which
- * is always in reach (MAX_FOV is below 2·atan(MAX_VIEW_TANGENT)).
- */
-export function turn(view: View, target: Orientation): Orientation {
-  if (view.width <= 0 || view.height <= 0) return target
-  const ahead = { yaw: 0, pitch: 0 }
-  let current = furthest(view, ahead, view.orientation)
-  current = furthest(view, current, { ...current, yaw: target.yaw })
-  return furthest(view, current, { ...current, pitch: target.pitch })
-}
-
-/**
- * For one view: the screen position (CSS pixels from the top-left) of a
- * camera-relative world point, or null if it is not in front of the
- * camera. The compositor's vertex shader does the same.
- */
-export function projector({ orientation, width, height, focal }: View): (p: Vec3) => { x: number; y: number } | null {
-  const { right, up, forward } = viewBasis(orientation)
-  return p => {
-    const z = p.x * forward.x + p.y * forward.y + p.z * forward.z
-    if (z <= 0) return null
-    const x = p.x * right.x + p.y * right.y + p.z * right.z
-    const y = p.x * up.x + p.y * up.y + p.z * up.z
-    return { x: width / 2 + (x * focal) / z, y: height / 2 - (y * focal) / z }
-  }
-}
-
-/**
- * Whether a camera-relative rectangle [left, right] × [bottom, top] on the
- * plane z = distance may show on screen: whether its projection's bounding
- * box overlaps the viewport. Conservative: true if a corner is not in
- * front of the camera.
- */
-export function rectangleTest(view: View): (left: number, right: number, bottom: number, top: number, distance: number) => boolean {
-  const to = projector(view)
-  return (left, right, bottom, top, distance) => {
-    let minX = Infinity
-    let maxX = -Infinity
-    let minY = Infinity
-    let maxY = -Infinity
-    for (const [x, y] of [[left, bottom], [right, bottom], [left, top], [right, top]]) {
-      const p = to({ x, y, z: distance })
-      if (!p) return true
-      minX = Math.min(minX, p.x)
-      maxX = Math.max(maxX, p.x)
-      minY = Math.min(minY, p.y)
-      maxY = Math.max(maxY, p.y)
+function clip(polygon: Vec3[], distance: (p: Vec3) => number): Vec3[] {
+  const out: Vec3[] = []
+  polygon.forEach((p, i) => {
+    const q = polygon[(i + 1) % polygon.length]
+    const [dp, dq] = [distance(p), distance(q)]
+    if (dp >= 0) out.push(p)
+    if ((dp < 0) !== (dq < 0)) {
+      const t = dp / (dp - dq)
+      out.push({ x: p.x + (q.x - p.x) * t, y: p.y + (q.y - p.y) * t, z: p.z + (q.z - p.z) * t })
     }
-    return minX < view.width && maxX > 0 && minY < view.height && maxY > 0
+  })
+  return out
+}
+
+const PYRAMID_SIDES = [(p: Vec3) => p.z - p.x, (p: Vec3) => p.z + p.x, (p: Vec3) => p.z - p.y, (p: Vec3) => p.z + p.y]
+
+/**
+ * Where the screen meets a face's pyramid of rays (|x| ≤ z, |y| ≤ z):
+ * bounds of x / z and y / z there, within [-1, 1]. On the face's plane
+ * z = d, the face draws (part of) [minX·d, maxX·d] × [minY·d, maxY·d].
+ * Null if the screen shows none of the face.
+ */
+export function faceTangents(view: View, face: Face): { minX: number; maxX: number; minY: number; maxY: number } | null {
+  const { width: w, height: h } = view
+  let rays = [[0, 0], [w, 0], [w, h], [0, h]].map(([sx, sy]) => screenRay(view, face, sx, sy))
+  for (const side of PYRAMID_SIDES) rays = clip(rays, side)
+  const tangents = rays.map(r => ({ x: r.x / r.z, y: r.y / r.z }))
+  // Shoelace area: a face the screen only touches along an edge shows nothing.
+  const area = tangents.reduce((sum, p, i) => {
+    const q = tangents[(i + 1) % tangents.length]
+    return sum + p.x * q.y - q.x * p.y
+  }, 0)
+  if (!(Math.abs(area) > 1e-9)) return null
+  const xs = tangents.map(t => t.x)
+  const ys = tangents.map(t => t.y)
+  return { minX: Math.min(...xs), maxX: Math.max(...xs), minY: Math.min(...ys), maxY: Math.max(...ys) }
+}
+
+/**
+ * For one view and face: the screen position (CSS pixels from the
+ * top-left) of a camera-relative point in face coordinates, or null if it
+ * is not in front of the camera. The compositor's vertex shader does the
+ * same.
+ */
+export function projector(view: View, face: Face): (p: Vec3) => { x: number; y: number } | null {
+  const camera = faceBasis(face, view.orientation)
+  return p => {
+    const z = dot(p, camera.forward)
+    if (z <= 0) return null
+    return {
+      x: view.width / 2 + (dot(p, camera.right) * view.focal) / z,
+      y: view.height / 2 - (dot(p, camera.up) * view.focal) / z,
+    }
+  }
+}
+
+/** Points nearer the camera plane than this are cut off before projecting. */
+const NEAR_PLANE = 1e-3
+
+/**
+ * Whether a camera-relative rectangle [left, right] × [bottom, top] on a
+ * face's plane z = distance (face coordinates) may show on screen: whether
+ * the bounding box of its part in front of the camera, projected,
+ * overlaps the viewport.
+ */
+export function rectangleTest(view: View, face: Face): (left: number, right: number, bottom: number, top: number, distance: number) => boolean {
+  const { forward } = faceBasis(face, view.orientation)
+  const to = projector(view, face)
+  return (left, right, bottom, top, distance) => {
+    const corners = [[left, bottom], [right, bottom], [right, top], [left, top]].map(([x, y]) => ({ x, y, z: distance }))
+    const points = clip(corners, p => dot(p, forward) - NEAR_PLANE).flatMap(p => to(p) ?? [])
+    if (points.length === 0) return false
+    const xs = points.map(p => p.x)
+    const ys = points.map(p => p.y)
+    return Math.min(...xs) < view.width && Math.max(...xs) > 0 && Math.min(...ys) < view.height && Math.max(...ys) > 0
   }
 }

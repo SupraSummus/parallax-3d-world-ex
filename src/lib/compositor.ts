@@ -1,5 +1,5 @@
 import type { Chunk, Frame } from './renderer'
-import { viewBasis } from './view'
+import { faceBasis, viewBasis, type Basis, type Face } from './view'
 
 // Sky gradient: from the horizon colour at eye level up to SKY_TOP at
 // SKY_TOP_TANGENT (tangent of the elevation; 32°), flat above and below.
@@ -9,19 +9,22 @@ export const SKY_HORIZON = '#b9d3e8'
 const SKY_TOP_TANGENT = 0.625
 
 // One rectangle per chunk on its layer's plane, projected like
-// projector() in view.ts; `view` has the camera's axes as columns. The
-// corners come from gl_VertexID, so there are no vertex buffers. The sky
-// covers the screen; `ray` is each pixel's world direction.
+// projector() in view.ts; `view` has the camera's axes as columns, in the
+// layer's face coordinates; `position` is the camera-relative point on the
+// plane. The corners come from gl_VertexID, so there are no vertex
+// buffers. The sky covers the screen; `ray` is each pixel's world
+// direction.
 const VERTEX_SHADER = `#version 300 es
 uniform vec2 viewport;
 uniform float focal;
 uniform mat3 view;
-uniform vec4 rect; // x, y of the top-left corner, width, height (world units, camera-relative)
+uniform vec4 rect; // x, y of the top-left corner, width, height (camera-relative)
 uniform float distance;
 uniform float depth;
 uniform bool sky;
 out vec2 uv;
 out vec3 ray;
+out vec3 position;
 void main() {
   uv = vec2(gl_VertexID & 1, gl_VertexID >> 1);
   vec2 half_viewport = viewport / 2.0;
@@ -31,16 +34,18 @@ void main() {
     gl_Position = vec4(ndc, depth, 1.0);
     return;
   }
-  vec3 p = transpose(view) * vec3(rect.x + uv.x * rect.z, rect.y - uv.y * rect.w, distance);
+  position = vec3(rect.x + uv.x * rect.z, rect.y - uv.y * rect.w, distance);
+  vec3 p = transpose(view) * position;
   // Homogeneous, so the GPU clips what is behind the camera and interpolates in perspective.
   gl_Position = vec4(p.xy * focal / half_viewport, depth * p.z, p.z);
 }`
 
-// Chunk pixels are opaque or empty, so nothing is blended: empty pixels are
-// discarded and the depth test hides what nearer layers cover. The sky is
-// one more rectangle, behind every layer.
+// A face draws only its own rays, within 45° of its axis: the faces tile
+// the screen. Chunk pixels are opaque or empty, so nothing is blended:
+// empty pixels are discarded and the depth test hides what nearer layers
+// cover. The sky is one more rectangle, behind every layer.
 const FRAGMENT_SHADER = `#version 300 es
-precision mediump float;
+precision highp float;
 uniform sampler2D image;
 uniform vec3 skyTop;
 uniform vec3 horizon;
@@ -48,6 +53,7 @@ uniform float fog;
 uniform bool sky;
 in vec2 uv;
 in vec3 ray;
+in vec3 position;
 out vec4 color;
 void main() {
   vec3 rgb;
@@ -55,6 +61,7 @@ void main() {
     float elevation = ray.y / length(ray.xz);
     rgb = mix(horizon, skyTop, clamp(elevation / ${String(SKY_TOP_TANGENT)}, 0.0, 1.0));
   } else {
+    if (max(abs(position.x), abs(position.y)) > position.z) discard;
     vec4 texel = texture(image, uv);
     // Smoothing a minified chunk blends in its empty pixels; keep only the mostly opaque.
     if (texel.a < 0.5) discard;
@@ -117,16 +124,23 @@ export class Compositor {
     gl.clear(gl.DEPTH_BUFFER_BIT)
     gl.uniform2f(u.viewport, frame.width, frame.height)
     gl.uniform1f(u.focal, frame.focal)
-    // Columns: the camera's right, up and forward axes in world coordinates.
-    const { right, up, forward } = viewBasis(frame.orientation)
-    gl.uniformMatrix3fv(u.view, false, [right, up, forward].flatMap(v => [v.x, v.y, v.z]))
+    // Columns: the camera's right, up and forward axes.
+    const setView = ({ right, up, forward }: Basis) => {
+      gl.uniformMatrix3fv(u.view, false, [right, up, forward].flatMap(v => [v.x, v.y, v.z]))
+    }
 
     // Layer i at depth z(i), strictly inside (-1, 1) so rounding never clips
     // it; the sky behind all of them, still in front of the cleared depth.
     const z = (i: number) => (2 * i + 1) / (frame.layers.length + 2) - 1
     const drawn = new Set<Chunk>()
     gl.uniform1i(u.sky, 0)
-    frame.layers.forEach(({ distance, placements, fog }, i) => {
+    let face: Face | null = null
+    frame.layers.forEach((layer, i) => {
+      if (layer.face !== face) {
+        face = layer.face
+        setView(faceBasis(face, frame.orientation))
+      }
+      const { distance, placements, fog } = layer
       gl.uniform1f(u.depth, z(i))
       gl.uniform1f(u.distance, distance)
       gl.uniform1f(u.fog, fog)
@@ -138,6 +152,7 @@ export class Compositor {
       }
     })
     gl.uniform1i(u.sky, 1)
+    setView(viewBasis(frame.orientation))
     gl.uniform1f(u.depth, z(frame.layers.length))
     gl.uniform1f(u.fog, frame.fog)
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
