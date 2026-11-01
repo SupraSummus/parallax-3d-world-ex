@@ -199,13 +199,14 @@ On the forest at 1280 × 800, 90°: 105 slices, ~1300 chunks, ~43 Mpx
 (straight-baked, unchunked slices: 141 slices, ~235 Mpx).
 
 **Workers.** In the app, a frame never waits for chunks:
-each render lists the missing chunks in view, near to far,
+each render lists the missing chunks in view,
 and up to 4 workers, each with a copy of the world, bake them
 (`WorkerBakery`, `bake.worker.ts`).
-Each worker has at most 4 requests in flight,
-so a camera that moves on leaves no backlog.
 Until a chunk arrives, the cell's latest bake (along an older direction) stands in;
 a cell never baked shows nothing yet, e.g. right after start or when slices re-tile.
+Those cells are baked first, then the rest, each near to far.
+Each worker has a few dozen requests in flight,
+enough to keep baking while the main thread is busy.
 Without a bakery (tests), `render()` bakes missing chunks itself.
 
 ## 4. Turning and compositing (`view.ts`, `renderer.ts`, `compositor.ts`)

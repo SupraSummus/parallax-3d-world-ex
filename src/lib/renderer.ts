@@ -222,7 +222,11 @@ export class ParallaxRenderer {
     let chunksRegenerated = 0
     let chunksReused = 0
     let chunksPending = 0
-    const missing: ChunkRequest[] = []
+    // Missing chunks, near to far. Cells that show nothing go first: while
+    // the camera moves, near chunks change direction all the time and would
+    // keep the workers from ever reaching them.
+    const uncovered: ChunkRequest[] = []
+    const stale: ChunkRequest[] = []
     const inView = new Set<Chunk>()
     const slicesInView: Slice[] = []
     const frame: Frame = {
@@ -264,10 +268,11 @@ export class ParallaxRenderer {
             if (this.baker) {
               chunk = this.store(request, this.baker.bake(request))
             } else {
-              missing.push(request)
               chunksPending++
               // Until it is baked, an older bake of the cell stands in.
               chunk = slice.latest.get(cellKey(x, y))
+              if (chunk) stale.push(request)
+              else uncovered.push(request)
             }
             if (!chunk) continue
           }
@@ -292,7 +297,7 @@ export class ParallaxRenderer {
     this.inView = inView
     this.visibleSlices = slicesInView
     this.evict()
-    this.bakery?.want(missing)
+    this.bakery?.want([...uncovered, ...stale])
     const voxelsRendered = this.facesBaked
     this.facesBaked = 0
 
