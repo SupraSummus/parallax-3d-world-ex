@@ -143,34 +143,96 @@ export class ChunkBaker {
   }
 }
 
+/** Numbers per request in a `want` message (see encodeRequests). */
+const REQUEST = 8
+
+/** Requests packed into numbers, REQUEST each, to post to a worker cheaply. */
+export function encodeRequests(requests: readonly ChunkRequest[]): Float64Array {
+  const packed = new Float64Array(requests.length * REQUEST)
+  requests.forEach(({ face, depth, size, i, j, tanX, tanY, fillDetail }, n) => {
+    const index = faceIndex.get(face)
+    if (index === undefined) throw new Error(`no face ${face}`)
+    packed.set([index, depth, size, i, j, tanX, tanY, fillDetail], n * REQUEST)
+  })
+  return packed
+}
+
+/** The n-th request of encodeRequests' numbers. */
+function decodeRequest(packed: Float64Array, n: number): ChunkRequest {
+  const [face, depth, size, i, j, tanX, tanY, fillDetail] = packed.subarray(n * REQUEST, (n + 1) * REQUEST)
+  return { face: FACES[face].name, depth, size, i, j, tanX, tanY, fillDetail }
+}
+
+/** A key per chunk request. */
+const requestKey = ({ face, depth, size, i, j, tanX, tanY, fillDetail }: ChunkRequest) => [face, depth, size, i, j, tanX, tanY, fillDetail].join()
+
 /**
- * Messages to a bake worker: a new world, or a chunk to bake. `generation`
- * numbers worlds; the answer echoes it.
+ * Messages to a bake worker: a new world (numbered by `generation`, which
+ * its results echo), or the chunks to bake, most wanted first, replacing
+ * the previous list. `received` is the `seq` of the worker's last result
+ * the main thread had taken when it listed them.
  */
 export type BakeMessage =
-  | { type: 'world'; grid: VoxelData }
-  | { type: 'bake'; generation: number; request: ChunkRequest }
+  | { type: 'world'; generation: number; grid: VoxelData }
+  | { type: 'want'; requests: Float64Array; received: number }
 
-/** A bake worker's answer to a `bake` message. */
+/** A bake worker's result: a baked chunk, `seq` numbering the worker's results. */
 export interface BakeResult {
   generation: number
+  seq: number
   request: ChunkRequest
   image: ChunkImage
 }
 
 /**
- * A bake worker's message handler: bakes each requested chunk and posts
- * the result, handing over its pixel buffer.
+ * A bake worker's message handler: bakes the latest list one chunk per
+ * `schedule`d step, so a new list (handled between steps) replaces the rest
+ * of the old one, and posts each chunk at once, handing over its buffers.
+ * Chunks posted after the list's `received` are on their way, and skipped.
  */
-export function bakeHandler(post: (result: BakeResult, transfer: Transferable[]) => void): (message: BakeMessage) => void {
+export function bakeHandler(
+  post: (result: BakeResult, transfer: Transferable[]) => void,
+  schedule: (step: () => void) => void,
+): (message: BakeMessage) => void {
   let baker: ChunkBaker | null = null
+  let generation = 0
+  let queue: Float64Array = new Float64Array(0)
+  let next = 0
+  let seq = 0
+  // Chunks posted, by key: the seq they were posted with.
+  const posted = new Map<string, number>()
+  let scheduled = false
+  const remaining = () => next < queue.length / REQUEST
+  const step = () => {
+    scheduled = false
+    while (baker && remaining()) {
+      const request = decodeRequest(queue, next++)
+      const key = requestKey(request)
+      if (posted.has(key)) continue
+      const image = baker.bake(request)
+      posted.set(key, ++seq)
+      post({ generation, seq, request, image }, [image.pixels.buffer, image.blocks.buffer])
+      break
+    }
+    wake()
+  }
+  const wake = () => {
+    if (scheduled || !baker || !remaining()) return
+    scheduled = true
+    schedule(step)
+  }
   return message => {
     if (message.type === 'world') {
       baker = new ChunkBaker(message.grid)
-    } else if (baker) {
-      const { generation, request } = message
-      const image = baker.bake(request)
-      post({ generation, request, image }, [image.pixels.buffer, image.blocks.buffer])
+      generation = message.generation
+      queue = new Float64Array(0)
+      posted.clear()
+    } else {
+      // Taken by the main thread: listed again, they are wanted again.
+      for (const [key, s] of posted) if (s <= message.received) posted.delete(key)
+      queue = message.requests
+      next = 0
+      wake()
     }
   }
 }

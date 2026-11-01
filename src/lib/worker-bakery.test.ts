@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { bakeHandler, ChunkBaker, type BakeMessage, type BakeResult, type ChunkRequest } from './chunk-baker'
+import { bakeHandler, ChunkBaker, encodeRequests, type BakeMessage, type BakeResult, type ChunkRequest } from './chunk-baker'
 import { ParallaxRenderer, type Bakery, type Camera, type Frame } from './renderer'
 import type { Orientation } from './view'
 import { picture } from './picture.test-helper'
@@ -13,13 +13,13 @@ const world = new World(12345, 'hills_with_trees')
 /** bake.worker.ts in microtasks: asynchronous and in order, like a worker, and done before the next timer. */
 class FakeWorker implements BakeWorker {
   onmessage: ((event: MessageEvent<BakeResult>) => void) | null = null
-  bakes = 0
+  baked: ChunkRequest[] = []
   private handle = bakeHandler(result => {
+    this.baked.push(result.request)
     queueMicrotask(() => { this.onmessage?.({ data: result } as MessageEvent<BakeResult>) })
-  })
+  }, queueMicrotask)
 
   postMessage(message: BakeMessage) {
-    if (message.type === 'bake') this.bakes++
     queueMicrotask(() => { this.handle(message) })
   }
 
@@ -106,18 +106,46 @@ describe('WorkerBakery', () => {
     expect(shown(await settle(renderer))).toEqual(target)
   })
 
-  it('bakes only the chunks of the latest render, besides those already in flight', async () => {
+  it('bakes only the chunks of the latest render', async () => {
     const workers = [new FakeWorker(), new FakeWorker()]
     const renderer = workerRenderer(workers)
     renderer.render()
-    const leftBehind = pending(renderer)
+    expect(pending(renderer)).toBeGreaterThan(1000)
     renderer.setCamera({ x: 500 })
     renderer.render()
     const needed = pending(renderer)
     await settle(renderer)
-    const wasted = workers[0].bakes + workers[1].bakes - needed
-    // At most what was in flight, out of ~1700.
-    expect(wasted).toBeLessThan(leftBehind / 20)
+    expect(workers[0].baked.length + workers[1].baked.length).toBe(needed)
+  })
+
+  it("bakes each cell's chunks in one worker", async () => {
+    const workers = [new FakeWorker(), new FakeWorker(), new FakeWorker()]
+    await settle(workerRenderer(workers))
+    const cells = workers.map(w => new Set(w.baked.map(cell)))
+    for (const set of cells) expect(set.size).toBeGreaterThan(100)
+    expect(new Set(cells.flatMap(set => [...set])).size).toBe(cells[0].size + cells[1].size + cells[2].size)
+  })
+
+  it('bakes from the latest list, a chunk again only once the main thread took it', () => {
+    const at = (i: number) => ({ face: '+x+z', depth: 0, size: 64, i, j: 0, tanX: 0, tanY: 0, fillDetail: 0 })
+    const baked: [number, number][] = []
+    const steps: (() => void)[] = []
+    const handle = bakeHandler(({ seq, request }) => baked.push([seq, request.i]), step => steps.push(step))
+    const want = (received: number, ...cells: number[]) => {
+      handle({ type: 'want', requests: encodeRequests(cells.map(at)), received })
+    }
+    const run = (count = Infinity) => { for (; count > 0 && steps.length > 0; count--) steps.shift()?.() }
+    handle({ type: 'world', generation: 1, grid: world.grid })
+    want(0, 0, 1, 2)
+    run(1)
+    // Replaces what is left; 0 is on its way, so not baked again.
+    want(0, 0, 3)
+    run()
+    expect(baked).toEqual([[1, 0], [2, 3]])
+    // Taken, and listed again (evicted): baked again.
+    want(2, 0)
+    run()
+    expect(baked).toEqual([[1, 0], [2, 3], [3, 0]])
   })
 
   it('bakes cells that show nothing before rebaking cells an older bake stands in for', async () => {

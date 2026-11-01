@@ -1,4 +1,4 @@
-import type { BakeMessage, BakeResult, ChunkImage, ChunkRequest } from './chunk-baker'
+import { encodeRequests, type BakeMessage, type BakeResult, type ChunkImage, type ChunkRequest } from './chunk-baker'
 import type { Bakery } from './renderer'
 import type { VoxelData } from './voxel-grid'
 
@@ -9,32 +9,39 @@ export interface BakeWorker {
   terminate(): void
 }
 
-// Requests sent to a worker and not answered yet. A worker gets more only
-// when the main thread is free to take its answers, so this must cover
-// a busy frame (4 was too few to keep up with a moving camera);
-// what is in flight when the camera moves on is wasted.
-const MAX_IN_FLIGHT = 32
+interface Entry {
+  worker: BakeWorker
+  // The seq of its latest result taken.
+  received: number
+  // What the latest `want` message sent it.
+  sent: { requests: Float64Array; received: number } | null
+}
 
-const requestKey = ({ face, depth, size, i, j, tanX, tanY, fillDetail }: ChunkRequest) => [face, depth, size, i, j, tanX, tanY, fillDetail].join()
+/** Which of `count` workers bakes a chunk: always the same for a cell, so that its surface is cached once. */
+function workerOf({ face, depth, size, i, j }: ChunkRequest, count: number): number {
+  let hash = 0x811c9dc5
+  for (let k = 0; k < face.length; k++) hash = Math.imul(hash ^ face.charCodeAt(k), 0x01000193)
+  for (const n of [depth, size, i, j]) hash = Math.imul(hash ^ n, 0x01000193)
+  return (hash >>> 0) % count
+}
+
+const equal = (a: Float64Array, b: Float64Array) => a.length === b.length && a.every((x, k) => x === b[k])
 
 /**
  * Bakes chunks in a pool of workers (bake.worker.ts), each with its own copy
- * of the world. Requests go out in the order the latest want() listed them,
- * to whichever worker has the fewest in flight.
+ * of the world. Each want() splits the list by cell between the workers,
+ * keeping its order, and sends each worker its share, which replaces the
+ * previous one; the workers bake their lists without waiting for the main
+ * thread (see bakeHandler).
  */
 export class WorkerBakery implements Bakery {
-  private workers: { worker: BakeWorker; inFlight: number }[]
+  private workers: Entry[]
   private generation = 0
-  // The latest wanted list, and how far into it requests have been sent.
-  private queue: ChunkRequest[] = []
-  private next = 0
-  // Keys of the current world's requests in flight.
-  private sent = new Set<string>()
   private deliver: (request: ChunkRequest, image: ChunkImage) => void = () => undefined
 
   constructor(workers: BakeWorker[]) {
     this.workers = workers.map(worker => {
-      const entry = { worker, inFlight: 0 }
+      const entry: Entry = { worker, received: 0, sent: null }
       worker.onmessage = event => { this.receive(entry, event.data) }
       return entry
     })
@@ -46,46 +53,36 @@ export class WorkerBakery implements Bakery {
 
   setWorld(grid: VoxelData) {
     this.generation++
-    this.queue = []
-    this.next = 0
-    this.sent.clear()
-    for (const { worker } of this.workers) worker.postMessage({ type: 'world', grid })
+    for (const entry of this.workers) {
+      entry.sent = null
+      entry.worker.postMessage({ type: 'world', generation: this.generation, grid })
+    }
   }
 
   want(requests: ChunkRequest[]) {
-    this.queue = requests
-    this.next = 0
-    this.pump()
+    const count = this.workers.length
+    const shares = this.workers.map((): ChunkRequest[] => [])
+    for (const request of requests) shares[workerOf(request, count)].push(request)
+    this.workers.forEach((entry, k) => {
+      const packed = encodeRequests(shares[k])
+      const { sent, received } = entry
+      if (sent && sent.received === received && equal(sent.requests, packed)) return
+      entry.sent = { requests: packed, received }
+      entry.worker.postMessage({ type: 'want', requests: packed, received })
+    })
   }
 
-  /** Stops the workers; requests in flight are never delivered. */
+  /** Stops the workers; chunks they baked and did not deliver yet never are. */
   dispose() {
     for (const { worker } of this.workers) worker.terminate()
     this.workers = []
   }
 
-  private receive(entry: { inFlight: number }, { generation, request, image }: BakeResult) {
-    entry.inFlight--
+  private receive(entry: Entry, { generation, seq, request, image }: BakeResult) {
+    entry.received = seq
     // A worker answers in order, so results of an older world arrive before
     // the new world's; they are dropped.
-    if (generation === this.generation) {
-      this.sent.delete(requestKey(request))
-      this.deliver(request, image)
-    }
-    this.pump()
-  }
-
-  private pump() {
-    while (this.next < this.queue.length && this.workers.length > 0) {
-      const target = this.workers.reduce((a, b) => (b.inFlight < a.inFlight ? b : a))
-      if (target.inFlight >= MAX_IN_FLIGHT) return
-      const request = this.queue[this.next++]
-      const key = requestKey(request)
-      if (this.sent.has(key)) continue
-      this.sent.add(key)
-      target.inFlight++
-      target.worker.postMessage({ type: 'bake', generation: this.generation, request })
-    }
+    if (generation === this.generation) this.deliver(request, image)
   }
 }
 
