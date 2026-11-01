@@ -300,7 +300,7 @@ since the previous render and the pixels of all cached chunks;
 `SessionStats` accumulates them. `renderTime` is main-thread time, which
 excludes baking in workers.
 
-## 6. Worlds (`world.ts`, `forest.ts`)
+## 6. Worlds (`world.ts`, `forest.ts`, `city.ts`)
 
 A world is a dense voxel grid plus a spawn point (`voxel-grid.ts`):
 one material id byte per cell of a box, 0 for empty.
@@ -309,6 +309,8 @@ A list of voxel objects is built only on request (reference viewer, tests).
 Renderer distances are in voxels.
 The forest's `VOXEL_SIZE` is 0.5 m,
 so the default render distance (200) is 100 m and the fog distance 70 m.
+The city's `CITY_VOXEL_SIZE` is 0.25 m (render distance 50 m):
+each world picks its own scale, the renderer assumes none.
 
 Ground columns are filled a few voxels deep;
 the renderer only draws faces that no neighbour covers.

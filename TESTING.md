@@ -16,6 +16,7 @@ pnpm exec vitest -t "cache"     # filter by test name
 | `src/lib/leak-bound.test.ts` | The occlusion-leak bound as a step-by-step derivation, each step checked on seeded random samples, ending in a 2D ray-cast comparison of chunked, directed baking against true perspective |
 | `src/lib/bake.test.ts` | Slice surfaces against a brute-force reference; faces filled into pixels, then grown only into empty ones |
 | `src/lib/world.test.ts` | Toy world types: determinism, bounds |
+| `src/lib/city.test.ts` | City: determinism, voxel budget, spawn looking through an open entrance |
 | `src/lib/forest.test.ts` | Forest: determinism, coverage, voxel budget, tree heights in metres, clear spawn |
 | `src/viewer/mesh.test.ts` | Reference viewer mesh: face culling, coordinates, winding, shading |
 | `src/lib/view.test.ts` | Camera basis, projection against screen rays, culling bounds, turning stops at the slices' reach |

@@ -1,3 +1,4 @@
+import { generateCity } from './city'
 import { generateForest } from './forest'
 import { VoxelGrid, type Material, type Voxel } from './voxel-grid'
 
@@ -7,23 +8,31 @@ export interface Vec3 {
   z: number
 }
 
-export type WorldType = 'forest' | 'hills' | 'mountains' | 'hills_with_trees' | 'lake_with_island'
+export type WorldType = 'forest' | 'city' | 'hills' | 'mountains' | 'hills_with_trees' | 'lake_with_island'
 
 export const WORLD_TYPES: { value: WorldType; label: string }[] = [
   { value: 'forest', label: 'Forest' },
+  { value: 'city', label: 'City' },
   { value: 'hills', label: 'Hills' },
   { value: 'mountains', label: 'Mountains' },
   { value: 'hills_with_trees', label: 'Hills with Trees' },
   { value: 'lake_with_island', label: 'Lake with Island' },
 ]
 
-// `type` ids: 1 grass, 2 dirt, 3 stone, 4 wood, 5 leaves, 6 flower, 7 snow, 8 water, 9 sand
+// `type` ids: 1 grass, 2 dirt, 3 stone, 4 wood, 5 leaves, 6 flower, 7 snow, 8 water, 9 sand,
+// 10 plaster, 11 glass, 12 metal, 13 fabric
 const GRASS: Material = { color: '#4CAF50', type: 1 }
 const DIRT: Material = { color: '#8B4513', type: 2 }
 const STONE: Material = { color: '#666666', type: 3 }
 const LEAVES: Material = { color: '#228B22', type: 5 }
 const WATER: Material = { color: '#1E90FF', type: 8 }
 const FLOWER_COLORS = ['#FF6B6B', '#FFE66D', '#4ECDC4', '#C9B1FF']
+
+/** World types with their own generator; the rest are built here. */
+const SCENES: Partial<Record<WorldType, (seed: number) => { grid: VoxelGrid; spawn: Vec3 }>> = {
+  forest: generateForest,
+  city: generateCity,
+}
 
 /** The world spans x, z in [-HALF_SIZE, HALF_SIZE). */
 const HALF_SIZE = 40
@@ -47,10 +56,11 @@ export class World {
     this.seed = seed
     this.worldType = worldType
 
-    if (worldType === 'forest') {
-      const forest = generateForest(seed)
-      this.store = forest.grid
-      this.spawn = forest.spawn
+    const scene = SCENES[worldType]
+    if (scene) {
+      const { grid, spawn } = scene(seed)
+      this.store = grid
+      this.spawn = spawn
       return
     }
 

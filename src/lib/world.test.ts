@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { World, WORLD_TYPES } from './world'
 
 describe('World', () => {
-  // The forest's determinism is checked in forest.test.ts; comparing it here is slow.
-  const smallWorlds = WORLD_TYPES.map(t => t.value).filter(t => t !== 'forest')
+  // The forest and the city are checked in their own tests; comparing them here is slow.
+  const smallWorlds = WORLD_TYPES.map(t => t.value).filter(t => t !== 'forest' && t !== 'city')
 
   it('is deterministic for a given seed and type', () => {
     for (const value of smallWorlds) {

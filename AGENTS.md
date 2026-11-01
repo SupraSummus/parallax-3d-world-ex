@@ -30,6 +30,8 @@ src/
     ├── voxel-grid.ts        # Dense voxel storage (typed arrays)
     ├── world.ts             # World: voxel grid, spawn, toy world types
     ├── forest.ts            # Forest scene generator (VOXEL_SIZE lives here)
+    ├── city.ts              # City scene generator: streets, buildings, maze of rooms
+    ├── noise.ts             # Seeded hash, value noise and PRNG for the generators
     ├── slice-selection.ts   # Slices, chunks and baking directions (pure functions)
     ├── view.ts              # Camera orientation, projection, how far it may turn
     ├── renderer.ts          # Slices and chunks in view, caching, screen placement (no DOM)
