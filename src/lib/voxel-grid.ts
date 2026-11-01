@@ -17,6 +17,9 @@ export interface Material {
   type: number
 }
 
+/** A grid's fields without its methods: what a worker receives from postMessage. */
+export type VoxelData = Pick<VoxelGrid, 'minX' | 'minY' | 'minZ' | 'nx' | 'ny' | 'nz' | 'cells' | 'materials'>
+
 /** Half-open integer box: x in [minX, maxX), y and z likewise. */
 interface Box {
   minX: number
@@ -73,6 +76,15 @@ export class VoxelGrid {
   get(x: number, y: number, z: number): number {
     const i = this.index(x, y, z)
     return i < 0 ? 0 : this.cells[i]
+  }
+
+  /** Number of voxels with z in [fromZ, toZ). */
+  countInZ(fromZ: number, toZ: number): number {
+    const plane = this.nx * this.ny
+    const end = (Math.min(toZ, this.minZ + this.nz) - this.minZ) * plane
+    let count = 0
+    for (let i = Math.max(0, fromZ - this.minZ) * plane; i < end; i++) if (this.cells[i] !== 0) count++
+    return count
   }
 
   /** Every voxel, ordered by z, then y, then x. */

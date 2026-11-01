@@ -3,6 +3,7 @@ import { ParallaxRenderer, DEFAULT_FOV, MAX_FOV, MIN_FOV, DEFAULT_RENDER_DISTANC
 import { World, WORLD_TYPES, type WorldType } from '@/lib/world'
 import type { Orientation } from '@/lib/view'
 import { Compositor } from '@/lib/compositor'
+import { startBakeWorkers } from '@/lib/worker-bakery'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
@@ -76,7 +77,20 @@ function App() {
     if (!canvas) return
 
     if (hasWebGL2) compositorRef.current = new Compositor(canvas)
-    const renderer = new ParallaxRenderer(new World(Date.now(), 'forest'))
+    // Chunks are baked in workers, leaving a core for this thread; without
+    // workers (e.g. jsdom) render() bakes them itself.
+    const bakery = typeof Worker === 'undefined'
+      ? undefined
+      : startBakeWorkers(Math.max(1, Math.min(4, navigator.hardwareConcurrency - 1)))
+    // Baked chunks arrive one by one; show them at most once per frame.
+    let pending: number | undefined
+    const onBaked = () => {
+      pending ??= requestAnimationFrame(() => {
+        pending = undefined
+        requestRender()
+      })
+    }
+    const renderer = new ParallaxRenderer(new World(Date.now(), 'forest'), { bakery, onBaked })
     rendererRef.current = renderer
 
     const handleResize = () => {
@@ -88,6 +102,8 @@ function App() {
     window.addEventListener('resize', handleResize)
     return () => {
       window.removeEventListener('resize', handleResize)
+      bakery?.dispose()
+      if (pending !== undefined) cancelAnimationFrame(pending)
       rendererRef.current = null
       compositorRef.current = null
     }
@@ -374,6 +390,7 @@ function App() {
                       {' / '}
                       <span className="text-destructive">{lastUpdate.chunksRegenerated}</span>
                     </StatRow>
+                    <StatRow label="Chunks Baking">{lastUpdate.chunksPending}</StatRow>
                     <StatRow label="Cache Efficiency">{lastUpdate.cacheEfficiency.toFixed(1)}%</StatRow>
                     <StatRow label="Voxels Rendered">{lastUpdate.voxelsRendered.toLocaleString()}</StatRow>
                     <StatRow label="Cached Pixels">{(lastUpdate.cachedPixels / 1e6).toFixed(1)} Mpx</StatRow>

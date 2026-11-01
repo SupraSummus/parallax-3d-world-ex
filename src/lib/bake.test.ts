@@ -29,7 +29,6 @@ describe('sliceSurface', () => {
         }
       }
       expect(actual.sort()).toEqual(expected.sort())
-      expect(surface.voxelCount).toBe(inSlice.length)
     }
   })
 })

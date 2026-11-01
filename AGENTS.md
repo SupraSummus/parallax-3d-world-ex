@@ -32,7 +32,10 @@ src/
     ├── forest.ts            # Forest scene generator (VOXEL_SIZE lives here)
     ├── slice-selection.ts   # Slices, chunks and baking directions (pure functions)
     ├── view.ts              # Camera orientation, projection, how far it may turn
-    ├── renderer.ts          # Chunk rasterisation, caching, screen placement (no DOM)
+    ├── renderer.ts          # Slices and chunks in view, caching, screen placement (no DOM)
+    ├── chunk-baker.ts       # Bakes whole chunks; the bake worker's message protocol
+    ├── worker-bakery.ts     # Pool of bake workers the renderer sends missing chunks to
+    ├── bake.worker.ts       # Bake worker entry
     ├── compositor.ts        # Draws the renderer's frames with WebGL 2
     ├── bake.ts              # Which voxel faces a chunk shows, filled into pixels (no DOM)
     └── utils.ts             # cn() for class names

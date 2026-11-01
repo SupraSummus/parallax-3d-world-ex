@@ -50,7 +50,9 @@ per slice.
 
 **Statistics panel** – Session totals (updates, average render time, average
 cache efficiency, voxels rendered) and details of the last update (layers,
-slice detail, chunks in view reused vs rasterised, cached chunk pixels).
+slice detail, chunks in view reused vs newly baked, chunks still baking,
+cached chunk pixels). Chunks bake in background workers, so moving never
+waits for them; meanwhile a cell shows an older bake, or nothing.
 
 ## Non-goals (for the POC)
 
@@ -65,12 +67,13 @@ slice detail, chunks in view reused vs rasterised, cached chunk pixels).
   each drawn like the +z one and clipped to its face's 90° pyramid; only
   faces in view baked. Needs radial fog and shading by world normal in
   the stacks along x and y; seams between faces to be measured.
-
-- Budget chunk baking per frame: a frame that brings many new chunks
-  into view still takes up to ~300 ms.
 - Generate geometry on demand (chunks) instead of one fixed world.
 - Port the toy worlds to the forest's metric scale, or drop them.
-- Move baking to a worker (`bake.ts` is DOM-free), later to Rust/WASM.
+- Port baking (`bake.ts`, DOM-free) to Rust/WASM, if it becomes the bottleneck.
+- Fill cells that have never been baked from the slices a re-tiled slice
+  replaces, instead of showing nothing until they arrive.
+- Generate the world in a worker: the forest takes ~0.5 s on the main
+  thread at start.
 - Measure the WebGL compositor on real GPUs (headless Chromium only has a
   software one); if draw calls matter, pack chunks into a texture atlas.
 - Paint cut cross-sections with the colour of the surface above them: a 2D
