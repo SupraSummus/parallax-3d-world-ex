@@ -180,16 +180,27 @@ A pixel is filled when its centre is inside, with half-open edges,
 so neighbours meet without gaps or overlap (`fillFaces`).
 No antialiasing: a soft 1-pixel edge magnified 20× on screen is a blur.
 
-**Filling gaps.** A slice draws a point at depth z′
-up to τ_err·|z′ − c| off (section 2),
-so neighbouring slices, or chunks baked along different directions,
-can pull a surface apart:
-a one-voxel floor seen from high above shows lines of sky.
-Each face is therefore also painted grown by
-`directionError`·|z′ − c| (τ_err for the chunk's rays),
-nearest first, into pixels its chunk left empty (`fillFaces`).
-Faces at a slice's near and far planes grow most, up to about ε/2 pixels;
-objects look up to that much fatter against what is behind them.
+**Filling gaps.** A slice draws a point at depth z′, seen at tangent σ,
+(σ − τ)·(z′ − c) off (section 2).
+Within a slice that keeps surfaces whole;
+only where a surface goes on into the next slice can it tear.
+At the boundary between slices k (nearer) and k + 1,
+the nearer one draws its far edge (σ − τ_k)·s_k/2 off
+and the farther one its near edge −(σ − τ_{k+1})·s_{k+1}/2 off,
+so on screen they are apart by
+J = (σ − τ_k)·s_k/(2D_k) + (σ − τ_{k+1})·s_{k+1}/(2D_{k+1}).
+Side faces run along z, and their image moves towards the screen centre
+with depth: J opens a gap where σ is farther from the centre than τ,
+and makes the slices overlap (the leak of section 2) where it is nearer.
+A gap is |J| − t/D_{k+1}, as the cut of a solid t voxels thick covers t/D:
+only thin things tear, e.g. a one-voxel floor seen from high above.
+So each slice closes its share:
+side faces on its near or far plane, of voxels that go on past it,
+grow towards where they belong, by (σ − τ)·s/2 for the σ that open a gap
+(`chunkFaces`; σ − τ is bounded from the face's offset from its cell's
+centre, over the distance ≥ s · detail, plus half a direction step).
+Grown faces are painted nearest first into pixels the chunk left empty
+(`fillFaces`). Front faces and the inside of slices don't grow.
 "Fill Gaps" turns it off.
 
 `bake.ts` has no DOM and works on flat typed arrays,
@@ -352,5 +363,5 @@ so from the parallax camera's position both renderers should agree.
   nearest slices fill the screen.
 - At a seam, the two faces slice the world differently: geometry
   crossing it can be off by up to the leak bound on each side.
-- Closer than `detail`, chunks span more than `directionError`,
+- Closer than `detail`, slices are nearer than s · detail,
   so gap filling may leave gaps there.

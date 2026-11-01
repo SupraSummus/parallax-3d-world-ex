@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { sliceSurface, shadedPalette, fillFaces, FACE, FACE_SHADE, RECORD } from './bake'
+import { sliceSurface, shadedPalette, chunkFaces, fillFaces, FACE, FACE_SHADE, RECORD } from './bake'
 import { chunkWidth } from './slice-selection'
 import { FACES } from './view'
+import { VoxelGrid } from './voxel-grid'
 import { World } from './world'
 
 describe('sliceSurface', () => {
@@ -13,7 +14,9 @@ describe('sliceSurface', () => {
         const open = (z === depth || !world.has(x, y, z - 1) ? 1 : 0) |
           (world.has(x - 1, y, z) ? 0 : 2) | (world.has(x + 1, y, z) ? 0 : 4) |
           (world.has(x, y - 1, z) ? 0 : 8) | (world.has(x, y + 1, z) ? 0 : 16)
-        return open ? [[x, y, z, open].join()] : []
+        // Goes on past the slice's near or far plane.
+        const on = (z === depth && world.has(x, y, z - 1) ? 32 : 0) | (z === depth + size - 1 && world.has(x, y, z + 1) ? 64 : 0)
+        return open ? [[x, y, z, open | on].join()] : []
       })
 
       const surface = sliceSurface(world.grid, depth, size)
@@ -51,19 +54,39 @@ describe('shadedPalette', () => {
   })
 })
 
+describe('chunkFaces', () => {
+  it('grows only side faces on a slice plane their voxel goes on past', () => {
+    // A floor through slices [0, 4) and [4, 8), baked straight along z, so its
+    // top faces show only grown.
+    const floor = VoxelGrid.fromVoxels(Array.from({ length: 16 * 8 }, (_, i) => (
+      { x: i % 16, y: 0, z: Math.floor(i / 16), color: '#808080', type: 1 })))
+    const surface = sliceSurface(floor, 0, 4)
+    const { data, count } = chunkFaces(surface, 0, 0, 0, 0, 27)
+    const grown = Array.from({ length: count }, (_, f) => f * FACE)
+      .filter(o => data.subarray(o + 7, o + 11).some(g => g > 0))
+      .map(o => ({ front: data[o + 4] % 5 === 0, z: surface.records[data[o + 5] * RECORD + 2] }))
+    expect(grown.length).toBeGreaterThan(0)
+    expect(grown.every(({ front, z }) => !front && z === 3)).toBe(true)
+  })
+})
+
 describe('fillFaces', () => {
-  it('paints faces, then grows them only into empty pixels', () => {
-    // At 1 px per unit from (0, 4): face 0xa covers [0, 1]², grown by 1;
-    // face 0xb, painted after it, covers [1, 2] × [0, 1], not grown.
-    const data = Float64Array.from([0, 0, 1, 1, 0xa, 0, 1, 1, 0, 2, 1, 0xb, 1, 0])
-    expect(data.length).toBe(2 * FACE)
-    const faces = { data, count: 2, minX: -1, maxX: 2, minY: -1, maxY: 2 }
-    const palette = Uint32Array.from({ length: 0xc }, (_, i) => i)
+  it('paints reached faces, then grows every face only into empty pixels', () => {
+    // At 1 px per unit from (0, 4). Each face: rectangle, colour, record,
+    // reached, growth left, bottom, right, top.
+    const data = Float64Array.from([
+      0, 0, 1, 1, 0xa, 0, 1, 0, 0, 1, 1, // grown right and up
+      1, 0, 2, 1, 0xb, 1, 1, 0, 0, 0, 0, // painted after 0xa, not grown
+      2, 2, 3, 2, 0xc, 2, 0, 0, 0, 0, 1, // not reached, flat: only its growth shows
+    ])
+    expect(data.length).toBe(3 * FACE)
+    const faces = { data, count: 3, minX: 0, maxX: 3, minY: 0, maxY: 3 }
+    const palette = Uint32Array.from({ length: 0xd }, (_, i) => i)
     const pixels = new Uint32Array(4 * 4)
-    expect(fillFaces(faces, palette, pixels, 4, 4, 0, 4, 1)).toBe(2)
+    expect(fillFaces(faces, palette, pixels, 4, 4, 0, 4, 1)).toBe(3)
     expect(Array.from(pixels)).toEqual([
       0, 0, 0, 0,
-      0, 0, 0, 0,
+      0, 0, 0xc, 0,
       0xa, 0xa, 0, 0,
       0xa, 0xb, 0, 0,
     ])

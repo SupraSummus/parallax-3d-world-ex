@@ -10,8 +10,8 @@ import { rotateGrid, type VoxelData } from './voxel-grid'
 /**
  * A chunk to bake: corner (x, y) of the slice [depth, depth + size) of a
  * face (by name, see FACES), seen along (tanX, tanY, 1), in the face's
- * coordinates, with faces grown for rays up to `spread` off it (see
- * chunkFaces).
+ * coordinates, with faces grown to fill gaps for slices of `fillDetail`
+ * (0 for none; see chunkFaces).
  */
 export interface ChunkRequest {
   face: string
@@ -21,7 +21,7 @@ export interface ChunkRequest {
   y: number
   tanX: number
   tanY: number
-  spread: number
+  fillDetail: number
 }
 
 /** A baked chunk's pixels, cropped to what is drawn. */
@@ -80,10 +80,10 @@ export class ChunkBaker {
    * centre plane (see bake.ts), clipped to the chunk's cell and cropped to
    * what is drawn there. A chunk no face reaches has no pixels.
    */
-  bake({ face, depth, size, x: x0, y: y0, tanX, tanY, spread }: ChunkRequest): ChunkImage {
+  bake({ face, depth, size, x: x0, y: y0, tanX, tanY, fillDetail }: ChunkRequest): ChunkImage {
     const { grid, palette } = this.face(face)
     const surface = this.surface(face, grid, depth, size)
-    const faces = chunkFaces(surface, x0, y0, tanX, tanY, spread)
+    const faces = chunkFaces(surface, x0, y0, tanX, tanY, fillDetail)
 
     // Drawn extent, clipped to the cell [x0 - 0.5, x0 + w - 0.5) × [y0 - 0.5, y0 + w - 0.5).
     const w = surface.width

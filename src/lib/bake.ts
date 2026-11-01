@@ -6,7 +6,7 @@
  * No DOM and no objects per voxel or face: flat typed arrays in and out,
  * so it ports directly to a worker or to Rust/WASM.
  */
-import { bake, chunkWidth, sliceCentre } from './slice-selection'
+import { bake, chunkWidth, directionError, directionStep, sliceCentre } from './slice-selection'
 import type { Material, VoxelData } from './voxel-grid'
 import type { Basis } from './view'
 import type { Vec3 } from './world'
@@ -18,6 +18,9 @@ const RIGHT = 2
 const BOTTOM = 3
 const TOP = 4
 const FACE_KINDS = 5
+// More bits of the mask: the voxel goes on past the slice's near or far plane.
+const ON_NEAR = 1 << 5
+const ON_FAR = 1 << 6
 
 /** Brightness of each face, shared with the reference viewer. */
 export const FACE_SHADE = { front: 0.9, back: 0.65, left: 0.7, right: 0.8, bottom: 0.55, top: 1 }
@@ -54,7 +57,10 @@ export function shadedPalette(materials: readonly Material[], { right, up, forwa
   return palette
 }
 
-/** Ints per surface voxel record: x, y, z, material id, open-face mask. */
+/**
+ * Ints per surface voxel record: x, y, z, material id, and a mask of its
+ * open faces and whether it goes on past the slice's planes (ON_NEAR, ON_FAR).
+ */
 export const RECORD = 5
 
 /**
@@ -80,7 +86,8 @@ export interface SliceSurface {
  * Indexes the slice [depth, depth + size) of `grid`: the voxels with an open
  * face (one no neighbour covers; the front face also on the near plane,
  * where the slice is cut and the cut must show), by chunk cell. Buried
- * voxels are dropped.
+ * voxels are dropped. Voxels on the near or far plane are marked if the
+ * next slice has a voxel behind them (see chunkFaces).
  */
 export function sliceSurface(grid: VoxelData, depth: number, size: number): SliceSurface {
   const width = chunkWidth(size)
@@ -109,6 +116,9 @@ export function sliceSurface(grid: VoxelData, depth: number, size: number): Slic
           (y === minY || cells[i - nx] === 0 ? 1 << BOTTOM : 0) |
           (y === minY + ny - 1 || cells[i + nx] === 0 ? 1 << TOP : 0)
         if (open === 0) continue
+        const on =
+          (z === depth && z > minZ && cells[i - plane] !== 0 ? ON_NEAR : 0) |
+          (z === depth + size - 1 && z < minZ + nz - 1 && cells[i + plane] !== 0 ? ON_FAR : 0)
         if (count === cellOf.length) {
           scanned = grow(scanned, scanned.length * 2)
           cellOf = grow(cellOf, cellOf.length * 2)
@@ -118,7 +128,7 @@ export function sliceSurface(grid: VoxelData, depth: number, size: number): Slic
         scanned[o + 1] = y
         scanned[o + 2] = z
         scanned[o + 3] = material
-        scanned[o + 4] = open
+        scanned[o + 4] = open | on
         cellOf[count++] = (Math.floor(y / width) - cellY) * cellsX + Math.floor(x / width) - cellX
       }
     }
@@ -145,10 +155,12 @@ function grow(array: Int32Array, length: number): Int32Array<ArrayBuffer> {
 /**
  * Floats per baked face: its rectangle on the centre plane (minX, minY,
  * maxX, maxY), its colour (an index into shadedPalette), the index of
- * its voxel's record, and how far perspective may show it past its
- * rectangle (see fillFaces).
+ * its voxel's record, 1 if a ray along the baking direction reaches it
+ * (0 if only other rays through the chunk do), and how far past each side
+ * of its rectangle (minX, minY, maxX, maxY) it is grown to fill gaps (see
+ * fillFaces).
  */
-export const FACE = 7
+export const FACE = 11
 
 /** The faces of one chunk, in painting order, and the extent of their grown rectangles. */
 export interface ChunkFaces {
@@ -172,28 +184,46 @@ const NEIGHBOURS = [[0, 0], [-1, -1], [-1, 0], [-1, 1], [0, -1], [0, 1], [1, -1]
  * near, and side faces before the front faces of the same z, which are
  * nearer. A ray going +x enters a voxel through its −x face, and so on.
  *
- * The chunk may be seen along rays up to `spread` (a tangent) off that
- * direction. Such a ray sees a point at depth z′ shifted by up to
- * spread · |z′ − centre| on the plane, so each face records that much,
- * over its depths, as how far it may show past its rectangle.
- *
- * Voxels whose grown projection can reach the chunk's cell are within
- * (|tan| + spread) · size / 2 + 1 of it, less than a cell width, so only
- * the cell and its eight neighbours are looked at.
+ * Given the slice `detail` (0 for none), side faces are also grown to close
+ * the gaps that open between slices (DESIGN.md, section 3): faces on the
+ * near or far plane of voxels that go on into the next slice, including
+ * ones only rays a little off the baking direction reach (marked as not
+ * reached). They grow at most directionError · size / 2, so only voxels
+ * within (|tan| + directionError) · size / 2 + 1 of the cell, less than a
+ * cell width, are looked at: the cell and its eight neighbours.
  */
 export function chunkFaces(
-  surface: SliceSurface, x0: number, y0: number, tanX: number, tanY: number, spread = 0,
+  surface: SliceSurface, x0: number, y0: number, tanX: number, tanY: number, detail = 0,
 ): ChunkFaces {
   const { depth, size, width: w, records } = surface
   const centre = sliceCentre(surface)
-  const marginX = ((Math.abs(tanX) + spread) * size) / 2 + 1
-  const marginY = ((Math.abs(tanY) + spread) * size) / 2 + 1
+  const reach = detail > 0 ? directionError(detail) : 0
+  const marginX = ((Math.abs(tanX) + reach) * size) / 2 + 1
+  const marginY = ((Math.abs(tanY) + reach) * size) / 2 + 1
   const near = (x: number, y: number) =>
     x > x0 - 1 - marginX && x < x0 + w + marginX && y > y0 - 1 - marginY && y < y0 + w + marginY
-  const sideX = Math.sign(tanX)
-  const sideY = Math.sign(tanY)
-  const kindX = sideX > 0 ? LEFT : RIGHT
-  const kindY = sideY > 0 ? BOTTOM : TOP
+
+  // A ray through the plane at p, from a camera at distance D ≥ size · detail,
+  // has tangent σ = τc + (p − cell centre) / D, and the cell's centre ray τc is
+  // within half a direction step of the baking direction. A face at depth z′
+  // is drawn (σ − tan) · (z′ − centre) off. On the slice's near or far plane
+  // (d = z′ − centre = −size / 2 or size / 2) that pulls the slice's edge
+  // away from the next slice's when σ is farther from the screen centre
+  // than tan, so the face grows back by that much, for the largest such
+  // σ − tan over a face spanning [lo, hi] along an axis. Returns the growth
+  // below and above.
+  const perUnit = detail > 0 ? 1 / (size * detail) : 0
+  const halfStep = detail > 0 ? directionStep(detail) / 2 : 0
+  const grow = (tan: number, cellCentre: number, lo: number, hi: number, d0: number, d1: number): [number, number] => {
+    const above = Math.max(0, (hi - cellCentre) * perUnit) + halfStep
+    const below = Math.max(0, (cellCentre - lo) * perUnit) + halfStep
+    // σ above tan opens a gap where σ > 0; below tan, where σ < 0.
+    const up = above > Math.max(0, -tan) ? above : 0
+    const down = below > Math.max(0, tan) ? below : 0
+    return [Math.max(up * d1, down * -d0), Math.max(up * -d0, down * d1)]
+  }
+  const cellX = x0 + w / 2 - 0.5
+  const cellY = y0 + w / 2 - 0.5
 
   // Record ranges of the cells, each far to near; neighbours' voxels are
   // checked for being near.
@@ -207,7 +237,10 @@ export function chunkFaces(
   }
 
   const faces: ChunkFaces = { data: scratch, count: 0, minX: Infinity, maxX: -Infinity, minY: Infinity, maxY: -Infinity }
-  const emit = (kind: number, r: number, minX: number, minY: number, maxX: number, maxY: number, grow: number) => {
+  const emit = (
+    kind: number, reached: boolean, r: number, minX: number, minY: number, maxX: number, maxY: number,
+    growLeft = 0, growBottom = 0, growRight = 0, growTop = 0,
+  ) => {
     if ((faces.count + 1) * FACE > scratch.length) {
       const grown = new Float64Array(scratch.length * 2)
       grown.set(scratch)
@@ -221,11 +254,15 @@ export function chunkFaces(
     d[o + 3] = maxY
     d[o + 4] = records[r * RECORD + 3] * FACE_KINDS + kind
     d[o + 5] = r
-    d[o + 6] = grow
-    faces.minX = Math.min(faces.minX, minX - grow)
-    faces.maxX = Math.max(faces.maxX, maxX + grow)
-    faces.minY = Math.min(faces.minY, minY - grow)
-    faces.maxY = Math.max(faces.maxY, maxY + grow)
+    d[o + 6] = reached ? 1 : 0
+    d[o + 7] = growLeft
+    d[o + 8] = growBottom
+    d[o + 9] = growRight
+    d[o + 10] = growTop
+    faces.minX = Math.min(faces.minX, minX - growLeft)
+    faces.maxX = Math.max(faces.maxX, maxX + growRight)
+    faces.minY = Math.min(faces.minY, minY - growBottom)
+    faces.maxY = Math.max(faces.maxY, maxY + growTop)
   }
 
   // A side face is its voxel's edge swept one unit deep: a parallelogram.
@@ -235,9 +272,6 @@ export function chunkFaces(
   for (let z = depth + size - 1; z >= depth; z--) {
     // Baking shifts the plane z − 0.5 by (nearX, nearY), and each unit of depth by (−tanX, −tanY).
     const [nearX, nearY] = bake(0, 0, z - 0.5, tanX, tanY, centre)
-    // Front faces lie at z − 0.5, side faces span z ± 0.5.
-    const growFront = spread * Math.abs(z - 0.5 - centre)
-    const growSide = spread * (Math.abs(z - centre) + 0.5)
     const runs = cells.map(cell => {
       let stop = cell.next
       while (stop < cell.end && records[stop * RECORD + 2] === z) stop++
@@ -259,17 +293,30 @@ export function chunkFaces(
     const left = (x: number) => x - 0.5 + nearX
     const bottom = (y: number) => y - 0.5 + nearY
     eachVoxel((r, x, y, open) => {
-      if (sideX !== 0 && open & (1 << kindX)) {
-        const edge = left(x) + (sideX > 0 ? 0 : 1)
-        emit(kindX, r, edge + lowX, bottom(y) + lowY, edge + highX, bottom(y) + 1 + highY, growSide)
+      // Side faces' rectangles: the swept edge along their axis, the voxel across it.
+      const [l, rt] = [left(x) + lowX, left(x) + 1 + highX]
+      const [b, t] = [bottom(y) + lowY, bottom(y) + 1 + highY]
+      // Only on a plane the voxel goes on past can a gap open.
+      const d0 = open & ON_NEAR ? -size / 2 : 0
+      const d1 = open & ON_FAR ? size / 2 : 0
+      const crossing = perUnit > 0 && d0 !== d1
+      const [growLeft, growRight] = crossing ? grow(tanX, cellX, l, rt, d0, d1) : [0, 0]
+      const [growBottom, growTop] = crossing ? grow(tanY, cellY, b, t, d0, d1) : [0, 0]
+      // Whether a ray along the baking direction reaches a face (it goes `towards`
+      // along the axis), or, for a crossing face, some ray through the chunk may.
+      const shows = (kind: number, tan: number, towards: number) =>
+        open & (1 << kind) && (Math.sign(tan) === towards || (crossing && Math.sign(tan + towards * reach) === towards))
+      for (const [kind, edge, towards] of [[LEFT, left(x), 1], [RIGHT, left(x) + 1, -1]]) {
+        if (!shows(kind, tanX, towards)) continue
+        emit(kind, Math.sign(tanX) === towards, r, edge + lowX, b, edge + highX, t, growLeft, growBottom, growRight, growTop)
       }
-      if (sideY !== 0 && open & (1 << kindY)) {
-        const edge = bottom(y) + (sideY > 0 ? 0 : 1)
-        emit(kindY, r, left(x) + lowX, edge + lowY, left(x) + 1 + highX, edge + highY, growSide)
+      for (const [kind, edge, towards] of [[BOTTOM, bottom(y), 1], [TOP, bottom(y) + 1, -1]]) {
+        if (!shows(kind, tanY, towards)) continue
+        emit(kind, Math.sign(tanY) === towards, r, l, edge + lowY, rt, edge + highY, growLeft, growBottom, growRight, growTop)
       }
     })
     eachVoxel((r, x, y, open) => {
-      if (open & (1 << FRONT)) emit(FRONT, r, left(x), bottom(y), left(x) + 1, bottom(y) + 1, growFront)
+      if (open & (1 << FRONT)) emit(FRONT, true, r, left(x), bottom(y), left(x) + 1, bottom(y) + 1)
     })
   }
   return faces
@@ -283,12 +330,11 @@ let nextEmpty = new Int32Array(0)
  * plane from (originX, originY) (top-left) at `scale` pixels per unit,
  * without antialiasing: a pixel is filled when its centre is inside, with
  * half-open edges, so faces sharing an edge neither overlap nor leave a gap
- * there. Faces are painted in order.
+ * there. Faces the baking direction reaches are painted in order.
  *
- * Then every face, grown by how far perspective may show it past its
- * rectangle (see FACE), is painted where nothing is yet, nearest first.
- * This covers the gaps slices and chunks open (DESIGN.md, section 3)
- * without changing what the chunk already shows. Returns how many faces
+ * Then every face, grown as FACE records, is painted where nothing is yet,
+ * nearest first. This closes the gaps between slices (DESIGN.md, section
+ * 3) without changing what the chunk already shows. Returns how many faces
  * covered a pixel.
  */
 export function fillFaces(
@@ -298,18 +344,19 @@ export function fillFaces(
   const { data } = faces
   // The first pixel whose centre is at or past u units from the origin.
   const pixel = (u: number) => Math.ceil(u * scale - 0.5)
-  // Pixel rectangle of face f grown by g, clipped to the buffer.
+  // Pixel rectangle of face f, grown (g = 1) or not (g = 0), clipped to the buffer.
   const rect = (f: number, g: number) => {
     const o = f * FACE
     return {
-      from: Math.max(0, pixel(data[o] - g - originX)),
-      top: Math.max(0, pixel(originY - data[o + 3] - g)),
-      to: Math.min(width, pixel(data[o + 2] + g - originX)),
-      bottom: Math.min(height, pixel(originY - data[o + 1] + g)),
+      from: Math.max(0, pixel(data[o] - g * data[o + 7] - originX)),
+      top: Math.max(0, pixel(originY - data[o + 3] - g * data[o + 10])),
+      to: Math.min(width, pixel(data[o + 2] + g * data[o + 9] - originX)),
+      bottom: Math.min(height, pixel(originY - data[o + 1] + g * data[o + 8])),
     }
   }
   const covered = new Uint8Array(faces.count)
   for (let f = 0; f < faces.count; f++) {
+    if (data[f * FACE + 6] === 0) continue
     const { from, top, to, bottom } = rect(f, 0)
     if (from >= to || top >= bottom) continue
     const color = palette[data[f * FACE + 4]]
@@ -328,7 +375,7 @@ export function fillFaces(
     return i
   }
   for (let f = faces.count - 1; f >= 0; f--) {
-    const { from, top, to, bottom } = rect(f, data[f * FACE + 6])
+    const { from, top, to, bottom } = rect(f, 1)
     if (from >= to) continue
     const color = palette[data[f * FACE + 4]]
     for (let row = top; row < bottom; row++) {
