@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { selectSlices, leakFreeDetail, matchTilings, sliceCentre, thickness, sliceKey, siteLayers, chunkCell, chunkCells, holds, type SliceId } from './slice-selection'
+import { selectSlices, leakFreeDetail, matchTilings, sliceCentre, thickness, sliceKey, chunkCell, chunkCells, holds, atomSpacing, type SliceId } from './slice-selection'
 import { LAYER } from './view'
 
 const name = ({ level, layer, cutoff }: SliceId) => `${String(level)}:${String(layer)}${Number.isFinite(cutoff) ? `|${String(cutoff)}` : ''}`
@@ -20,8 +20,8 @@ function holders(slices: SliceId[], from: number, to: number): Map<string, numbe
 describe('selectSlices', () => {
   // docs/architecture.md, section 1 (detail 1): level:layer, |cutoff.
   it('matches the documented slicing for camera z=0', () => {
-    expect(selectSlices(0, 1, 200, 1).map(name).join(' ')).toBe(
-      '0:1 0:2 0:3 1:2 1:3 2:2 2:3 3:2 3:3|32 3:4|32 4:2 4:3|64 4:4|64 5:2 5:3|128 5:4|128 6:2 6:3')
+    expect(selectSlices(0, 1, 2000, 1).map(name).join(' ')).toBe(
+      '0:1 0:2 0:3 1:2 1:3 2:2 2:3 3:2 3:3 4:2 4:3 5:2 5:3 6:2 6:3|256 6:4|256 7:2 7:3|512 7:4|512 8:2 8:3|1024 8:4|1024 9:2 9:3')
   })
 
   it('returns nothing for an empty range', () => {
@@ -63,7 +63,7 @@ describe('selectSlices', () => {
 
       for (const s of slices) {
         // Past level 0, never thicker than (distance to the near side) / detail.
-        const a = s.layer * 2 ** s.level + siteLayers(s.level)[0] - 1 - cameraZ
+        const a = s.layer * 2 ** s.level - atomSpacing(s.level) - cameraZ
         if (s.level > 0) expect(thickness(s.level)).toBeLessThanOrEqual(a / detail)
       }
 
@@ -97,8 +97,8 @@ describe('leakFreeDetail', () => {
   })
 
   it('is at least 3r, so that voxels are 2N layers ahead of their eye', () => {
-    // (8/9 + √(64/81 + 64/9)) / 2 = 1.85; 3r = 2.67, rounded up.
-    expect(leakFreeDetail(64, 64)).toBe(2 ** 1.5)
+    // r = 64/65: (r + √(r² + 8r)) / 2 = 1.98; 3r = 2.95, rounded up.
+    expect(leakFreeDetail(64, 64)).toBe(2 ** 1.75)
   })
 })
 
@@ -140,10 +140,12 @@ describe('sliceCentre', () => {
   it('is halfway through what the voxels of the slice span', () => {
     // Level 3, slabs of 8 voxel layers: sites in layers 40 to 47, voxels reaching from 39 to 48.
     expect(sliceCentre({ level: 3, layer: 5, cutoff: Infinity })).toBeCloseTo(43.5 * LAYER)
-    // Level 4, slabs of 8 layers of cells of 2·FCC: their sites in layers 32 to 46, holding sites from 30 to 46, voxels reaching from 29 to 47.
-    expect(sliceCentre({ level: 4, layer: 2, cutoff: Infinity })).toBeCloseTo(38 * LAYER)
-    // Level 5, cells of 4·FCC in layers 32 to 60, holding sites from 28 to 63; voxels from 27 to 64.
-    expect(sliceCentre({ level: 5, layer: 1, cutoff: Infinity })).toBeCloseTo(45.5 * LAYER)
+    // Level 5, sites in layers 32 to 63, voxels reaching from 31 to 64.
+    expect(sliceCentre({ level: 5, layer: 1, cutoff: Infinity })).toBeCloseTo(47.5 * LAYER)
+    // Level 7, slabs of 64 layers of voxels of 2·FCC: their sites in layers 128 to 254, reaching from 126 to 256.
+    expect(sliceCentre({ level: 7, layer: 1, cutoff: Infinity })).toBeCloseTo(191 * LAYER)
+    // Level 8, voxels of 4·FCC in layers 256 to 508, reaching from 252 to 512.
+    expect(sliceCentre({ level: 8, layer: 1, cutoff: Infinity })).toBeCloseTo(382 * LAYER)
   })
 })
 

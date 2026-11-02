@@ -171,8 +171,9 @@ describe('Renderer regressions', () => {
       renderer.resize(1280, 800)
       renderer.setRenderDistance(800)
       // Looking along the strip from just before it (a = 3.8, c = -8), off
-      // the eyes enough for gaps to open.
-      renderer.setCamera({ x: -2.1, y: 205, z: -5.9 })
+      // the eyes enough for gaps to open. From higher up, the far slices,
+      // of coarser voxels (thicker sheets), hide them.
+      renderer.setCamera({ x: -2.1, y: 50, z: -5.9 })
       renderer.setOrientation({ yaw: 45, pitch: 0 })
       renderer.setFillGaps(fillGaps)
       // Columns well inside the floor: grown faces may stick out past its
@@ -184,7 +185,7 @@ describe('Renderer regressions', () => {
     it('fills nearly every gap between slices', () => {
       const [unfilled, filled] = [gaps(false), gaps(true)]
       // Without filling the gaps show (the test would pass vacuously otherwise).
-      expect(unfilled).toBeGreaterThan(50)
+      expect(unfilled).toBeGreaterThan(20)
       expect(filled).toBeLessThanOrEqual(unfilled / 20)
     }, 60_000)
   })

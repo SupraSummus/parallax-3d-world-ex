@@ -153,6 +153,79 @@ export class VoxelGrid {
   }
 }
 
+/**
+ * The parts of the fine sites that make up the cell of 2·FCC around a site
+ * of it, times 6 (cells.ts): the site itself, a half of each of its 12
+ * neighbours (on the cell's faces) and a sixth of each of the 6 sites two
+ * away along an axis (at its corners), 8 sites in all.
+ */
+const COARSE_CELL: readonly (readonly [number, number, number, number])[] = [
+  [0, 0, 0, 6],
+  ...[-1, 1].flatMap(s => [-1, 1].flatMap(t => [[s, t, 0, 3], [s, 0, t, 3], [0, s, t, 3]] as const)),
+  ...[-2, 2].flatMap(s => [[s, 0, 0, 1], [0, s, 0, 1], [0, 0, s, 1]] as const),
+]
+
+/**
+ * How much of a cell (of 48, COARSE_CELL's weights) must be full for its
+ * coarse voxel to be: a quarter. A plane of voxels one thick holds a
+ * quarter of each of the two layers of cells it runs between (or nearly
+ * half of the one it runs through), so it stays a plane; a half would lose
+ * it, and with it every thin wall and floor seen from afar. Solids grow by
+ * about half a coarse voxel where their surface runs between layers.
+ */
+const COARSE_FULL = 12
+
+/**
+ * The grid one level of detail coarser: the sites of 2·FCC, in their own
+ * units (site S stands for 2S of this grid). Each stands for its cell, and
+ * is full if at least a quarter of the cell is (COARSE_FULL), with the
+ * material most of it has; ties go to the lower id. With the same materials.
+ */
+export function coarsen(grid: VoxelGrid): VoxelGrid {
+  const { minX, minY, minZ, nx, ny, nz, cells } = grid
+  // The coarse sites whose cells meet the box.
+  const coarse = new VoxelGrid({
+    minX: Math.floor((minX - 2) / 2), minY: Math.floor((minY - 2) / 2), minZ: Math.floor((minZ - 2) / 2),
+    maxX: Math.ceil((minX + nx + 1) / 2), maxY: Math.ceil((minY + ny + 1) / 2), maxZ: Math.ceil((minZ + nz + 1) / 2),
+  }, grid.materials)
+  // Where each part of a cell is in `cells`, from its centre 2S (x of 2S
+  // is even, as is minX, so x + dx is at index (x − minX) / 2 + (dx >> 1)).
+  const row = nx / 2
+  const deltas = Int32Array.from(COARSE_CELL, ([dx, dy, dz]) => (dz * ny + dy) * row + (dx >> 1))
+  const parts = Uint8Array.from(COARSE_CELL, ([, , , w]) => w)
+  const weights = new Uint8Array(grid.materials.length)
+  const ids: number[] = []
+  let i = 0
+  for (let z = coarse.minZ; z < coarse.minZ + coarse.nz; z++) {
+    for (let y = coarse.minY; y < coarse.minY + coarse.ny; y++) {
+      for (let x = coarse.minX + ((coarse.minX + y + z) & 1); x < coarse.minX + coarse.nx; x += 2, i++) {
+        const fx = 2 * x
+        const fy = 2 * y
+        const fz = 2 * z
+        // Whole cells inside the box are read directly, the rest site by site.
+        const inside = fx - 2 >= minX && fx + 2 < minX + nx && fy - 2 >= minY && fy + 2 < minY + ny && fz - 2 >= minZ && fz + 2 < minZ + nz
+        const centre = inside ? ((fz - minZ) * ny + (fy - minY)) * row + ((fx - minX) >> 1) : 0
+        let full = 0
+        for (let k = 0; k < 19; k++) {
+          const id = inside ? cells[centre + deltas[k]] : grid.get(fx + COARSE_CELL[k][0], fy + COARSE_CELL[k][1], fz + COARSE_CELL[k][2])
+          if (id === 0) continue
+          if (weights[id] === 0) ids.push(id)
+          weights[id] += parts[k]
+          full += parts[k]
+        }
+        if (full >= COARSE_FULL) {
+          let best = 0
+          for (const id of ids) if (weights[id] > weights[best] || (weights[id] === weights[best] && id < best)) best = id
+          coarse.cells[i] = best
+        }
+        for (const id of ids) weights[id] = 0
+        ids.length = 0
+      }
+    }
+  }
+  return coarse
+}
+
 /** Width of a column block of LayerIndex, in lattice units along a. */
 const EXTENT_BLOCK = 8
 

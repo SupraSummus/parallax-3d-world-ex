@@ -52,11 +52,11 @@ export class WorkerBakery implements Bakery {
     this.deliver = deliver
   }
 
-  setWorld(grid: VoxelData) {
+  setWorld(levels: VoxelData[]) {
     this.generation++
     for (const entry of this.workers) {
       entry.sent = null
-      entry.worker.postMessage({ type: 'world', generation: this.generation, grid })
+      entry.worker.postMessage({ type: 'world', generation: this.generation, levels })
     }
   }
 

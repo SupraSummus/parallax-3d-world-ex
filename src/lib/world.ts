@@ -1,6 +1,7 @@
 import { generateCity } from './city'
 import { generateForest } from './forest'
-import { VoxelGrid, type Material, type Voxel } from './voxel-grid'
+import { GRID_LEVELS } from './slice-selection'
+import { coarsen, VoxelGrid, type Material, type Voxel } from './voxel-grid'
 
 export interface Vec3 {
   x: number
@@ -44,6 +45,17 @@ const HALF_SIZE = 40
 /** Every column is filled from this y up to its surface. */
 const BEDROCK_Y = -5
 
+/**
+ * A grid at each level of detail the renderer reads (GRID_LEVELS): `grid`,
+ * then each the last one coarsened.
+ * @internal
+ */
+export function levelsOf(grid: VoxelGrid): VoxelGrid[] {
+  const levels = [grid]
+  while (levels.length < GRID_LEVELS) levels.push(coarsen(levels[levels.length - 1]))
+  return levels
+}
+
 /** A procedurally generated voxel world. */
 export class World {
   readonly seed: number
@@ -52,6 +64,8 @@ export class World {
   readonly spawn: Readonly<Vec3>
 
   private store: VoxelGrid
+  // The coarser grids, made from the grid on first use.
+  private coarser: VoxelGrid[] | null = null
   // Voxels as a list, built from the grid on first use.
   private list: Voxel[] | null = null
   // Toy world blocks while generating.
@@ -80,9 +94,15 @@ export class World {
     this.generated = []
   }
 
-  /** The voxels as stored, the form the renderer reads. */
+  /** The voxels as stored. */
   get grid(): VoxelGrid {
     return this.store
+  }
+
+  /** The grid at each level of detail the renderer reads (see levelsOf). */
+  get levels(): VoxelGrid[] {
+    this.coarser ??= levelsOf(this.store).slice(1)
+    return [this.store, ...this.coarser]
   }
 
   /** The voxels as a list, ordered by z, y, x. Assigning replaces the world's contents (tests build worlds this way). */
@@ -93,6 +113,7 @@ export class World {
 
   set voxels(voxels: Voxel[]) {
     this.store = VoxelGrid.fromVoxels(voxels)
+    this.coarser = null
     this.list = null
   }
 

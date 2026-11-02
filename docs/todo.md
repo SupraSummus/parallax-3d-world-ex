@@ -18,15 +18,21 @@ Numbers are for the forest at 1280×800 (`docs/architecture.md`).
   Over 95 % of opaque baked pixels are covered by nearer slices.
   The eye's cell bounds where the camera can see from,
   so content hidden from the whole cell need not be baked.
-- **Level of detail.**
-  Far slices could draw a cell of their atoms as one coarse voxel.
-  At the default render distance a voxel is still about 2 px, so it pays
-  only for larger distances.
-  Where atoms grow, the cutoff slabs split the smaller cells (section 1):
-  decide then which level draws those.
 - **One browser check for agents.**
   Agent sessions spend about a third of their command time
   in one-off Playwright scripts:
   each rebuilds, starts a server
   and waits fixed times for the scene to settle.
   A committed script that waits until nothing is left to bake would do.
+- **A world larger than its finest grid.**
+  Far slices read coarse grids (section 1 of `docs/architecture.md`),
+  but every grid still covers the same box, so the world ends at the
+  render distance, at most 200 m (`MAX_RENDER_DISTANCE`):
+  today the coarser grids cost about a second of `coarsen` at load
+  and show nowhere.
+  Level 0's grid need only reach where level 7 begins (about 230 m in the
+  forest), each coarser grid twice as far,
+  so seven grids of about the same size could show 15 km.
+  The forest can generate any box at any level (`generators.md`);
+  at levels 4 and 5, a 2 km square takes about a minute (trees one by
+  one, each smaller than a voxel), at level 6 under two seconds.
