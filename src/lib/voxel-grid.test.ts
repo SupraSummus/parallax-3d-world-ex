@@ -38,15 +38,6 @@ describe('LayerIndex', () => {
   const along = (p: { x: number; y: number; z: number }, face: (typeof FACES)[number]) =>
     ({ a: dot(p, face.lattice.right), b: dot(p, face.lattice.up), c: dot(p, face.lattice.forward) })
 
-  it('counts the voxels of a slice of layers', () => {
-    for (const face of FACES) {
-      for (const [from, to] of [[-3, 5], [0, 64], [-100, -40], [-1000, 1000], [7, 3]]) {
-        const inSlice = voxels.filter(v => { const c = dot(v, face.lattice.forward); return c >= from && c < to })
-        expect(index.count(face.lattice, from, to)).toBe(inSlice.length)
-      }
-    }
-  })
-
   it('bounds b of the voxels in a box of layers and columns, by whole blocks of columns', () => {
     let [some, none] = [0, 0]
     let seed = 3

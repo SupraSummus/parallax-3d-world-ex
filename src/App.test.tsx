@@ -23,7 +23,6 @@ describe('App', () => {
     expect(screen.getByText('Render Statistics')).toBeInTheDocument()
     expect(screen.getByText('Camera')).toBeInTheDocument()
     expect(screen.getByText('World')).toBeInTheDocument()
-    expect(screen.getByText('Layers')).toBeInTheDocument()
   })
 
   it('renders the scene on mount', () => {
@@ -39,14 +38,6 @@ describe('App', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Stats/ }))
     expect(screen.getByText('Render Statistics')).toBeInTheDocument()
-  })
-
-  it('toggles the layers panel', () => {
-    render(<App />)
-    fireEvent.click(screen.getByRole('button', { name: /Hide Layers/ }))
-    expect(screen.queryByText('Layers')).not.toBeInTheDocument()
-    fireEvent.click(screen.getByRole('button', { name: /Show Layers/ }))
-    expect(screen.getByText('Layers')).toBeInTheDocument()
   })
 
   it.each([

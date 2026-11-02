@@ -172,8 +172,7 @@ their cells are not searched again, but not shown.
 **Empty cells.** A chunk draws the voxels of its cell and a margin around it
 (`cellMargin`), within a few units of their b.
 `LayerIndex` (`voxel-grid.ts`) holds, per face, layer c and block of 8 columns a,
-the least and greatest b of its voxels
-(and each layer's voxel count, for the Layers panel).
+the least and greatest b of its voxels.
 A cell with no voxels it can draw is never baked
 (on the forest, about 3 in 10 cells in view).
 For the others, only the part of the cell within reach of those b

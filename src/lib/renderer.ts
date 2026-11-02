@@ -36,28 +36,15 @@ export interface Placement {
 /**
  * What to draw, seen through `View` (see projector() in view.ts). Layers
  * go face by face, near to far; a face draws only its own rays (inFace in
- * view.ts), and nearer layers hide what is behind them. A layer is the
- * plane `distance` ahead of the camera along its face's axis (its slice's
- * centre). `fog` is the share of the horizon colour mixed into a layer's
- * pixels, and into the sky where no layer is drawn.
+ * view.ts), and nearer layers hide what is behind them. A layer is a
+ * slice's centre plane, `distance` ahead of the camera along its face's
+ * axis; the slice holds the face's layers [depth, depth + size) (see Face
+ * in view.ts). `fog` is the share of the horizon colour mixed into a
+ * layer's pixels, and into the sky where no layer is drawn.
  */
 export interface Frame extends View {
   fog: number
-  layers: { face: Face; distance: number; placements: Placement[]; fog: number }[]
-}
-
-export interface Layer {
-  /** Name of the face whose axis the slice is cut along, e.g. '+x+z'. */
-  face: string
-  /** First layer of the slice, in its face's lattice coordinates (see Face in view.ts). */
-  depth: number
-  /** Number of layers; the slice holds voxels of layers [depth, depth + size). */
-  size: number
-  /** Number of voxels in the slice (most are hidden behind nearer ones). */
-  voxelCount: number
-  /** Non-empty chunks in view in the most recent render (some may stand in for chunks still baking). */
-  chunks: Chunk[]
-  visible: boolean
+  layers: { face: Face; depth: number; size: number; distance: number; placements: Placement[]; fog: number }[]
 }
 
 export interface UpdateStats {
@@ -126,7 +113,8 @@ function sliceKey(face: string, depth: number, size: number): string {
 
 /** A cached slice and the chunks baked so far. */
 interface Slice {
-  layer: Layer
+  depth: number
+  size: number
   /** Chunk cells, see chunkCell. */
   cell: ReturnType<typeof chunkCell>
   /** Baked chunks by cell (keyed by cellKey). */
@@ -237,8 +225,6 @@ export class ParallaxRenderer {
   // Keyed by sliceKey(face, depth, size). Map insertion order doubles as
   // LRU order (oldest first).
   private slices = new Map<string, Slice>()
-  // Slices of the most recent render, face by face, near to far.
-  private visibleSlices: Slice[] = []
   // Per face, the slices it drew (see matchTilings).
   private tilings = new Map<string, SliceBoundary[]>()
   // Chunks of the cells in view in the most recent render, drawn or not:
@@ -249,7 +235,7 @@ export class ParallaxRenderer {
   // Kept across renders for its buffers.
   private coverage: Coverage | null = null
 
-  // How many voxels each face's layers hold and where, found on first use.
+  // Where each face's layers hold voxels, found on first use.
   private index: LayerIndex | null = null
 
   private bakery: Bakery | null
@@ -303,8 +289,7 @@ export class ParallaxRenderer {
     let chunksCovered = 0
     let farthest = this.renderDistance
     const frame: Frame = { ...view, fog: 0, layers: [] }
-    // Slices drawn, and all slices of the view (also those still baking).
-    const shown: Slice[] = []
+    // All slices of the view (also those still baking).
     const keep = new Set<Slice>()
     const tilings = new Map<string, SliceBoundary[]>()
 
@@ -317,18 +302,16 @@ export class ParallaxRenderer {
       const of = { face, tangents, camera, boxOf: screenBox(view, face) }
       const drawn: SliceBoundary[] = []
       const commit = (slice: Slice, result: Drawn) => {
-        const { layer } = slice
-        layer.chunks = result.placements.map(p => p.chunk)
+        const { depth, size } = slice
         for (const { chunk } of result.placements) {
           if (this.fresh.delete(chunk)) chunksRegenerated++
           else chunksReused++
         }
         chunksCovered += result.covered
         farthest = Math.max(farthest, result.distance)
-        frame.layers.push({ face, distance: result.distance, placements: result.placements, fog: this.fog(result.distance) })
+        frame.layers.push({ face, depth, size, distance: result.distance, placements: result.placements, fog: this.fog(result.distance) })
         pass.coverage?.cover(result.placements, result.distance, slice.cell, camera)
-        shown.push(slice)
-        drawn.push({ depth: layer.depth, size: layer.size })
+        drawn.push({ depth, size })
       }
 
       const wanted = selectSlices(camera.z / LAYER, NEAR_DEPTH / LAYER, this.renderDistance / LAYER, detail)
@@ -356,7 +339,6 @@ export class ParallaxRenderer {
     frame.fog = this.fog(farthest)
 
     this.inView = pass.inView
-    this.visibleSlices = shown
     this.tilings = tilings
     this.evict(keep)
     const nearFirst = (missing: Missing[]) => missing.sort((a, b) => a.distance - b.distance).map(m => m.request)
@@ -408,7 +390,7 @@ export class ParallaxRenderer {
     const key = cellKey(i, j)
     let extent = slice.extents.get(key)
     if (extent === undefined) {
-      const { depth, size } = slice.layer
+      const { depth, size } = slice
       const { columns, rows } = slice.cell
       const margin = cellMargin(size)
       const found = this.layerIndex().range(face.lattice, depth, depth + size, i * columns - margin.columns, (i + 1) * columns + margin.columns)
@@ -429,11 +411,10 @@ export class ParallaxRenderer {
    */
   private drawSlice(pass: Pass, { face, tangents, camera, boxOf }: FaceView, slice: Slice, mode: 'want' | 'standIn' | 'probe'): Drawn {
     const { view, step, fillDetail, coverage, inView } = pass
-    const { depth, size, visible } = slice.layer
+    const { depth, size } = slice
     // Slices start at least NEAR_DEPTH ahead of the camera, so this is > 0.
     const distance = sliceCentre({ depth, size }) - camera.z
     const result: Drawn = { distance, placements: [], covered: 0, unbaked: 0 }
-    if (!visible) return result
     const covered = (box: ScreenBox) => {
       const c = coverage?.hides(box) ?? false
       if (c) result.covered++
@@ -563,7 +544,6 @@ export class ParallaxRenderer {
     this.world = new World(seed, worldType)
     this.camera = { ...this.world.spawn }
     this.inView.clear()
-    this.visibleSlices = []
     this.tilings.clear()
     this.slices.clear()
     this.pixels = 0
@@ -640,17 +620,6 @@ export class ParallaxRenderer {
     }
   }
 
-  /** Layers of the most recent render, face by face, near to far. */
-  getLayers(): Layer[] {
-    return this.visibleSlices.map(s => s.layer)
-  }
-
-  /** Toggles the visible layer of `face` starting at `depth` (a face's visible slices never share a depth). */
-  toggleLayerVisibility(face: string, depth: number) {
-    const layer = this.getLayers().find(l => l.face === face && l.depth === depth)
-    if (layer) layer.visible = !layer.visible
-  }
-
   /** Share of the fog colour at viewing distance d. */
   private fog(d: number): number {
     return 1 - Math.exp(-d / (this.renderDistance * FOG_PER_RENDER_DISTANCE))
@@ -671,9 +640,9 @@ export class ParallaxRenderer {
       return cached
     }
 
-    const voxelCount = this.layerIndex().count(face.lattice, depth, depth + size)
     const slice: Slice = {
-      layer: { face: face.name, depth, size, voxelCount, chunks: [], visible: true },
+      depth,
+      size,
       cell: chunkCell(size),
       cells: new Map(),
       pixels: 0,

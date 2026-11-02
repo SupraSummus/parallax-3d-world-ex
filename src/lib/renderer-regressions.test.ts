@@ -118,9 +118,8 @@ describe('Renderer regressions', () => {
       renderer.setSkipCovered(false)
       renderer.setCamera({ x: 0, y: 30, z: -60 })
 
-      renderer.render()
+      const chunkCount = renderer.render().layers.flatMap(l => l.placements).length
       const initialRegens = renderer.getStats().totalChunksRegenerated
-      const chunkCount = renderer.getLayers().flatMap(l => l.chunks).length
 
       // Simulate holding W for 8 frames, a unit per frame.
       for (let i = 1; i <= 8; i++) {

@@ -1,5 +1,5 @@
 import { useEffect, useEffectEvent, useRef, useState, useCallback, type PointerEvent, type ReactNode } from 'react'
-import { ParallaxRenderer, DEFAULT_FOV, MAX_FOV, MIN_FOV, DEFAULT_RENDER_DISTANCE, MAX_RENDER_DISTANCE, MIN_RENDER_DISTANCE, DEFAULT_MAX_LEAK, MAX_MAX_LEAK, MIN_MAX_LEAK, type Camera, type Layer, type SessionStats } from '@/lib/renderer'
+import { ParallaxRenderer, DEFAULT_FOV, MAX_FOV, MIN_FOV, DEFAULT_RENDER_DISTANCE, MAX_RENDER_DISTANCE, MIN_RENDER_DISTANCE, DEFAULT_MAX_LEAK, MAX_MAX_LEAK, MIN_MAX_LEAK, type Camera, type SessionStats } from '@/lib/renderer'
 import { World, WORLD_TYPES, type WorldType } from '@/lib/world'
 import type { Orientation } from '@/lib/view'
 import { Compositor } from '@/lib/compositor'
@@ -10,8 +10,7 @@ import { Separator } from '@/components/ui/separator'
 import { Slider } from '@/components/ui/slider'
 import { Switch } from '@/components/ui/switch'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { LayerPreview } from '@/components/LayerPreview'
-import { Box, ChartLine, Crosshair, ExternalLink, Eye, EyeOff, History, Layers, Move, RefreshCw } from 'lucide-react'
+import { Box, ChartLine, Crosshair, ExternalLink, Eye, EyeOff, History, Move, RefreshCw } from 'lucide-react'
 
 /**
  * Key -> movement direction for held keys: right, up, forward relative to
@@ -54,8 +53,6 @@ function App() {
   const [camera, setCamera] = useState<Camera>({ x: 0, y: 0, z: 0 })
   const [orientation, setOrientation] = useState<Orientation>({ yaw: 0, pitch: 0 })
   const [showStats, setShowStats] = useState(true)
-  const [showLayers, setShowLayers] = useState(true)
-  const [layers, setLayers] = useState<Layer[]>([])
   // Lattice units per second.
   const [moveSpeed, setMoveSpeed] = useState(60)
   const [worldType, setWorldType] = useState<WorldType>('forest')
@@ -77,7 +74,6 @@ function App() {
     const frame = renderer.render()
     compositorRef.current?.draw(frame)
     setSessionStats(renderer.getStats())
-    setLayers(renderer.getLayers())
     setCamera(renderer.getCamera())
     setOrientation(renderer.getOrientation())
   }, [])
@@ -227,11 +223,6 @@ function App() {
     window.open(`${import.meta.env.BASE_URL}viewer.html?${query.toString()}`, '_blank', 'noopener')
   }
 
-  const handleToggleLayerVisibility = (face: string, depth: number) => {
-    rendererRef.current?.toggleLayerVisibility(face, depth)
-    requestRender()
-  }
-
   const handleFovChange = ([value]: number[]) => {
     setFov(value)
     rendererRef.current?.setFov(value)
@@ -368,18 +359,12 @@ function App() {
               <ExternalLink size={16} />
               Open in 3D Viewer
             </Button>
-            <div className="flex gap-2">
-              {!showStats && (
-                <Button onClick={() => { setShowStats(true) }} className="flex-1" variant="outline">
-                  <Eye size={16} />
-                  Stats
-                </Button>
-              )}
-              <Button onClick={() => { setShowLayers(!showLayers) }} className="flex-1" variant="outline">
-                {showLayers ? <EyeOff size={16} /> : <Layers size={16} />}
-                {showLayers ? 'Hide' : 'Show'} Layers
+            {!showStats && (
+              <Button onClick={() => { setShowStats(true) }} variant="outline" className="w-full">
+                <Eye size={16} />
+                Stats
               </Button>
-            </div>
+            )}
           </Panel>
         </aside>
 
@@ -433,10 +418,6 @@ function App() {
                 </>
               )}
             </Panel>
-          )}
-
-          {showLayers && (
-            <LayerPreview layers={layers} onToggleVisibility={handleToggleLayerVisibility} />
           )}
         </aside>
       </div>

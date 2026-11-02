@@ -15,7 +15,6 @@
     "knip:production": "knip --production"
   },
   "dependencies": {
-    "@radix-ui/react-scroll-area": "^1.4.0",
     "@radix-ui/react-select": "^2.4.1",
     "@radix-ui/react-separator": "^1.2.0",
     "@radix-ui/react-slider": "^1.6.1",
