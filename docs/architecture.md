@@ -449,7 +449,9 @@ On the forest at 1280 × 800 a settled view bakes half the chunks it would witho
 and draws ~3200, of which ~1600 show a pixel.
 Coverage adds ~17 ms to render() in Node,
 most of it in `cover`, testing sub-blocks one by one;
-the rays through each sub-block are kept per face while the camera only moves.
+the rays through each sub-block are kept per face while the camera only moves,
+and turning, found only in the cells the face crosses or holds
+(a face's side is a half-plane of the screen).
 
 The `Compositor` draws a frame onto one opaque WebGL 2 canvas, one
 textured rectangle per chunk, then the sky behind them. Chunk pixels are

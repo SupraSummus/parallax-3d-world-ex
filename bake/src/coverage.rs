@@ -188,8 +188,16 @@ struct Shape {
     tangents: Vec<[f64; 4]>,
     /** The same per cell wholly inside the face; NaN for others. */
     cell_tangents: Vec<[f64; 4]>,
-    /** Per cell, a bit per sub-block outside the face. */
+    /**
+     * Per cell, a bit per sub-block outside the face. The tangents of cells
+     * wholly outside (all bits) are left from an earlier view: never read.
+     */
     outside: Vec<u16>,
+}
+
+/** Which of a face's sides (see inFace in view.ts) a ray is outside of, a bit each. */
+fn sides([x, y, z]: Vec3) -> u8 {
+    (z < x + SQRT_2 * y) as u8 | ((z < -x + SQRT_2 * y) as u8) << 1 | ((z < x - SQRT_2 * y) as u8) << 2 | ((z < -x - SQRT_2 * y) as u8) << 3
 }
 
 /** What Coverage needs of a baked chunk. */
@@ -329,6 +337,8 @@ pub struct Coverage {
     // Tangents (x / z, y / z) of the rays through the sub-blocks' corners, and the face's sides each is outside of.
     rays: Vec<f64>,
     outside: Vec<u8>,
+    // The same sides, of the rays through the cells' corners.
+    cell_sides: Vec<u8>,
     // Per sub-block (see sub_block), for the layer being covered: area of
     // the plane under it proven opaque so far, and the sub-blocks with some.
     area: Vec<f64>,
@@ -364,6 +374,7 @@ impl Coverage {
         let corners = (self.sub_cols + 1) * (self.sub_rows + 1);
         self.rays = vec![0.0; corners * 2];
         self.outside = vec![0; corners];
+        self.cell_sides = vec![0; (cols + 1) * (rows + 1)];
     }
 
     /** Starts face number `face` (of FACES in view.ts), the camera's axes in its coordinates; its layers follow, near to far. */
@@ -374,7 +385,8 @@ impl Coverage {
         }
         // What depends only on the view and the face is kept while they stay (moving, not turning).
         if self.shapes[face].as_ref().is_none_or(|shape| shape.look != look) {
-            self.shapes[face] = Some(self.shape(look));
+            let old = self.shapes[face].take();
+            self.shapes[face] = Some(self.shape(look, old));
         }
         self.face = Some(face);
         let Coverage { cols, rows, ref mut open, ref mut covered, ref mut bits, .. } = *self;
@@ -390,24 +402,43 @@ impl Coverage {
         }
     }
 
-    /** The tangents of a face's rays through each sub-block and cell, and per cell its sub-blocks outside the face. */
-    fn shape(&mut self, look: Look) -> Shape {
-        let Coverage { cols, rows, sub_cols, sub_rows, ref mut rays, ref mut outside, .. } = *self;
-        let mut tangents = vec![[0.0; 4]; sub_cols * sub_rows];
-        let mut cell_tangents = vec![[0.0; 4]; cols * rows];
-        let mut bits = vec![0u16; cols * rows];
-        // Tangents of the rays through the sub-block corners, and which of the
-        // face's sides (see inFace) each is outside of.
+    /**
+     * The tangents of a face's rays through each sub-block and cell, and per
+     * cell its sub-blocks outside the face; in the buffers of `old`, if any.
+     */
+    fn shape(&mut self, look: Look, old: Option<Shape>) -> Shape {
+        let Coverage { cols, rows, sub_cols, sub_rows, ref mut rays, ref mut outside, ref mut cell_sides, .. } = *self;
+        let (mut tangents, mut cell_tangents, mut bits) = match old {
+            Some(Shape { tangents, cell_tangents, outside, .. }) => (tangents, cell_tangents, outside),
+            None => (vec![[0.0; 4]; sub_cols * sub_rows], vec![[0.0; 4]; cols * rows], vec![0u16; cols * rows]),
+        };
+        // A side is a half-plane of the screen, so a cell with its corners
+        // outside one side is outside the face, and one with all its corners
+        // inside is inside: only cells it crosses or holds are looked into.
+        for (n, side) in cell_sides.iter_mut().enumerate() {
+            *side = sides(look.ray((n % (cols + 1) * CELL) as f64, (n / (cols + 1) * CELL) as f64));
+        }
+        let cell_corners = |c: usize| {
+            let n = c + c / cols;
+            [cell_sides[n], cell_sides[n + 1], cell_sides[n + cols + 1], cell_sides[n + cols + 2]]
+        };
+        for (c, b) in bits.iter_mut().enumerate() {
+            let o = cell_corners(c);
+            *b = if o[0] & o[1] & o[2] & o[3] != 0 { FULL } else { 0 };
+        }
+        // Tangents of the rays through those cells' sub-block corners, and the sides each is outside of.
         let corners = sub_cols + 1;
-        let ray_at = |n: usize| look.ray((n % corners * SUB) as f64, (n / corners * SUB) as f64);
-        for n in 0..corners * (sub_rows + 1) {
-            let [x, y, z] = ray_at(n);
-            rays[2 * n] = x / z;
-            rays[2 * n + 1] = y / z;
-            outside[n] = (z < x + SQRT_2 * y) as u8
-                | ((z < -x + SQRT_2 * y) as u8) << 1
-                | ((z < x - SQRT_2 * y) as u8) << 2
-                | ((z < -x - SQRT_2 * y) as u8) << 3;
+        for sj in 0..=sub_rows {
+            let (j0, j1) = (sj.saturating_sub(1) >> SHIFT, (sj >> SHIFT).min(rows - 1));
+            for si in 0..=sub_cols {
+                let (i0, i1) = (si.saturating_sub(1) >> SHIFT, (si >> SHIFT).min(cols - 1));
+                if [j0 * cols + i0, j0 * cols + i1, j1 * cols + i0, j1 * cols + i1].iter().all(|&c| bits[c] == FULL) {
+                    continue;
+                }
+                let n = sj * corners + si;
+                let ray = look.ray((si * SUB) as f64, (sj * SUB) as f64);
+                (rays[2 * n], rays[2 * n + 1], outside[n]) = (ray[0] / ray[2], ray[1] / ray[2], sides(ray));
+            }
         }
         // The bounds of a rectangle's tangents, of corners k (top-left) to k + d + corners · e, all inside the face:
         // its tangents are extreme at its corners (ratios of linear functions of the screen position).
@@ -421,10 +452,14 @@ impl Coverage {
                 ys.into_iter().fold(f64::NEG_INFINITY, f64::max),
             ]
         };
-        for sj in 0..sub_rows {
-            for si in 0..sub_cols {
-                let k = sj * corners + si;
-                let (c, bit) = ((sj >> SHIFT) * cols + (si >> SHIFT), (sj & MASK) * SUBS + (si & MASK));
+        let ray_at = |n: usize| look.ray((n % corners * SUB) as f64, (n / corners * SUB) as f64);
+        for c in 0..cols * rows {
+            if bits[c] == FULL {
+                continue;
+            }
+            let corner = c / cols * SUBS * corners + c % cols * SUBS;
+            for bit in 0..SUBS * SUBS {
+                let k = corner + (bit >> SHIFT) * corners + (bit & MASK);
                 let s = sub_block(c, bit);
                 let o = [outside[k], outside[k + 1], outside[k + corners], outside[k + corners + 1]];
                 // All corners inside: bounded by its corners; all outside one side: outside the face; otherwise clip.
@@ -439,15 +474,8 @@ impl Coverage {
                     None => bits[c] |= 1 << bit,
                 }
             }
-        }
-        for j in 0..rows {
-            for i in 0..cols {
-                let c = j * cols + i;
-                // A cell wholly inside the face, for covering it at once (NaN if not).
-                let corner = j * SUBS * corners + i * SUBS;
-                let inside = [0, SUBS].iter().all(|&e| [0, SUBS].iter().all(|&d| outside[corner + e * corners + d] == 0));
-                cell_tangents[c] = if inside { bounds(corner, SUBS) } else { [f64::NAN; 4] };
-            }
+            // A cell wholly inside the face, for covering it at once (NaN if not).
+            cell_tangents[c] = if cell_corners(c) == [0; 4] { bounds(corner, SUBS) } else { [f64::NAN; 4] };
         }
         Shape { look, tangents, cell_tangents, outside: bits }
     }
@@ -729,5 +757,63 @@ mod tests {
         }
         // Left, right, top, bottom in pixels: past the empty first row and column, to the cut ones.
         assert_eq!(chunk.solid, [4.0, 23.0, 4.0, 14.0]);
+    }
+
+    #[test]
+    fn shapes_a_face_as_looking_at_each_sub_block_does() {
+        let (width, height, focal) = (333.0, 217.0, 180.0);
+        let mut coverage = Coverage::default();
+        coverage.set_view(width, height, focal);
+        let Coverage { cols, rows, .. } = coverage;
+        let tangent_bounds = |rays: &[Vec3]| {
+            let mut b = Bounds::EMPTY;
+            rays.iter().for_each(|r| b.add(r[0] / r[2], r[1] / r[2]));
+            [b.min_x, b.max_x, b.min_y, b.max_y]
+        };
+        let (mut inside, mut outside, mut crossing) = (0, 0, 0);
+        let mut old = None;
+        // Turned every way, reusing the previous shape's buffers.
+        for (yaw, pitch) in [(0.0f64, 0.0f64), (0.7, 0.3), (2.0, -0.9), (-2.8, 1.2), (1.3, 0.05), (-0.5, -0.6)] {
+            let (sy, cy, sp, cp) = (yaw.sin(), yaw.cos(), pitch.sin(), pitch.cos());
+            let look = Look { width, height, focal, right: [cy, 0.0, -sy], up: [-sy * sp, cp, -cy * sp], forward: [sy * cp, sp, cy * cp] };
+            let shape = coverage.shape(look, old.take());
+            for c in 0..cols * rows {
+                let (i, j) = (c % cols, c / cols);
+                let mut bits = 0u16;
+                for bit in 0..SUBS * SUBS {
+                    let (si, sj) = (i * SUBS + bit % SUBS, j * SUBS + bit / SUBS);
+                    let rays =
+                        [(si, sj), (si + 1, sj), (si + 1, sj + 1), (si, sj + 1)].map(|(a, b)| look.ray((a * SUB) as f64, (b * SUB) as f64));
+                    let codes = rays.map(sides);
+                    let tangents = if codes == [0; 4] {
+                        Some(tangent_bounds(&rays))
+                    } else if codes.iter().fold(15, |all, &o| all & o) == 0 {
+                        tangent_box(&rays).map(|b| [b.min_x, b.max_x, b.min_y, b.max_y])
+                    } else {
+                        None
+                    };
+                    match tangents {
+                        Some(t) => assert_eq!(shape.tangents[sub_block(c, bit)], t),
+                        None => bits |= 1 << bit,
+                    }
+                }
+                assert_eq!(shape.outside[c], bits);
+                if bits == FULL {
+                    outside += 1;
+                    continue;
+                }
+                // Wholly inside when its corners are; else NaN, not to be covered at once.
+                let rays = [(i, j), (i + 1, j), (i + 1, j + 1), (i, j + 1)].map(|(a, b)| look.ray((a * CELL) as f64, (b * CELL) as f64));
+                if rays.map(sides) == [0; 4] {
+                    assert_eq!(shape.cell_tangents[c], tangent_bounds(&rays));
+                    inside += 1;
+                } else {
+                    assert!(shape.cell_tangents[c].iter().all(|v| v.is_nan()));
+                    crossing += 1;
+                }
+            }
+            old = Some(shape);
+        }
+        assert!(inside > 100 && outside > 100 && crossing > 100, "{inside} {outside} {crossing}");
     }
 }
