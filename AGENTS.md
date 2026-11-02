@@ -11,6 +11,7 @@ Entry point for AI agents working on this codebase. Read this first.
 | [docs/architecture.md](docs/architecture.md) | Slicing, caching and compositing architecture | Touching `src/lib` |
 | [docs/testing.md](docs/testing.md) | Test layout and conventions | Writing tests |
 | [docs/todo.md](docs/todo.md) | Measured or derived improvements not done yet | Looking for what to do next |
+| [docs/generators.md](docs/generators.md) | Generating worlds in pieces: layers, things, rules | Writing or changing a world generator |
 
 Each concept has one home:
 build/test commands live in `package.json` scripts,
@@ -37,7 +38,8 @@ src/
     ├── fcc.ts               # Voxel geometry: rhombic dodecahedra of the FCC lattice
     ├── voxel-grid.ts        # Dense voxel storage on the FCC lattice (typed arrays)
     ├── world.ts             # World: voxel grid, spawn, toy world types
-    ├── forest.ts            # Forest scene generator (UNIT_SIZE lives here)
+    ├── generator.ts         # Generating any box of a world alone, at any level of detail
+    ├── forest.ts            # Forest scene generator, on generator.ts (UNIT_SIZE lives here)
     ├── city.ts              # City scene generator: streets, buildings, maze of rooms
     ├── noise.ts             # Seeded hash, value noise and PRNG for the generators
     ├── cells.ts             # Cells of the coarser lattices N·FCC that slices are made of

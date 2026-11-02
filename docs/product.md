@@ -85,7 +85,9 @@ waits for them; meanwhile a cell shows an older bake, or nothing.
   into view (moving, or turning to new faces) still takes up to ~300 ms,
   more in software WebGL.
 - Measure the seams between faces against ray-cast perspective.
-- Generate geometry on demand (chunks) instead of one fixed world.
+- Generate the world on demand, in a worker, instead of one fixed extent
+  on the main thread at start:
+  the forest can already be generated in any box ([generators.md](generators.md)).
 - Hold less of the world: every worker has its own 35–50 MB copy;
   a shared buffer or only the voxels with an open face would do.
 - Describe the city in metres, like the forest, instead of boxes on its
@@ -101,8 +103,6 @@ waits for them; meanwhile a cell shows an older bake, or nothing.
   mostly testing sub-blocks one by one in `cover` (`bake/src/coverage.rs`).
 - Find covered chunks more exactly: half of the chunks drawn show no pixel.
 - Build `LayerIndex` off the main thread or in Rust: ~0.4 s at start on the forest.
-- Generate the world in a worker: the forest takes ~0.5 s on the main
-  thread at start.
 - Measure the WebGL compositor on real GPUs (headless Chromium only has a
   software one); if draw calls matter, pack chunks into a texture atlas.
 - Paint cut cross-sections with the colour of the surface above them: a 2D

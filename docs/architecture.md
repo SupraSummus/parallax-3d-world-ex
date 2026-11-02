@@ -520,9 +520,13 @@ Renderer distances are in world units: render distance 40–800, default 400.
 each world picks its own scale, the renderer assumes none.
 The forest's `UNIT_SIZE` is 0.25 m per unit (neighbours 0.35 m apart),
 so the default render distance is 100 m and the fog distance 70 m.
+The forest is endless and can be generated in any box alone
+([generators.md](generators.md));
+the app generates one box of it, its extent, into a grid.
 Its ground is a heightfield sampled per column of sites;
-trunks are columns at least 2 units square, crowns balls, branches and
-fallen logs capsules, so thin parts stay one piece on the lattice
+trunks are columns at least 2 units square,
+crowns leaf clusters (balls) or a solid of revolution (spruce),
+branches and fallen logs capsules, so thin parts stay one piece on the lattice
 (a single column of sites only touches at corners).
 The city is planned on a 0.25 m grid (`PLAN_CELL_SIZE`):
 each plan cell is a box holding four sites, lattice units of 0.125 m
@@ -571,6 +575,6 @@ so from the parallax camera's position both renderers should agree.
   surface of pyramids, and a silhouette along an axis is a zigzag.
 - Four voxels per old cube, each showing up to six faces towards the
   camera instead of up to three: a first bake of the toy world in the tests takes
-  ~1.4 s on one thread (0.26 s with cubes). The forest has ~2.8 M voxels
+  ~1.4 s on one thread (0.26 s with cubes). The forest has ~3.1–3.5 M voxels
   (35 MB) and the city ~3 M (50 MB), held by the main thread and each
   worker; the reference viewer's mesh has ~10 M faces (~850 MB of buffers).
