@@ -1,6 +1,8 @@
 //! Chunk baking, compiled to WebAssembly for the bake workers: the voxel
 //! faces of a chunk cell, projected from an eye onto its slice's centre
-//! plane and filled into pixels. chunk-baker.ts drives it through the
+//! plane and filled into pixels. A world is a grid per level of detail;
+//! each slice reads the one its atoms are the voxels of (in_grid).
+//! chunk-baker.ts drives it through the
 //! exports at the bottom. See docs/architecture.md, section 3.
 //! The same module finds what nearer layers cover on the main thread
 //! (coverage.rs).
@@ -19,7 +21,7 @@ use std::collections::HashMap;
 use cells::Cells;
 use faces::{Faces, chunk_faces};
 use fill::{Scratch, fill_faces, solid_blocks};
-use slicing::{LAYER, atom_level, chunk_cell, thickness};
+use slicing::{LAYER, atom_level, chunk_cell, spacing, thickness};
 use surface::{Slice, Voxel, cell_surface};
 use world::{FACE_KINDS, GEOMETRY, Geometry, Grid, LATTICE, Lattice, Reader, VIEW_FACES};
 
@@ -33,7 +35,8 @@ use world::{FACE_KINDS, GEOMETRY, Geometry, Grid, LATTICE, Lattice, Reader, VIEW
 const RENDER_SCALE: f64 = 10.0;
 
 /**
- * Chunk pixels per unit for a slice of `level`: 40 / t, t its thickness
+ * Chunk pixels per unit of its grid for a slice of `level` as the grid
+ * sees it (in_grid): 40 / t, t its thickness
  * (see thickness), between 1 (2 pixels across a voxel) and RENDER_SCALE.
  * Such a slice lies at distance ≥ t · detail · LAYER, where a unit is at
  * most focal / (t · detail · LAYER) screen pixels, about 40 / t with the
@@ -44,8 +47,19 @@ fn render_scale(level: i32) -> f64 {
     (40.0 / thickness(level) as f64).floor().clamp(1.0, RENDER_SCALE)
 }
 
-/** Levels of cells slices are made of (atomLevel of MAX_LEVEL in slice-selection.ts), and one more for a cutoff. */
-const LEVELS: usize = 5;
+/**
+ * A slice (level, layer, cutoff) of the world and its eye as the grid the
+ * slice reads sees them: grid ℓ = atom_level(level) has the sites of N·FCC,
+ * N = 2^ℓ, as its own units, so the slice is slab `layer` of
+ * 2^(level − ℓ) of its layers, cut off at cutoff / N: a slice of single
+ * voxels. The eye, a site of 2^level·FCC, is one of the grid's.
+ * Returns ℓ, that slice and that eye.
+ */
+fn in_grid(slice: &Slice, eye: [i32; 3]) -> (usize, Slice, [i32; 3]) {
+    let l = atom_level(slice.level);
+    let n = spacing(l);
+    (l as usize, Slice { level: slice.level - l, layer: slice.layer, cutoff: slice.cutoff / n as f64 }, eye.map(|v| v / n))
+}
 
 /** Cell surfaces kept for baking the same cell from other eyes. */
 const MAX_SURFACES: usize = 1024;
@@ -60,18 +74,19 @@ pub struct Image {
     pub faces_drawn: usize,
 }
 
-/** Face, level, layer, cutoff (as bits), i, j. */
-type SurfaceKey = (usize, i32, i32, u64, i32, i32);
+/** Face, grid level, then the slice as the grid sees it: level, layer, cutoff (as bits), i, j. */
+type SurfaceKey = (usize, usize, i32, i32, u64, i32, i32);
 
-/** One world's grid, palettes and lattices, and the buffers reused across bakes. */
+/** One world's grids, palettes and lattices, and the buffers reused across bakes. */
 pub struct Baker {
-    grid: Grid,
+    /** By level: grid ℓ has the sites of 2^ℓ·FCC, in its own units. They share materials. */
+    grids: Vec<Grid>,
     geometry: Geometry,
     lattices: [Lattice; VIEW_FACES],
     /** Per view face: material · FACE_KINDS + kind → RGBA. */
     palettes: Vec<u32>,
-    /** Per level, which cell owns each site; made on first use. */
-    cells: [Option<Cells>; LEVELS],
+    /** Which cell of 2·FCC owns each site, for cutoffs. */
+    pairs: Cells,
     /** Cell surfaces, with the bake count they were last used at. */
     surfaces: HashMap<SurfaceKey, (Vec<Voxel>, u64)>,
     uses: u64,
@@ -84,13 +99,13 @@ pub struct Baker {
 }
 
 impl Baker {
-    pub fn new(grid: Grid, geometry: Geometry, lattices: [Lattice; VIEW_FACES], palettes: Vec<u32>) -> Baker {
+    pub fn new(grids: Vec<Grid>, geometry: Geometry, lattices: [Lattice; VIEW_FACES], palettes: Vec<u32>) -> Baker {
         Baker {
-            grid,
+            grids,
             geometry,
             lattices,
             palettes,
-            cells: Default::default(),
+            pairs: Cells::new(2),
             surfaces: HashMap::new(),
             uses: 0,
             faces: Faces::new(),
@@ -101,10 +116,15 @@ impl Baker {
         }
     }
 
-    /** Fills self.faces with the faces of a chunk (see chunk_faces), from its cell's surface, cached. */
-    fn chunk_faces(&mut self, face: usize, slice: &Slice, i: i32, j: i32, eye: [i32; 3], fill: bool) {
+    /**
+     * Fills self.faces with the faces of a chunk (see chunk_faces) of a
+     * slice as grid `level` sees it (in_grid), from its cell's surface,
+     * cached.
+     */
+    #[allow(clippy::too_many_arguments)]
+    fn chunk_faces(&mut self, face: usize, level: usize, slice: &Slice, i: i32, j: i32, eye: [i32; 3], fill: bool) {
         self.uses += 1;
-        let key = (face, slice.level, slice.layer, slice.cutoff.to_bits(), i, j);
+        let key = (face, level, slice.level, slice.layer, slice.cutoff.to_bits(), i, j);
         if !self.surfaces.contains_key(&key) {
             if self.surfaces.len() >= MAX_SURFACES {
                 let oldest = self.surfaces.iter().min_by_key(|(_, (_, used))| *used).map(|(k, _)| *k);
@@ -112,15 +132,8 @@ impl Baker {
                     self.surfaces.remove(&oldest);
                 }
             }
-            // The slice's atoms, and the cells one size up only for a cutoff.
-            let level = atom_level(slice.level) as usize;
-            let above = if slice.cutoff.is_finite() { level + 1 } else { level };
-            for l in [level, above] {
-                self.cells[l].get_or_insert_with(|| Cells::new(1 << l));
-            }
-            let (Some(cells), Some(next)) = (&self.cells[level], &self.cells[above]) else { unreachable!() };
-            let reader = Reader::new(&self.grid, self.lattices[face]);
-            self.surfaces.insert(key, (cell_surface(&reader, &self.geometry, cells, next, slice, i, j), 0));
+            let reader = Reader::new(&self.grids[level], self.lattices[face]);
+            self.surfaces.insert(key, (cell_surface(&reader, &self.geometry, &self.pairs, slice, i, j), 0));
         }
         let surface = self.surfaces.get_mut(&key).expect("just inserted");
         surface.1 = self.uses;
@@ -134,9 +147,10 @@ impl Baker {
      * ChunkBaker.bake.
      */
     pub fn bake(&mut self, face: usize, slice: &Slice, i: i32, j: i32, eye: [i32; 3], fill: bool) -> Image {
-        self.chunk_faces(face, slice, i, j, eye, fill);
+        let (level, slice, eye) = in_grid(slice, eye);
+        self.chunk_faces(face, level, &slice, i, j, eye, fill);
 
-        // Drawn extent, clipped to the cell.
+        // Drawn extent, clipped to the cell, in the grid's units.
         let cell = chunk_cell(slice.level, i, j);
         let (left, bottom) = (cell.left as f64 * LAYER, cell.bottom as f64);
         let min_x = self.faces.min_x.max(left);
@@ -154,7 +168,9 @@ impl Baker {
         let palette = &self.palettes[face * palettes..(face + 1) * palettes];
         let faces_drawn = fill_faces(&mut self.scratch, &self.faces, palette, &mut self.pixels, width, height, min_x, max_y, scale);
         solid_blocks(&mut self.blocks, &self.pixels, width, height);
-        Image { width, height, origin_x: min_x, origin_y: max_y, scale, faces_drawn }
+        // In world units.
+        let n = spacing(level as i32) as f64;
+        Image { width, height, origin_x: min_x * n, origin_y: max_y * n, scale: scale / n, faces_drawn }
     }
 }
 
@@ -165,7 +181,7 @@ impl Baker {
 /** A world being handed over, then baking it. */
 enum State {
     None,
-    Loading { grid: Grid, geometry: Vec<f64>, lattices: Vec<i32>, palettes: Vec<u32> },
+    Loading { grids: Vec<Grid>, geometry: Vec<f64>, lattices: Vec<i32>, palettes: Vec<u32> },
     Ready(Box<Baker>),
 }
 
@@ -174,20 +190,29 @@ thread_local! {
     static RESULT: RefCell<[f64; 9]> = const { RefCell::new([0.0; 9]) };
 }
 
-/** Starts a world of `cells` sites and `materials` materials; returns where to write the sites. */
+/** Starts a world of `materials` materials. */
 #[unsafe(no_mangle)]
-pub extern "C" fn world_cells(cells: usize, materials: usize) -> *mut u8 {
+pub extern "C" fn world_start(materials: usize) {
     STATE.with_borrow_mut(|state| {
         *state = State::Loading {
-            grid: Grid { min: [0; 3], n: [0; 3], cells: vec![0; cells] },
+            grids: Vec::new(),
             geometry: vec![0.0; FACE_KINDS * GEOMETRY],
             lattices: vec![0; VIEW_FACES * LATTICE],
             palettes: vec![0; VIEW_FACES * materials * FACE_KINDS],
         };
-        match state {
-            State::Loading { grid, .. } => grid.cells.as_mut_ptr(),
-            _ => unreachable!(),
+    })
+}
+
+/** Adds the loading world's grid of the next level, of the box given; returns where to write its sites. */
+#[unsafe(no_mangle)]
+pub extern "C" fn world_grid(min_x: i32, min_y: i32, min_z: i32, nx: i32, ny: i32, nz: i32) -> *mut u8 {
+    STATE.with_borrow_mut(|state| match state {
+        State::Loading { grids, .. } => {
+            let cells = (nx / 2 * ny * nz).max(0) as usize;
+            grids.push(Grid { min: [min_x, min_y, min_z], n: [nx, ny, nz], cells: vec![0; cells] });
+            grids.last_mut().expect("just pushed").cells.as_mut_ptr()
         }
+        _ => std::ptr::null_mut(),
     })
 }
 
@@ -204,18 +229,16 @@ pub extern "C" fn world_table(table: u32) -> *mut u8 {
     })
 }
 
-/** Finishes loading: the grid's box. */
+/** Finishes loading. */
 #[unsafe(no_mangle)]
-pub extern "C" fn world_ready(min_x: i32, min_y: i32, min_z: i32, nx: i32, ny: i32, nz: i32) {
+pub extern "C" fn world_ready() {
     STATE.with_borrow_mut(|state| {
-        if let State::Loading { mut grid, geometry, lattices, palettes } = std::mem::replace(state, State::None) {
-            grid.min = [min_x, min_y, min_z];
-            grid.n = [nx, ny, nz];
+        if let State::Loading { grids, geometry, lattices, palettes } = std::mem::replace(state, State::None) {
             let lattices = std::array::from_fn(|f| {
                 let l = &lattices[f * LATTICE..(f + 1) * LATTICE];
                 Lattice { r: [l[0], l[1], l[2]], u: [l[3], l[4], l[5]], f: [l[6], l[7], l[8]] }
             });
-            *state = State::Ready(Box::new(Baker::new(grid, Geometry::from_table(&geometry), lattices, palettes)));
+            *state = State::Ready(Box::new(Baker::new(grids, Geometry::from_table(&geometry), lattices, palettes)));
         }
     })
 }
@@ -262,7 +285,7 @@ pub extern "C" fn bake(
 /**
  * The faces of a chunk before filling, for tests: RESULT holds their count
  * and where they are, 17 f64 each: corners (8), colour, 1 if reached,
- * growth (4) and site (3) (see Face).
+ * growth (4) and site (3) (see Face), in world units.
  */
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
@@ -280,13 +303,15 @@ pub extern "C" fn faces(
 ) -> *const f64 {
     STATE.with_borrow_mut(|state| {
         let State::Ready(baker) = state else { return std::ptr::null() };
-        baker.chunk_faces(face as usize, &Slice { level, layer, cutoff }, i, j, [eye_a, eye_b, eye_c], fill != 0);
+        let (level, slice, eye) = in_grid(&Slice { level, layer, cutoff }, [eye_a, eye_b, eye_c]);
+        baker.chunk_faces(face as usize, level, &slice, i, j, eye, fill != 0);
+        let n = spacing(level as i32);
         baker.numbers.clear();
         for f in &baker.faces.list {
-            baker.numbers.extend(f.corners);
+            baker.numbers.extend(f.corners.map(|v| v * n as f64));
             baker.numbers.extend([f.colour as f64, if f.reached { 1.0 } else { 0.0 }]);
-            baker.numbers.extend(f.growth);
-            baker.numbers.extend(f.site.map(f64::from));
+            baker.numbers.extend(f.growth.map(|v| v * n as f64));
+            baker.numbers.extend(f.site.map(|v| f64::from(v * n)));
         }
         RESULT.with_borrow_mut(|result| {
             result[0] = baker.faces.list.len() as f64;

@@ -58,30 +58,51 @@ So each level is used on its own.
 ### Slices are slabs of whole cells
 
 A slice (`SliceId`) of level k is a slab between two layers of 2^k·FCC:
-the sites whose atom has its own site in the 2^k layers from layer · 2^k.
-Its atoms are the cells of 2^ℓ·FCC, ℓ = `atomLevel(k)` = max(0, k − 3):
-up to level 3 single voxels, slabs of 1, 2, 4 or 8 layers of them;
-above, eight layers of cells of 2, 4, 8 layers.
+its atoms with their own site in the 2^k layers from layer · 2^k.
+Its atoms are the cells of 2^ℓ·FCC, ℓ = `atomLevel(k)` = max(0, k − 6):
+up to level 6 single voxels, slabs of 1 to 64 layers of them;
+above, 64 layers of cells of 2, 4, … 64 layers.
 Slabs of levels with the same atoms nest: one of level k + 1 is two of level k.
 A slice splits no atom, except where the atoms grow (cutoffs, below):
 there the smaller cells along the boundary are shared by two levels.
 
-Why eight layers of cells and not one:
+**Levels of detail.** A world is a grid per level of detail
+(`World.levels`):
+grid ℓ holds the sites of 2^ℓ·FCC, in its own units,
+each a voxel standing for its cell.
+A slice draws its atoms as the voxels of grid ℓ.
+In that grid's units it is a slice of level k − ℓ of single voxels,
+so the baker bakes it as one and scales the chunk back
+(`in_grid` in `bake/src/lib.rs`).
+Each grid is the one before it coarsened (`coarsen`):
+a coarse voxel is full if a quarter of its cell is,
+so a floor or wall one voxel thick stays one,
+and solids grow by up to half a coarse voxel.
+A slice is about 1/detail of its distance thick
+(section 2, detail ≈ 9.5 by default),
+so from level 6 on, a slab of 64 atoms,
+a voxel is 1.4 to 2.7 pixels across at 1280×800 and 90°.
+Level 7, the first of coarse voxels, begins about 230 m away in the forest:
+up to there level 0's grid must hold the world.
+
+Why many layers of atoms and not one:
 cells of neighbouring layers interlock, as voxels do.
 Along the axis, a layer of rhombic dodecahedra N layers apart is 2N deep,
 in columns alternating between even and odd layers;
 a slice is drawn flat and the leak bound limits its depth (section 2),
 so slices of single layers of cells would take twice as many.
 In a slab of R layers of cells only its two faces are ragged:
-it is about (R + 1)·N deep for R·N layers, 1.12 times for R = 8.
+it is about (R + 1)·N deep for R·N layers, 1.02 times for R = 64.
 (No other direction does much better:
-along [111] a layer of cells is 1.5 times as deep as layers are apart, 1.06 for R = 8.)
+along [111] a layer of cells is 1.5 times as deep as layers are apart.)
 
-A slice's sites span `siteLayers` from its slab's first layer,
-and its voxels a layer more each way:
-`thickness` = 2^k + 1 up to level 3, then 18, 37 and 73;
+A slice's atoms' sites are every N-th of its slab's layers, and its
+voxels, N wide, reach N layers past them:
+`thickness` = 2^k + N;
 its centre plane, where its chunks are baked and drawn,
 is halfway through that (`sliceCentre`).
+The sites of finer grids an atom stands for span `siteLayers`
+from the slab's first layer (`ownedLayers` around each atom's own).
 A ray within a face's rhombus (section 4) meets the cells of a face's
 layers in order, as it meets voxels;
 only voxels on a cell's boundary, half in one cell and half in the next,
@@ -102,7 +123,7 @@ thickness, at most a / detail with a the distance to its near side.
 `detail` comes from the leak tolerance (section 2).
 Level 0 is always allowed: a voxel can't be cut.
 
-From level 3 on, the next level's atoms are larger,
+From level 6 on, the next level's atoms are larger,
 and cells of two sizes do not nest:
 a site's cell of one size may lie before `until` while its cell of the
 other lies after, by less than 3N (N the smaller cells' spacing).
@@ -122,11 +143,13 @@ but hold sites before that level begins, so they are drawn first.
 From camera z = 0 with detail 1 (`level:slab`, `|cutoff`):
 
 ```
-0:1 0:2 0:3  1:2 1:3  2:2 2:3  3:2 3:3|32 3:4|32  4:2 4:3|64 4:4|64  5:2 5:3|128 5:4|128  6:2 6:3
+0:1 0:2 0:3  1:2 1:3  2:2 2:3  3:2 3:3  4:2 4:3  5:2 5:3
+6:2 6:3|256 6:4|256  7:2 7:3|512 7:4|512  8:2 8:3|1024 8:4|1024  9:2 9:3
 ```
 
 Covering distance n takes O(detail · log n) slices,
-1 + 1/R times as many as slabs of whole layers would.
+1 + 1/R times as many as slabs of whole layers would,
+up to `MAX_LEVEL` = 12 (from about 7.6 km in the forest), then O(n).
 Moving the camera along the axis keeps every slice
 but a few where levels change (section 5).
 
@@ -155,7 +178,7 @@ plus end to end against ray-cast perspective, in
 [`src/lib/leak-bound.test.ts`](../src/lib/leak-bound.test.ts); read it to
 follow or change the reasoning. In short, for one lateral axis, a slice
 of level k with near side a layers ahead, t layer spacings thick
-(`thickness`, as voxels reach a layer past their own), centre plane at D,
+(`thickness`, as voxels reach past their sites), centre plane at D,
 is baked in perspective from its eye (section 3),
 a site of N·FCC (N = 2^k) whose cell holds the camera:
 
@@ -170,12 +193,12 @@ a site of N·FCC (N = 2^k) whose cell holds the camera:
 5. As an angle the leak is at most 2N·t / (a·(a − N)),
    2N·t·focal / (a·(a − N)) pixels,
    and slices are at most a / detail thick.
-6. With r = N / t, at most 8/9 (level 3), that is at most
+6. With r = N / t, at most 64/65 (from level 6 on), that is at most
    2r / (detail·(detail − r)) (`leakAngle`), which `leakFreeDetail` makes ε,
    rounded up to a quarter octave:
 
 ```
-detail = (r + √(r² + 8r / ε)) / 2  ≈  √(16/9 / ε)
+detail = (r + √(r² + 8r / ε)) / 2  ≈  √(8r / ε)
 ```
 
 Measured in world units instead of an angle, the bound would be the
@@ -316,9 +339,10 @@ and its pixels are copied out of the WebAssembly memory.
 A chunk's voxels are those of its cell and a margin around it
 (`cell_surface`, cached per cell, so other eyes reuse it).
 
-**Resolution.** A chunk of a slice of thickness t is drawn at
-`render_scale` pixels per world unit: 40 / t, between 1 and 10 (2 to 20
-pixels across a voxel). Such a slice lies at distance ≥ t · detail
+**Resolution.** A chunk of a slice of thickness t, both in units of the
+grid it reads (section 1), is drawn at `render_scale` pixels per such
+unit: 40 / t, between 1 and 10 (2 to 20 pixels across a voxel).
+Such a slice lies at distance ≥ t · detail
 layers, where a unit is at most focal / (t · detail · LAYER),
 about 40 / t screen pixels at 1600 × 900 and 90° (34 / t at 1280),
 so more pixels would not show. The nearest slices get 10, so
@@ -373,6 +397,9 @@ without waiting for the main thread, which may be busy for hundreds of milliseco
 Chunks posted but not yet taken when the list was made are skipped (`bakeHandler`).
 Racing ahead, workers also bake far chunks that nearer ones turn out to cover:
 on the forest, about a third more.
+The app renders in a task queued behind the workers' messages, not in the animation frame:
+while a key is held, the browser puts input and frames before other tasks,
+and baked chunks would wait until it is released.
 Without a bakery (tests), `render()` bakes missing chunks itself.
 
 ## 4. Faces, turning and compositing (`view.ts`, `renderer.ts`, `compositor.ts`)
@@ -457,7 +484,9 @@ On the forest at 1280 × 800 a settled view bakes half the chunks it would witho
 and draws ~3200, of which ~1600 show a pixel.
 Coverage adds ~17 ms to render() in Node,
 most of it in `cover`, testing sub-blocks one by one;
-the rays through each sub-block are kept per face while the camera only moves.
+the rays through each sub-block are kept per face while the camera only moves,
+and turning, found only in the cells the face crosses or holds
+(a face's side is a half-plane of the screen).
 
 The `Compositor` draws a frame onto one opaque WebGL 2 canvas, one
 textured rectangle per chunk, then the sky behind them. Chunk pixels are
@@ -522,8 +551,9 @@ x = q + w, y = q + v, z = v + w.
 So walls and floors along the axes look alike in every direction,
 and the 12 faces of section 4 map sites to sites.
 
-**Storage** (`voxel-grid.ts`). A world is a dense voxel grid plus a spawn
-point: one material id byte per site of a box, 0 for empty.
+**Storage** (`voxel-grid.ts`). A world is a dense voxel grid per level of
+detail (section 1) plus a spawn point: one material id byte per site of a
+box, 0 for empty; the coarser grids add a seventh to the finest.
 Sites are z-major, and a row (y, z) holds every other x,
 so a slice is one contiguous range.
 A worker reads its copy of the grid for every face (`Reader` in `bake/`),
@@ -586,8 +616,13 @@ so from the parallax camera's position both renderers should agree.
   voxel of the next slice on screen, the nearer slice's one may show
   though the other is in front, by up to a voxel.
 - Slabs of whole cells are ragged on both sides,
-  1.06 to 1.12 times as deep as their layers (section 1),
+  (R + 1) / R times as deep as their R layers of atoms (section 1),
+  1.02 for the 64 of the far levels,
   so they take about that many more slices than slabs of whole layers.
+- Far slices draw coarse voxels (section 1):
+  what fills less than a quarter of a coarse voxel's cell is lost
+  (a lone voxel, a thin pole), and solids grow by up to half a coarse
+  voxel.
 - Rhombic dodecahedra have jagged outlines: a flat wall or floor is a
   surface of pyramids, and a silhouette along an axis is a zigzag.
 - Four voxels per old cube, each showing up to six faces towards the

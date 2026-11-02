@@ -17,6 +17,7 @@ vi.mock('./lib/forest', async () => {
 
 const cameraPosition = () =>
   (screen.getByText('Position').nextElementSibling?.textContent ?? '').split(',').map(Number)
+const totalUpdates = () => Number(screen.getByText('Total Updates').nextElementSibling?.textContent)
 
 describe('App', () => {
   it('renders the title and control panels', () => {
@@ -30,7 +31,7 @@ describe('App', () => {
   it('renders the scene on mount', () => {
     const { container } = render(<App />)
     expect(container.querySelectorAll('canvas').length).toBeGreaterThan(0)
-    expect(screen.getByText('Total Updates').nextElementSibling).not.toHaveTextContent(/^0$/)
+    expect(totalUpdates()).toBeGreaterThan(0)
   })
 
   it('shows a spinner while generating a world', async () => {
@@ -60,10 +61,12 @@ describe('App', () => {
   ])('moves the camera along one axis while %j is held', async (key, axis) => {
     const sign = ['s', 'a', 'Shift'].includes(key) ? -1 : 1
     render(<App />)
-    const start = cameraPosition()
+    const [start, updates] = [cameraPosition(), totalUpdates()]
 
     fireEvent.keyDown(window, { key })
     await waitFor(() => { expect(sign * (cameraPosition()[axis] - start[axis])).toBeGreaterThanOrEqual(1) })
+    // The scene is rendered too, not only the camera moved.
+    await waitFor(() => { expect(totalUpdates()).toBeGreaterThan(updates) })
     fireEvent.keyUp(window, { key })
 
     // Let React flush the state from the last frame, then check movement stopped.

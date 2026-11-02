@@ -29,10 +29,12 @@ units; a voxel's neighbours are √2 units away).
 **Slicing** – Twelve stacks of slices, one per direction to a voxel's
 nearest neighbours (the faces of a rhombic dodecahedron around the
 camera), each cut along the lattice's layers across it. Near the camera a
-slice is one layer of voxels; farther away, a slab of 2, 4, 8 layers, and
-beyond that eight layers of the cells of a coarser FCC lattice (every
-2nd, 4th, 8th site each way, each site going to the nearest), so slices
-grow with viewing distance and stay the same shape at every scale. Each
+slice is one layer of voxels; farther away, a slab of 2, 4, … 64 layers,
+and beyond that 64 layers of coarser voxels,
+from the world at a coarser level of detail
+(every 2nd, 4th, … site each way, standing for the sites nearest it),
+so slices grow with viewing distance and stay the same shape at every
+scale, and far voxels stay about two pixels across. Each
 is split into chunks, bricks laid like a wall's, each the shadow of a
 column of cells of a coarser lattice still, rasterised only in view and
 as seen from the site of the slice's lattice nearest the camera (its eye).

@@ -49,9 +49,10 @@ export interface ChunkImage {
 /** The baker's exports (bake/src/lib.rs). */
 interface Baker {
   memory: WebAssembly.Memory
-  world_cells: (cells: number, materials: number) => number
+  world_start: (materials: number) => void
+  world_grid: (minX: number, minY: number, minZ: number, nx: number, ny: number, nz: number) => number
   world_table: (table: number) => number
-  world_ready: (minX: number, minY: number, minZ: number, nx: number, ny: number, nz: number) => void
+  world_ready: () => void
   bake: Call
   faces: Call
 }
@@ -80,24 +81,28 @@ export function bakerInstance(): WebAssembly.Exports {
 const faceIndex = new Map(FACES.map((face, index) => [face.name, index]))
 
 /**
- * Bakes chunks of one world: a WebAssembly instance holding a copy of the
- * grid, the palette of each face, and the surfaces of recently baked cells.
+ * Bakes chunks of one world: a WebAssembly instance holding a copy of its
+ * grids, the palette of each face, and the surfaces of recently baked
+ * cells. `levels` are the world's grids by level of detail (World.levels),
+ * all of the same materials.
  */
 export class ChunkBaker {
   private baker: Baker
 
-  constructor({ minX, minY, minZ, nx, ny, nz, cells, materials }: VoxelData) {
+  constructor(levels: readonly VoxelData[]) {
+    const { materials } = levels[0]
     const baker = bakerInstance() as unknown as Baker
     // Memory may grow on each call, detaching earlier views of it.
     const write = <T extends Uint8Array | Int32Array | Uint32Array | Float64Array>(View: new (buffer: ArrayBuffer, offset: number, length: number) => T, offset: number, values: T) => {
       new View(baker.memory.buffer, offset, values.length).set(values)
     }
-    write(Uint8Array, baker.world_cells(cells.length, materials.length), cells)
+    baker.world_start(materials.length)
+    for (const { minX, minY, minZ, nx, ny, nz, cells } of levels) write(Uint8Array, baker.world_grid(minX, minY, minZ, nx, ny, nz), cells)
     write(Float64Array, baker.world_table(0), VOXEL_GEOMETRY)
     write(Int32Array, baker.world_table(1), Int32Array.from(FACES.flatMap(({ lattice: { right, up, forward } }) => [right, up, forward].flatMap(v => [v.x, v.y, v.z]))))
     const palettes = FACES.map(face => shadedPalette(materials, face.lattice))
     palettes.forEach((palette, f) => { write(Uint32Array, baker.world_table(2) + f * palette.byteLength, palette) })
-    baker.world_ready(minX, minY, minZ, nx, ny, nz)
+    baker.world_ready()
     this.baker = baker
   }
 
@@ -171,7 +176,7 @@ const requestKey = ({ face, level, layer, cutoff, i, j, eye, fill }: ChunkReques
  * the main thread had taken when it listed them.
  */
 export type BakeMessage =
-  | { type: 'world'; generation: number; grid: VoxelData }
+  | { type: 'world'; generation: number; levels: VoxelData[] }
   | { type: 'want'; requests: Float64Array; received: number }
 
 /** A bake worker's result: a baked chunk, `seq` numbering the worker's results. */
@@ -221,7 +226,7 @@ export function bakeHandler(
   }
   return message => {
     if (message.type === 'world') {
-      baker = new ChunkBaker(message.grid)
+      baker = new ChunkBaker(message.levels)
       generation = message.generation
       queue = new Float64Array(0)
       posted.clear()

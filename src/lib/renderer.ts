@@ -1,4 +1,4 @@
-import { selectSlices, leakFreeDetail, leakAngle, eyeOf, sliceCentre, chunkCell, chunkCells, cellMargin, matchTilings, sliceKey as sliceName, siteLayers, MAX_LEVEL, type SliceId } from './slice-selection'
+import { selectSlices, leakFreeDetail, leakAngle, eyeOf, sliceCentre, chunkCell, chunkCells, cellMargin, matchTilings, sliceKey as sliceName, siteLayers, MAX_LEVEL, atomLevel, atomSpacing, type SliceId } from './slice-selection'
 import { ChunkBaker, type ChunkImage, type ChunkRequest } from './chunk-baker'
 import { World, type Vec3, type WorldType } from './world'
 import { LayerIndex, type VoxelData } from './voxel-grid'
@@ -198,8 +198,8 @@ function findChunk(cell: CellChunks | undefined, [a, b, c]: readonly number[], f
  */
 export interface Bakery {
   connect(deliver: (request: ChunkRequest, image: ChunkImage) => void): void
-  /** Replaces the world; chunks of the previous one are no longer delivered. */
-  setWorld(grid: VoxelData): void
+  /** Replaces the world (its grids, World.levels); chunks of the previous one are no longer delivered. */
+  setWorld(levels: VoxelData[]): void
   /** The chunks to bake, most wanted first. Replaces the previous list. */
   want(requests: ChunkRequest[]): void
 }
@@ -243,7 +243,8 @@ export class ParallaxRenderer {
   private coverage: Coverage | null = null
 
   // Where each face's layers hold voxels, found on first use.
-  private index: LayerIndex | null = null
+  /** By level of detail, made on first use. */
+  private indices: (LayerIndex | undefined)[] = []
 
   private bakery: Bakery | null
   private onBaked: () => void
@@ -410,9 +411,11 @@ export class ParallaxRenderer {
       const [left, right] = [x, x + width].map(v => Math.round(v / LAYER))
       const [bottom, top] = [y, y + height]
       const margin = cellMargin(id.level)
-      const found = this.layerIndex().range(face.lattice, depth, depth + size, left - margin.columns, right + margin.columns)
-      const lo = found ? Math.max(found[0], bottom - margin.rows) : 0
-      const hi = found ? Math.min(found[1], top + margin.rows) : -1
+      // In the units of the grid the slice reads, N times larger.
+      const n = atomSpacing(id.level)
+      const found = this.layerIndex(atomLevel(id.level)).range(face.lattice, Math.floor(depth / n), Math.ceil((depth + size) / n), Math.floor((left - margin.columns) / n), Math.ceil((right + margin.columns) / n))
+      const lo = found ? Math.max(found[0] * n, bottom - margin.rows) : 0
+      const hi = found ? Math.min(found[1] * n, top + margin.rows) : -1
       extent = lo <= hi ? [lo, hi] : null
       slice.extents.set(key, extent)
     }
@@ -552,14 +555,14 @@ export class ParallaxRenderer {
     this.tilings.clear()
     this.slices.clear()
     this.pixels = 0
-    this.index = null
+    this.indices = []
     this.facesBaked = 0
     this.useWorld()
   }
 
   private useWorld() {
-    if (this.bakery) this.bakery.setWorld(this.world.grid)
-    else this.baker = new ChunkBaker(this.world.grid)
+    if (this.bakery) this.bakery.setWorld(this.world.levels)
+    else this.baker = new ChunkBaker(this.world.levels)
   }
 
   getFov(): number {
@@ -627,8 +630,9 @@ export class ParallaxRenderer {
     return 1 - Math.exp(-d / (this.renderDistance * FOG_PER_RENDER_DISTANCE))
   }
 
-  private layerIndex(): LayerIndex {
-    return (this.index ??= new LayerIndex(this.world.grid, FACES.map(f => f.lattice)))
+  /** The LayerIndex of the world's grid of `level` of detail, in its own units. */
+  private layerIndex(level: number): LayerIndex {
+    return (this.indices[level] ??= new LayerIndex(this.world.levels[level], FACES.map(f => f.lattice)))
   }
 
   /** Returns the cached slice, or a new one with no chunks. */
