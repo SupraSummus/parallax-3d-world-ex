@@ -96,11 +96,6 @@ export class World {
     this.list = null
   }
 
-  /** Whether a voxel occupies the given site. */
-  has(x: number, y: number, z: number): boolean {
-    return this.store.get(x, y, z) !== 0
-  }
-
   /** Deterministic hash noise in [0, 1). */
   private noise(x: number, y: number, z: number): number {
     const n = Math.sin(x * 12.9898 + y * 78.233 + z * 45.164 + this.seed * 0.001) * 43758.5453

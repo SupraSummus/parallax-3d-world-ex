@@ -59,11 +59,12 @@ interface Baker {
 type Call = (face: number, level: number, layer: number, cutoff: number, i: number, j: number, tanX: number, tanY: number, detail: number) => number
 
 /**
- * @internal Numbers per face in ChunkBaker.faces: its four corners on the
+ * Numbers per face in ChunkBaker.faces: its four corners on the
  * centre plane (x0, y0, …, x3, y3), its colour (an index into
  * shadedPalette), 1 if a ray along the baking direction reaches it, its
  * growth (left, bottom, right, top) and its voxel's site (a, b, c). See
  * bake/src/faces.rs.
+ * @internal
  */
 export const FACE = 17
 
@@ -124,7 +125,7 @@ export class ChunkBaker {
     }
   }
 
-  /** @internal The faces of a chunk before filling, FACE numbers each, far to near (for tests). */
+  /** The faces of a chunk before filling, FACE numbers each, far to near. @internal */
   faces(request: ChunkRequest): Float64Array {
     const [count, at] = this.call(this.baker.faces, request, 2)
     return new Float64Array(this.baker.memory.buffer, at, count * FACE).slice()

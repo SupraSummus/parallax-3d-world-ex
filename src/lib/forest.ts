@@ -9,6 +9,7 @@ import { fbm, hash, rng, smoothstep, valueNoise } from './noise'
  * metres, converted with vox(), so the scene keeps its proportions if this
  * changes. Shapes (the ground's height, trunks, balls, branches) are
  * sampled at the lattice's sites.
+ * @internal
  */
 export const UNIT_SIZE = 0.25
 const vox = (metres: number) => Math.round(metres / UNIT_SIZE)

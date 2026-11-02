@@ -165,7 +165,6 @@ interface Lattice {
 
 /** Per face whose forward has its first non-zero component positive. */
 interface Table {
-  lattice: Lattice
   cMin: number
   aMin: number
   layers: number

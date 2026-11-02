@@ -8,6 +8,7 @@ import { hash, rng } from './noise'
  * written as vox(metres). Buildings are boxes on this plan; each plan cell
  * is the box of space holding four voxels of the lattice (voxel-grid.ts),
  * whose unit is half a plan cell.
+ * @internal
  */
 export const PLAN_CELL_SIZE = 0.25
 /** Lattice units per plan cell. */

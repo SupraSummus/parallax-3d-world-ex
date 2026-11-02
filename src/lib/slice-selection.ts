@@ -56,17 +56,17 @@ export interface SliceId {
   cutoff: number
 }
 
-/** Slabs of more than 64 layers would not fit the leak bound before the render distance. */
+/** Slabs of more than 64 layers would not fit the leak bound before the render distance. @internal */
 export const MAX_LEVEL = 6
 
 /** Above level ATOM_SHIFT a slab is 2^ATOM_SHIFT layers of cells, not of voxels. */
 const ATOM_SHIFT = 3
 
-/** C: a chunk spans at most C · thickness layer spacings across. */
+/** C: a chunk spans at most C · thickness layer spacings across. @internal */
 export const CHUNK_SPAN = 16
 
 /** The level of the cells (cells.ts) a slice of `level` is made of: 0, single voxels, up to ATOM_SHIFT. */
-export function atomLevel(level: number): number {
+function atomLevel(level: number): number {
   return Math.max(0, level - ATOM_SHIFT)
 }
 
@@ -182,6 +182,7 @@ export function cellMargin(level: number): { columns: number; rows: number } {
  * (directionStep), so τ_err ≤ C / detail. Both hold for
  * τ_err = √(C·ε / focal). Rays are never more than maxTangent off a
  * straight-ahead bake, so τ_err is at most that.
+ * @internal
  */
 export function bakeAngleError(focal: number, maxTangent: number, maxLeakPixels: number): number {
   return Math.min(maxTangent, Math.sqrt((CHUNK_SPAN * maxLeakPixels) / focal))
