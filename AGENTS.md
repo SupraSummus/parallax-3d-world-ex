@@ -75,8 +75,13 @@ Before and after changing code, run the `package.json` scripts and fix
 errors (lint warnings are advisory):
 
 ```bash
-pnpm lint && pnpm typecheck && pnpm test && pnpm knip && pnpm knip:production
+pnpm check   # lint, typecheck, knip, knip:production, then test
 ```
+
+`pnpm test` takes most of that time.
+While iterating, run only the affected test files
+([docs/testing.md](docs/testing.md));
+run `pnpm check` again only after changing code.
 
 `pnpm lint` and `pnpm test` cover the Rust in `bake/` too
 (clippy with warnings as errors, rustfmt, `cargo test`);

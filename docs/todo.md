@@ -24,3 +24,9 @@ Numbers are for the forest at 1280×800 (`docs/architecture.md`).
   only for larger distances.
   Where atoms grow, the cutoff slabs split the smaller cells (section 1):
   decide then which level draws those.
+- **One browser check for agents.**
+  Agent sessions spend about a third of their command time
+  in one-off Playwright scripts:
+  each rebuilds, starts a server
+  and waits fixed times for the scene to settle.
+  A committed script that waits until nothing is left to bake would do.

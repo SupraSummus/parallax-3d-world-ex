@@ -12,7 +12,8 @@
     "lint": "eslint . && cargo clippy --manifest-path bake/Cargo.toml --all-targets -- -D warnings && cargo fmt --manifest-path bake/Cargo.toml --check",
     "test": "pnpm wasm && cargo test --manifest-path bake/Cargo.toml && vitest run",
     "knip": "knip",
-    "knip:production": "knip --production"
+    "knip:production": "knip --production",
+    "check": "pnpm lint && pnpm typecheck && pnpm knip && pnpm knip:production && pnpm test"
   },
   "dependencies": {
     "@radix-ui/react-select": "^2.4.1",
