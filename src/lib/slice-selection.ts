@@ -35,13 +35,13 @@
  *
  * Slices are split in x and y into chunks: bricks (chunkCell), each the
  * shadow along the axis of a column of cells of a coarser lattice still.
- * Each chunk is baked as a parallel projection along a direction from a
- * power-of-two grid (directionStep) close to the camera's view of it. The
- * smaller the angle between that direction and the actual rays, the
- * thicker slices may be.
+ * The chunks of a level are baked in perspective from its eye (eyeOf), the
+ * site of the level's lattice whose cell holds the camera. The closer the
+ * eye is to the camera for the slices' distance, the thicker they may be.
  */
 import { owner, ownedLayers, spacing } from './cells'
 import { LAYER } from './view'
+import type { Vec3 } from './world'
 
 /**
  * A slice: slab `layer` of `level`, i.e. the sites whose atom (the cell of
@@ -56,14 +56,11 @@ export interface SliceId {
   cutoff: number
 }
 
-/** Slabs of more than 64 layers would not fit the leak bound before the render distance. @internal */
+/** Slabs of more than 64 layers would not fit the leak bound before the render distance. */
 export const MAX_LEVEL = 6
 
 /** Above level ATOM_SHIFT a slab is 2^ATOM_SHIFT layers of cells, not of voxels. */
 const ATOM_SHIFT = 3
-
-/** C: a chunk spans at most C · thickness layer spacings across. @internal */
-export const CHUNK_SPAN = 16
 
 /** The level of the cells (cells.ts) a slice of `level` is made of: 0, single voxels, up to ATOM_SHIFT. */
 function atomLevel(level: number): number {
@@ -90,6 +87,7 @@ export function holds({ level, layer, cutoff }: SliceId, site: [number, number, 
  * A slice's thickness in layer spacings: its voxels reach a layer past
  * their sites' (see fcc.ts). 2^level + 1 up to level ATOM_SHIFT, then
  * 2^level + N + 2 for cells of N = 2 and 2^level + N + 1 above.
+ * @internal
  */
 export function thickness(level: number): number {
   const [first, last] = siteLayers(level)
@@ -108,11 +106,11 @@ export function sliceKey({ level, layer, cutoff }: SliceId): string {
 
 /**
  * M: the spacing of the lattice M·FCC whose columns of cells a slice of
- * `level` is split along, so that a chunk is 2 · M · LAYER = C · 2^level ·
- * LAYER across.
+ * `level` is split along, 8 · 2^level: a chunk is about 16 times as wide
+ * as its slice is thick, so about as wide on screen at every distance.
  */
 function brickSpacing(level: number): number {
-  return (CHUNK_SPAN / 2) * 2 ** level
+  return 8 * 2 ** level
 }
 
 /** A part of a slice's plane, in face coordinates: [x, x + width) × [y, y + height). */
@@ -130,9 +128,7 @@ export interface Rect {
  * The brick around a site reaches M either way in a and M / 2 in b, so
  * the rows of bricks are offset by half a brick, like a wall's, and each
  * is the shadow of one column of cells of M·FCC. In lattice units a brick
- * is 2M across and M high; a chunk of a slice of level ≥ 1 is thickness ≥
- * 2^level + 1 layer spacings thick and at most its distance / detail, so
- * it spans less than C / detail radians on screen.
+ * is 2M across and M high.
  */
 export function chunkCell(level: number, i: number, j: number): Rect {
   const m = brickSpacing(level)
@@ -152,66 +148,80 @@ export function chunkCells(level: number, left: number, right: number, bottom: n
 }
 
 /**
- * How far gap filling may grow a face, as a tangent times the distance
- * from the slice's centre plane (MAX_REACH in bake/src/surface.rs).
+ * The eye of a slice of `level` for a camera at `camera` (face
+ * coordinates): the site of N·FCC, the level's lattice (N = 2^level), whose
+ * cell holds the camera, in lattice coordinates. The level's chunks are
+ * baked in perspective from it, so they hold while the camera stays in
+ * that cell.
  */
-const MAX_REACH = 1
+export function eyeOf(level: number, camera: Vec3): [number, number, number] {
+  return owner(spacing(level), [camera.x / LAYER, camera.y, camera.z / LAYER])
+}
+
+/**
+ * @internal How far (as a tangent) a ray from the eye of a slice of `level`
+ * may be from the camera's ray to the same point, d layers ahead of the
+ * eye: 2N / d (for tests; eye_error in bake/src/slicing.rs).
+ * Off by δ from the eye, the camera sees a point along tangent σ that the
+ * eye sees along τ = σ − (δx − σ · δz) / d (in world units). For σ among
+ * the face's rays (|σx| ≤ 1, |σy| ≤ LAYER) and δ in the eye's cell,
+ * |δx − σx · δz| ≤ |δx| + |δz| is at most √2 · N, at a corner of the cell
+ * N / √2 off in x and N / √2 along z; in y, less. d layers are d · LAYER.
+ */
+export function eyeError(level: number, d: number): number {
+  return (2 * spacing(level)) / d
+}
+
+/**
+ * The largest eye error baking allows for (EYE_ERROR in bake/src/slicing.rs):
+ * every voxel is at least 2N layers ahead of its eye (leakFreeDetail, and
+ * NEAR_DEPTH in renderer.ts).
+ */
+const EYE_ERROR = 1
+
+/**
+ * How far past the face's rays (as a tangent) a ray from the eye may be
+ * where the camera's rays are the face's, plus how far gap filling may grow
+ * faces: EYE_ERROR each (REACH in bake/src/surface.rs).
+ */
+const REACH = 2 * EYE_ERROR
 
 /**
  * How far around its cell a chunk of a slice of `level` may draw voxels
  * from, in lattice units: `columns` along a, `rows` along b (cell_margin in
  * bake/src/surface.rs). `rows` also bounds how far from a voxel's b its
- * faces may be drawn, with faces grown by at most MAX_REACH.
+ * faces may be drawn where the face's rays show them.
  */
 export function cellMargin(level: number): { columns: number; rows: number } {
   const half = (thickness(level) / 2) * LAYER
-  return { columns: Math.ceil(((1 + MAX_REACH) * half + 1.5) / LAYER), rows: Math.ceil((LAYER + MAX_REACH) * half + 1.5) }
+  return { columns: Math.ceil(((1 + REACH) * half + 1.5) / LAYER), rows: Math.ceil((LAYER + REACH) * half + 1.5) }
 }
 
-/**
- * The largest angle error (as a tangent) between a ray and the direction its
- * chunk is baked along, given the focal length in pixels, the largest
- * tangent of a ray the slices are drawn for (1 for a face, see inFace) and the
- * leak tolerance ε in pixels.
- *
- * A slice of thickness s drawn at its centre misplaces an edge seen at
- * tangent τ_err off its baking direction by up to τ_err·s/2 world units; a
- * leak needs two such errors, so it is at most τ_err·s·focal/a pixels. With
- * s ≤ a / detail that is τ_err·focal/detail ≤ ε, so detail = τ_err·focal/ε.
- * Chunks span at most C / detail and directions are at most that far apart
- * (directionStep), so τ_err ≤ C / detail. Both hold for
- * τ_err = √(C·ε / focal). Rays are never more than maxTangent off a
- * straight-ahead bake, so τ_err is at most that.
- * @internal
- */
-export function bakeAngleError(focal: number, maxTangent: number, maxLeakPixels: number): number {
-  return Math.min(maxTangent, Math.sqrt((CHUNK_SPAN * maxLeakPixels) / focal))
-}
+/** r: the largest N / thickness, the eye's spacing over its slices' thickness (8/9, at level 3). */
+const EYE_RATIO = Math.max(...Array.from({ length: MAX_LEVEL + 1 }, (_, level) => spacing(level) / thickness(level)))
 
 /**
  * Detail (viewing distance / maximum slice thickness) that keeps occlusion
- * leaks at most `maxLeakPixels`: τ_err·focal/ε (see bakeAngleError).
+ * leaks at most `maxLeakPixels` on screen, given the focal length in
+ * pixels.
+ *
+ * A slice t layers thick whose near side is a layers from the camera is
+ * at least a − N layers from its eye, so its points are drawn with rays
+ * at most e = 2N / (a − N) off (eyeError). A leak is at most e · t layer
+ * spacings, e · t · focal / a pixels (docs/architecture.md, section 2).
+ * With a ≥ t · detail and r = N / t, that is at most
+ * 2r · focal / (detail · (detail − r)): ε for
+ * detail = (r + √(r² + 8r · focal / ε)) / 2, with r the largest of any
+ * level (EYE_RATIO). At least 3r, so that voxels are 2N layers ahead of
+ * the eye (EYE_ERROR).
  *
  * Rounded up to a quarter octave (denser slices are always safe), so small
  * changes of the viewport keep the slicing and the cache.
  */
-export function leakFreeDetail(focal: number, maxTangent: number, maxLeakPixels: number): number {
-  const detail = (bakeAngleError(focal, maxTangent, maxLeakPixels) * focal) / maxLeakPixels
-  return detail <= 1 ? 1 : 2 ** (Math.ceil(4 * Math.log2(detail)) / 4)
-}
-
-/**
- * Spacing of baking directions (as tangents, in x and y): the largest power
- * of two ≤ C / detail. A chunk is baked along the grid direction nearest to
- * the ray through its centre.
- */
-export function directionStep(detail: number): number {
-  return 2 ** Math.floor(Math.log2(CHUNK_SPAN / detail))
-}
-
-/** The direction a chunk whose centre ray has `tangent` is baked along: the nearest multiple of `step`. */
-export function nearestDirection(tangent: number, step: number): number {
-  return Math.round(tangent / step) * step
+export function leakFreeDetail(focal: number, maxLeakPixels: number): number {
+  const r = EYE_RATIO
+  const detail = Math.max(3 * r, (r + Math.sqrt(r * r + (8 * r * focal) / maxLeakPixels)) / 2)
+  return 2 ** (Math.ceil(4 * Math.log2(detail)) / 4)
 }
 
 /**

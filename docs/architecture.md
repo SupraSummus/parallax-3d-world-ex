@@ -3,8 +3,8 @@
 The world is cut into slices, each a slab between two layers of a
 coarser FCC lattice made of whole cells of a finer one,
 and each slice into chunks, bricks of the lattice seen along its axis;
-each chunk in view is rasterised once, flat, as seen from a direction
-close to the camera's, into a pixel buffer, and WebGL draws the buffers
+each chunk in view is rasterised once, flat, as seen from a lattice site
+near the camera, into a pixel buffer, and WebGL draws the buffers
 on their slices' planes in perspective.
 Voxels are rhombic dodecahedra on the face-centred cubic (FCC) lattice
 (section 6).
@@ -94,7 +94,8 @@ so it always holds the same voxels and can be cached.
 `selectSlices(cameraZ, near, far, detail)` walks away from the camera
 level by level.
 Level 0 starts at the first layer at least `near` ahead
-(a nearer slice, scaled by focal / d, could fill the screen).
+(a nearer slice, scaled by focal / d, could fill the screen;
+the renderer's four layers also keep it two layers past its eye, section 3).
 Each next level begins at `until`,
 the first of its slabs (a multiple of 2^(k+1)) far enough for its
 thickness, at most a / detail with a the distance to its near side.
@@ -139,60 +140,57 @@ hides, e.g. stone under the lake's water surface.
 
 Bound, with ε = the "max occlusion leak" setting in screen pixels (default
 16): **geometry that perspective hides never shows by more than ε pixels**
-(or, closer than 2 · `detail` layers, by more than 2T layer spacings; see
-below). T = 1: a stack draws rays up to 45° from its axis (section 4).
+(or, closer than 2 · `detail` layers, by more than two layer spacings;
+see below).
 
 **Derivation.** Every step below is stated and checked on random samples,
 plus end to end against ray-cast perspective, in
 [`src/lib/leak-bound.test.ts`](../src/lib/leak-bound.test.ts); read it to
 follow or change the reasoning. In short, for one lateral axis, a slice
-with near side at distance a, thickness s (`thickness` · LAYER, as voxels
-reach a layer past their own), centre plane at D, baked along tangent τ_b
-(section 3):
+of level k with near side a layers ahead, t layer spacings thick
+(`thickness`, as voxels reach a layer past their own), centre plane at D,
+is baked in perspective from its eye (section 3),
+a site of N·FCC (N = 2^k) whose cell holds the camera:
 
-1. A point seen along tangent τ at depth z is drawn off by
-   (τ − τ_b)·(z − D) world units at the plane.
-2. In the slice |z − D| ≤ s/2, so every edge is off by at most τ_err·s/2,
-   τ_err = |τ − τ_b|.
+1. A point the camera sees along tangent σ and the eye along τ, at depth z,
+   is drawn (σ − τ)·(z − D) off at the plane.
+2. In the slice |z − D| ≤ t/2, so every edge is off by at most |σ − τ|·t/2.
 3. A hidden voxel shows past its occluder by at most both edges' errors:
-   τ_err·s (the one modelling assumption; checked end to end).
-4. In pixels that is τ_err·s·focal/a, and slices are at most a / detail
-   thick, so at most τ_err·focal/detail.
-5. A slice is cut into chunks at most C·thickness layer spacings wide
-   (C = 16), each spanning at most C / detail on screen.
-6. Each chunk is baked along the direction, on a grid spaced by
-   Δ ≤ C / detail (`directionStep`), nearest to its centre ray, so
-   τ_err ≤ C / detail; on screen also τ_err ≤ T.
-7. With τ_err = min(T, √(C·ε/focal)) (`bakeAngleError`) and
-   detail = τ_err·focal/ε (`leakFreeDetail`, rounded up to a quarter
-   octave), the leak is at most ε pixels:
+   |σ − τ|·t (the one modelling assumption; checked end to end).
+4. The camera is in the eye's cell, at most N layers along the axis
+   and √2·N world units off at the cell's corners, so for the face's rays
+   |σ − τ| ≤ 2N / d, d the point's depth from the eye in layers (`eyeError`).
+5. In pixels the leak is at most 2N·t·focal / (a·(a − N)),
+   and slices are at most a / detail thick.
+6. With r = N / t, at most 8/9 (level 3), that is at most
+   2r·focal / (detail·(detail − r)), which `leakFreeDetail` makes ε,
+   rounded up to a quarter octave:
 
 ```
-detail = √(C·focal / ε)        (straight baking, not turned: tan(fov/2)·focal/ε = L/(2ε))
+detail = (r + √(r² + 8r · focal / ε)) / 2  ≈  √(16/9 · focal / ε)
 ```
 
-Measured in world units instead of pixels, the bound would be τ_err·s ≤ ε: the
+Measured in world units instead of pixels, the bound would be the
 same thickness at every distance and a slice count linear in the range.
 Pixels are what matters on screen, and far voxels are small, so slices
 grow with distance. Slices are at least one layer (two spacings) thick, though,
-so closer than 2 · `detail` layers the leak is bounded by 2T spacings instead,
-which can be more than ε pixels.
+so closer than 2 · `detail` layers the leak is bounded by two spacings
+instead (an eye error of at most 1, below), which can be more than ε pixels.
 
 These are pixels of the view straight along the stack's axis.
 A turned view draws a plane larger towards the screen's edges
 (by 1 / cos² of the angle from the screen centre),
 so leaks there can be up to 2× larger in a 90° view.
 
-Slices of one face for range 400, 1280-pixel-wide viewport, 90° (focal 640):
+Slices of one face for range 400, 1280-pixel-wide viewport, 90° (focal 640),
+ε = 16 px: detail 9.5 and 78 slices.
+Chunks baked along one direction each, nearest a grid of directions
+spaced by how wide they are, needed detail 26.9 and 170 slices:
+their error grew with the chunk's width, the eye's only with its spacing.
 
-| ε | Straight baking: detail | Slices | Directed baking: detail | Slices |
-|---|---|---|---|---|
-| 16 px | 45.3 | 339 | 26.9 | 249 |
-
-The bound is nearly tight; the ray-cast check also shows directed baking
-leaking about half as much as straight baking at the same detail. It
-cannot be pushed to zero by thinner slices: even single layers leak,
-because the back faces and the inside of the slab are flattened.
+The bound is nearly tight. It cannot be pushed to zero by thinner slices:
+even single layers leak, because the back faces and the inside of the slab
+are flattened.
 
 ## 3. Chunks and rasterisation (`renderer.ts`, `chunk-baker.ts`, `bake/`)
 
@@ -208,14 +206,14 @@ Voxels are read layer by layer from the world's grid in the face's
 lattice coordinates (section 4).
 
 **Chunks.** A slice of level k is split into bricks (`chunkCell`).
-Seen along the axis, the sites of M·FCC, M = C/2 · 2^k, lie in rows M
+Seen along the axis, the sites of M·FCC, M = 8 · 2^k, lie in rows M
 apart, every 2M in a, alternate rows shifted by M:
 the brick around one reaches M either way in a and M/2 in b,
 so rows of bricks are offset by half a brick, like a wall's,
 and each brick is the shadow of one column of cells of M·FCC,
 with six neighbours like the hexagon around its site.
 Brick (i, j) is row j's i-th, 2M·LAYER ≈ 11.3 · 2^k by M = 8 · 2^k
-of the slice's centre plane, at most C times its thickness.
+of the slice's centre plane, at most 16 times its thickness.
 Since a slice's thickness is about its distance / detail,
 every chunk covers about the same part of the screen. Only chunks whose
 cell reaches the screen are rasterised; empty ones are cached too, so
@@ -232,40 +230,44 @@ For the others, only the part of the cell within reach of those b
 is checked against the screen and coverage (section 4),
 so a treetop's chunk is not held to the sky above it.
 
-**Directed baking.** Chunk (i, j) is baked as the parallel projection of
-its slice along (τx, τy, 1), the grid direction nearest to the ray through
-the cell's centre (section 2): point (x, y, z) goes to
-(x − τx·(z − c), y − τy·(z − c)) on the centre plane z = c, clipped to the
-cell. A cached chunk is keyed by its cell and its direction, so it does
-not depend on where the camera is; moving the camera sideways or forward
-rebakes a chunk only when its nearest grid direction changes.
-Directions are clamped to the face's rays (section 4).
-Drawn are the open (and cut) faces facing against the direction,
-normal · (τx, τy, 1) < 0 (`chunk_faces`):
-of a voxel's 12 faces, the one facing the camera square on,
-the 4 leaning towards it, and one of the 2 parallel to the axis
-(by the sign of τx); the other 6 never.
+**Baking from the eye.** The chunks of level k are baked in perspective
+from its eye (`eyeOf`): the site of N·FCC (N = 2^k, the level's own
+lattice) whose cell holds the camera, the same for every face.
+Point p goes to where the line from the eye through p meets the centre
+plane, clipped to the cell.
+A cached chunk is keyed by its cell and its eye, so it stays valid while
+the camera stays in that cell; when the camera leaves it,
+the whole level is baked again (section 5).
+The eye is at most N layers ahead of the camera, and slices keep their
+voxels at least 2N layers past it (`NEAR_DEPTH` for level 0,
+`leakFreeDetail` for the rest), so its rays are at most 1 off the
+camera's (section 2): rays from the eye through the part of a chunk the
+face shows are within 1 of the face's rays, which bounds the margin a
+cell's surface needs (`cellMargin`).
+Drawn are the open (and cut) faces facing the eye,
+normal · (p − eye) < 0 (`chunk_faces`).
 Shading, by the axes a face's normal leans towards, is shared with the
 reference viewer (`faceShade`).
 
-**Painting order.** Far to near, layer by layer:
-along a ray each voxel is followed by one across a face with
-normal · (τx, τy, 1) > 0: one or two layers on,
-or the in-layer neighbour across a face parallel to the axis.
-That face is as deep as the voxel, so a ray can't cross two in one layer,
-and it enters the neighbour through a face that isn't drawn:
-voxels of one layer never cover each other, and need no sorting.
-A voxel's faces facing the ray never overlap either.
+**Painting order.** Voxels by their site's distance from the eye,
+farthest first.
+Voxels are the cells of their sites' Voronoi diagram:
+a ray from the eye passing from one into another crosses where their
+sites are equally far, coming from the nearer site's side,
+so along every ray a voxel met first is nearer the eye,
+whatever the ray's direction.
+A voxel's faces facing the eye never overlap.
 `src/lib/bake.test.ts` checks chunks pixel by pixel against rays cast
-through the slice's voxels.
+from the eye through the slice's voxels.
 
-A face, a rhombus, projects to a parallelogram, filled exactly:
+A face, a rhombus, projects to a convex quadrilateral, filled exactly:
 a pixel is filled when its centre is inside, with half-open edges,
 each evaluated from its upper end,
 so neighbours meet without gaps or overlap (`fill_faces`).
 No antialiasing: a soft 1-pixel edge magnified 20× on screen is a blur.
 
-**Filling gaps.** A slice draws a point at depth z′, seen at tangent σ,
+**Filling gaps.** A slice draws a point at depth z′
+that the camera sees along σ and the eye along τ,
 (σ − τ)·(z′ − c) off (section 2).
 Within a slice that keeps surfaces whole;
 only where a surface goes on into another slice can it tear.
@@ -285,13 +287,11 @@ the open faces of voxels with a neighbour in another slice
 grow towards where they belong, by (σ − τ)·d for the σ that open a gap,
 d the depth of the voxel's tips from the centre plane
 (slices interlock, so where they meet is the voxel's own depth, at most s/2)
-(`chunk_faces`; σ − τ is bounded from the face's offset from its cell's
-centre, over the distance ≥ (thickness − 1) · detail layers,
-plus half a direction step).
-Faces only rays up to 1 off the direction reach are left out
-(`MAX_REACH`; about 0.5 is needed with the defaults),
-so a cell's surface needs only a fixed margin around it.
-A grown face is its parallelogram swept over the rectangle of its growth,
+(`chunk_faces`; |σ − τ| is at most the eye error of the voxel's depth,
+section 2).
+Faces the eye doesn't face grow too where some camera in the eye's cell
+faces them: normal · (p − eye) < N, the cell's reach towards them.
+A grown face is its quadrilateral swept over the rectangle of its growth,
 a convex polygon of up to 8 corners;
 grown faces are painted nearest first into pixels the chunk left empty
 (`fill_faces`). Cut faces and the inside of slices don't grow.
@@ -306,8 +306,7 @@ the grid, the voxel's faces in lattice coordinates and the palettes (`bake.ts`).
 Then each chunk is one call,
 and its pixels are copied out of the WebAssembly memory.
 A chunk's voxels are those of its cell and a margin around it
-(`cell_surface`, cached per cell, so other directions reuse it),
-stored by layer, far to near.
+(`cell_surface`, cached per cell, so other eyes reuse it).
 
 **Resolution.** A chunk of a slice of thickness t is drawn at
 `render_scale` pixels per world unit: 40 / t, between 1 and 10 (2 to 20
@@ -320,22 +319,26 @@ on screen.
 
 Each chunk is cropped to what is drawn; `originX`/`originY` record
 the world position of its top-left corner on the centre plane. The image
-doesn't depend on the camera's position, so a chunk is drawn once when it
-first comes into view (with its direction) and is never redrawn.
+depends on the camera's position only through the eye, so a chunk is
+drawn once when it first comes into view (from its eye) and is never
+redrawn.
 
 On the forest at 1280 × 800, 90°, looking along an axis (yaw 0):
-996 slices of 5 faces, ~2500 chunks drawn,
-~180 Mpx cached; a first render baking all of them takes ~7 s on one thread.
-Looking diagonally (yaw 45°): 1246 slices, ~110 Mpx, ~3 s.
-render() with everything cached takes ~60 ms in Node (~35 ms at 45°).
-Slices of whole layers took about 2/3 of these slices,
-2/5 of the pixels and half the baking.
+316 slices of 5 faces, ~530 chunks drawn, ~26 Mpx in view;
+a first render baking all of them takes ~4 s on one thread.
+Looking diagonally (yaw 45°): 393 slices, ~490 chunks, ~20 Mpx, ~2.4 s.
+render() with everything cached takes ~17 ms in Node.
+Chunks baked along one direction each (section 2) took 676 slices,
+~3200 chunks, ~62 Mpx and ~42 ms.
+But moving bakes more:
+walking 8 units forward, ~1.3 to 1.8 times as many chunks,
+as the near levels' eyes, a unit or a few apart, move every few steps.
 
 **Workers.** In the app, a frame never waits for chunks:
 each render lists the missing chunks in view,
 and up to 8 workers, each with a copy of the world, bake them
 (`WorkerBakery`, `bake.worker.ts`, `ChunkBaker`).
-Until a chunk arrives, the cell's latest bake (along an older direction) stands in;
+Until a chunk arrives, the cell's latest bake (from an older eye) stands in;
 if that one is covered (section 4), nothing is baked.
 A cell never baked shows nothing yet, e.g. right after start.
 Those cells are baked first, near to far across all faces;
@@ -354,7 +357,7 @@ finishing those missing fewest chunks first
 shows about twice as many of the chunks baked meanwhile.
 The list is split by cell between the workers,
 so a cell's surface is cached in one worker
-(rebaking it along a new direction then takes ~40% less).
+(rebaking it from a new eye reuses it).
 Each render's list replaces a worker's previous one;
 the worker bakes it one chunk per task, taking new lists in between,
 and posts each chunk at once,
@@ -391,9 +394,8 @@ Looking straight along a world axis, as the scenes' walls and streets
 invite, puts a corner of 4 faces in the middle of the screen.
 "Show Face Seams" draws the seams over the picture.
 
-A chunk's baking direction depends on where the chunk is,
-not on where the camera looks,
-and detail is worked out for T = 1, not for the current orientation.
+A chunk's eye depends on where the camera is, not where it looks,
+and detail on the focal length only.
 So turning keeps every slice and chunk;
 only chunks coming into view are baked,
 and faces coming into view are sliced.
@@ -482,13 +484,13 @@ baked again on every render.
 
 | Event | Effect |
 |---|---|
-| x/y movement | Chunks still in view reused unless their baking direction changes; chunks entering the view rasterised; placements update |
+| x/y movement | Chunks still in view reused unless their level's eye changes: a level is baked again when the camera leaves its eye's cell; chunks entering the view rasterised; placements update |
 | turning | Slices and chunks reused; chunks entering the view baked |
-| field of view change | Focal length, hence detail and directions, change: slices still needed are reused, chunks rebaked |
+| field of view change | Focal length, hence detail, changes: slices still needed are reused |
 | leak tolerance change | Slices still needed are reused |
 | small z movement | Slices reused but where levels change: there a few slices get a new cutoff or level, the ones they replace standing in until baked |
 | resize | Slices reused unless the longer side crosses a quarter octave (detail changes); placements update |
-| gap filling toggle | Chunks rebaked (keyed by how far they are grown) |
+| gap filling toggle | Chunks rebaked (keyed by whether they are grown) |
 | world regeneration | Whole cache cleared |
 
 Per-render stats (`UpdateStats`) report chunks reused vs shown for the
@@ -551,11 +553,13 @@ so from the parallax camera's position both renderers should agree.
 
 ## Limitations
 
-- Each slice is drawn at the scale of its centre, along one direction per
-  chunk, so it is only approximately in perspective; section 2 bounds the
-  error.
-- Faces seen from one direction per chunk: a face nearly parallel to the
-  rays may be missing or slightly too wide.
+- Each slice is drawn at the scale of its centre, as seen from its
+  level's eye, so it is only approximately in perspective; section 2
+  bounds the error.
+- Faces as seen from the eye: a face nearly parallel to the rays may be
+  missing or slightly too wide.
+- A level is baked again all at once when the camera leaves its eye's
+  cell (section 3): the near levels every unit or few of movement.
 - Near slices are heavily upscaled from `RENDER_SCALE`.
 - Within `NEAR_DEPTH` of the camera along a face's axis nothing is
   drawn, and near voxels seen at a steep angle are the least accurate.
@@ -567,8 +571,8 @@ so from the parallax camera's position both renderers should agree.
 - More faces are in view at once than with a cube's six (four or more,
   against one to three), each with its own near slices: baking the view
   looking along an axis takes ~2.5× as long (section 3).
-- Closer than 2 · `detail`, slices are nearer than thickness · detail,
-  so gap filling may leave gaps there.
+- Gap filling may leave a few pixels:
+  20 of 181 on a one-layer floor seen from above, in one place.
 - Slices are slabs of whole cells, drawn in order, but a voxel on a
   cell's boundary is half in the next layer of cells: where it overlaps a
   voxel of the next slice on screen, the nearer slice's one may show

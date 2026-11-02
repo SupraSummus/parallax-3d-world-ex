@@ -1,5 +1,5 @@
 //! Chunk baking, compiled to WebAssembly for the bake workers: the voxel
-//! faces of a chunk cell, baked along a direction onto its slice's centre
+//! faces of a chunk cell, projected from an eye onto its slice's centre
 //! plane and filled into pixels. chunk-baker.ts drives it through the
 //! exports at the bottom. See docs/architecture.md, section 3.
 //! The same module finds what nearer layers cover on the main thread
@@ -47,7 +47,7 @@ fn render_scale(level: i32) -> f64 {
 /** Levels of cells slices are made of (atomLevel of MAX_LEVEL in slice-selection.ts), and one more for a cutoff. */
 const LEVELS: usize = 5;
 
-/** Cell surfaces kept for baking the same cell along other directions. */
+/** Cell surfaces kept for baking the same cell from other eyes. */
 const MAX_SURFACES: usize = 1024;
 
 /** A baked chunk: see ChunkImage. Pixels and blocks stay in the baker until the next bake. */
@@ -102,8 +102,7 @@ impl Baker {
     }
 
     /** Fills self.faces with the faces of a chunk (see chunk_faces), from its cell's surface, cached. */
-    #[allow(clippy::too_many_arguments)]
-    fn chunk_faces(&mut self, face: usize, slice: &Slice, i: i32, j: i32, tan_x: f64, tan_y: f64, detail: f64) {
+    fn chunk_faces(&mut self, face: usize, slice: &Slice, i: i32, j: i32, eye: [i32; 3], fill: bool) {
         self.uses += 1;
         let key = (face, slice.level, slice.layer, slice.cutoff.to_bits(), i, j);
         if !self.surfaces.contains_key(&key) {
@@ -125,17 +124,17 @@ impl Baker {
         }
         let surface = self.surfaces.get_mut(&key).expect("just inserted");
         surface.1 = self.uses;
-        chunk_faces(&mut self.faces, &self.geometry, &surface.0, slice, i, j, tan_x, tan_y, detail);
+        chunk_faces(&mut self.faces, &self.geometry, &surface.0, slice, eye, fill);
     }
 
     /**
-     * Bakes chunk (i, j) of a slice of view face `face`, along
-     * (tan_x, tan_y, 1), grown for slices of `detail` (0 for none), clipped
-     * to the cell and cropped to what is drawn. See ChunkBaker.bake.
+     * Bakes chunk (i, j) of a slice of view face `face` from `eye` (a site,
+     * in the face's lattice coordinates), its faces grown to fill gaps if
+     * `fill`, clipped to the cell and cropped to what is drawn. See
+     * ChunkBaker.bake.
      */
-    #[allow(clippy::too_many_arguments)]
-    pub fn bake(&mut self, face: usize, slice: &Slice, i: i32, j: i32, tan_x: f64, tan_y: f64, detail: f64) -> Image {
-        self.chunk_faces(face, slice, i, j, tan_x, tan_y, detail);
+    pub fn bake(&mut self, face: usize, slice: &Slice, i: i32, j: i32, eye: [i32; 3], fill: bool) -> Image {
+        self.chunk_faces(face, slice, i, j, eye, fill);
 
         // Drawn extent, clipped to the cell.
         let cell = chunk_cell(slice.level, i, j);
@@ -228,10 +227,21 @@ pub extern "C" fn world_ready(min_x: i32, min_y: i32, min_z: i32, nx: i32, ny: i
  */
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
-pub extern "C" fn bake(face: u32, level: i32, layer: i32, cutoff: f64, i: i32, j: i32, tan_x: f64, tan_y: f64, detail: f64) -> *const f64 {
+pub extern "C" fn bake(
+    face: u32,
+    level: i32,
+    layer: i32,
+    cutoff: f64,
+    i: i32,
+    j: i32,
+    eye_a: i32,
+    eye_b: i32,
+    eye_c: i32,
+    fill: u32,
+) -> *const f64 {
     STATE.with_borrow_mut(|state| {
         let State::Ready(baker) = state else { return std::ptr::null() };
-        let image = baker.bake(face as usize, &Slice { level, layer, cutoff }, i, j, tan_x, tan_y, detail);
+        let image = baker.bake(face as usize, &Slice { level, layer, cutoff }, i, j, [eye_a, eye_b, eye_c], fill != 0);
         RESULT.with_borrow_mut(|result| {
             *result = [
                 image.width as f64,
@@ -256,10 +266,21 @@ pub extern "C" fn bake(face: u32, level: i32, layer: i32, cutoff: f64, i: i32, j
  */
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
-pub extern "C" fn faces(face: u32, level: i32, layer: i32, cutoff: f64, i: i32, j: i32, tan_x: f64, tan_y: f64, detail: f64) -> *const f64 {
+pub extern "C" fn faces(
+    face: u32,
+    level: i32,
+    layer: i32,
+    cutoff: f64,
+    i: i32,
+    j: i32,
+    eye_a: i32,
+    eye_b: i32,
+    eye_c: i32,
+    fill: u32,
+) -> *const f64 {
     STATE.with_borrow_mut(|state| {
         let State::Ready(baker) = state else { return std::ptr::null() };
-        baker.chunk_faces(face as usize, &Slice { level, layer, cutoff }, i, j, tan_x, tan_y, detail);
+        baker.chunk_faces(face as usize, &Slice { level, layer, cutoff }, i, j, [eye_a, eye_b, eye_c], fill != 0);
         baker.numbers.clear();
         for f in &baker.faces.list {
             baker.numbers.extend(f.corners);

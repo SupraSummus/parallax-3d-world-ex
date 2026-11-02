@@ -91,14 +91,14 @@ describe('selectSlices', () => {
 
 // That the bound holds is leak-bound.test.ts; these pin the formula's two cases.
 describe('leakFreeDetail', () => {
-  it('is √(C·focal/ε) when chunk directions beat the field of view', () => {
-    // 1280 px wide at 90°: focal 640. √(16 · 640 / 16) = 25.3, rounded up to a quarter octave.
-    expect(leakFreeDetail(640, 1, 16)).toBe(2 ** 4.75)
+  it('is (r + √(r² + 8r · focal / ε)) / 2, r = 8/9', () => {
+    // 1280 px wide at 90°: focal 640. (8/9 + √(64/81 + 64/9 · 40)) / 2 = 8.9, rounded up to a quarter octave.
+    expect(leakFreeDetail(640, 16)).toBe(2 ** 3.25)
   })
 
-  it('is tan(fov / 2)·focal/ε when the view is narrower', () => {
-    // 0.25 · 640 / 16 = 10, rounded up.
-    expect(leakFreeDetail(640, 0.25, 16)).toBe(2 ** 3.5)
+  it('is at least 3r, so that voxels are 2N layers ahead of their eye', () => {
+    // (8/9 + √(64/81 + 64/9)) / 2 = 1.85; 3r = 2.67, rounded up.
+    expect(leakFreeDetail(64, 64)).toBe(2 ** 1.5)
   })
 })
 

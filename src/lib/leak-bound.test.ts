@@ -6,7 +6,7 @@
  * renderer's max leak), except closer than 2 · `detail` layer spacings,
  * where slices cannot be thinner than one layer of voxels (two layer
  * spacings: a voxel reaches a layer past its own, see fcc.ts) and the bound
- * is 2 · tan(fov/2) layer spacings.
+ * is two layer spacings.
  *
  * Each `describe` below is one step: the claim in words, then a check on
  * random samples (seeded, so failures reproduce) using the same functions
@@ -18,32 +18,30 @@
  * ray-cast perspective. Where a step's check could pass vacuously, a
  * deliberately wrong variant is shown to fail.
  *
- * Each of these plausible mistakes in slice-selection.ts fails the step in
- * brackets (checked by hand when this file was written): centre plane at
- * depth + s/2 [2], baking with the wrong sign [1, 8], directions spaced by
- * more than C / detail [6] or rounded down [6], detail rounded down [7],
- * slice thickness measured from the centre instead of the near face [4],
- * an angle error that ignores the chunk width [7, 8].
+ * Each of these plausible mistakes fails the step in brackets (checked by
+ * hand): centre plane at depth + s/2 [2], slice thickness measured from the
+ * centre instead of the near face [5], an eye error measured to the cell's
+ * face instead of its corner [4], eyes on the next level's lattice [4],
+ * detail rounded down [6], projecting through the eye's mirror image in
+ * bake/src/faces.rs [8].
  *
  * Depths are in face coordinates (view.ts): layers are LAYER apart. A
  * slice is a slab of layers of whole cells (cells.ts, slice-selection.ts);
  * its sites span siteLayers from the slab's first layer, and its voxels reach a
- * layer past those, so it is s = thickness · LAYER thick.
+ * layer past those, so it is t = thickness layer spacings thick.
  *
- * Notation, for one lateral axis (x and y are independent): the camera is
- * at lateral 0, depth 0 (so z is relative to it). A slice has its near
- * face at distance a, thickness s, and centre plane at distance D, the
- * plane its chunks are baked onto and drawn at. A chunk is baked along
- * direction τ_b (a tangent). focal is the focal length in pixels, ε the
- * leak tolerance in pixels, C = 16 (see chunkCell).
+ * Notation, for one lateral axis: the camera is at lateral 0, depth 0 (so
+ * z is relative to it). A slice of level k has its near face a layers
+ * ahead, thickness t, and centre plane at distance D, the plane its chunks
+ * are baked onto and drawn at. They are baked in perspective from the
+ * eye (eyeOf), a site of N·FCC (N = 2^k) whose cell holds the camera: a
+ * point the camera sees along tangent σ the eye sees along τ. focal is the
+ * focal length in pixels, ε the leak tolerance in pixels.
  */
 import { describe, it, expect } from 'vitest'
-import {
-  selectSlices, leakFreeDetail, bakeAngleError, directionStep, chunkCell, nearestDirection, sliceCentre, thickness, siteLayers, holds,
-  CHUNK_SPAN, MAX_LEVEL, type SliceId,
-} from './slice-selection'
+import { selectSlices, leakFreeDetail, eyeOf, eyeError, chunkCell, sliceCentre, thickness, siteLayers, holds, MAX_LEVEL, type SliceId } from './slice-selection'
 import { ChunkBaker, FACE } from './chunk-baker'
-import { FACES, LAYER } from './view'
+import { FACES, LAYER, inFace } from './view'
 import { VoxelGrid } from './voxel-grid'
 
 /** Seeded uniform samples in [lo, hi). */
@@ -64,8 +62,9 @@ function forAll<T>(n: number, generate: (random: (lo: number, hi: number) => num
   }
 }
 
-const C = CHUNK_SPAN
 const EPSILON = 1e-9
+/** Where level 0 begins, in layers ahead of the camera, as in the renderer (NEAR_DEPTH). */
+const NEAR = 4
 
 /** A random slice: level, layer, no cutoff. */
 const randomSlice = (r: (lo: number, hi: number) => number, from: number, to: number): SliceId =>
@@ -73,39 +72,41 @@ const randomSlice = (r: (lo: number, hi: number) => number, from: number, to: nu
 /** The layer of a slice's voxels' near tips. */
 const nearSide = ({ level, layer }: SliceId) => layer * 2 ** level + siteLayers(level)[0] - 1
 
-describe('Step 1: a baked, drawn point is off by (τ − τ_b)·(z − D)', () => {
+describe('Step 1: a baked, drawn point is off by (σ − τ)·(z − D)', () => {
   /*
-   * A point at lateral x, depth z is seen along tangent τ = x / z. Baking
-   * along τ_b moves it to x' = x − τ_b·(z − D) on the centre plane, which
-   * is drawn at distance D, i.e. at tangent x' / D. Writing x = τ·z and
-   * z = D + δ: x' / D = τ + (τ − τ_b)·δ / D. So in world units at the
-   * plane (tangent error × D) the point is off by (τ − τ_b)·(z − D).
+   * A point at lateral x, depth z is seen along σ = x / z, and from the
+   * eye at (e, f) along τ = (x − e) / (z − f). Projected from the eye onto
+   * the centre plane, it lands at x' = x − τ·(z − D), which is drawn at
+   * distance D, at tangent x' / D. The camera's ray through the point
+   * crosses the plane at x − σ·(z − D). So in world units at the plane the
+   * point is off by (σ − τ)·(z − D).
    */
-  it('holds for random points, slices and directions', () => {
+  it('holds for random points, slices and eyes', () => {
     forAll(2000, r => {
       const slice = randomSlice(r, 1, 30)
       const cameraZ = r(-1, 0)
       // Relative to the camera.
       const D = sliceCentre(slice) - cameraZ
       const z = (nearSide(slice) + r(0, thickness(slice.level))) * LAYER - cameraZ
-      return { D, z, tau: r(-1.5, 1.5), tauB: r(-1.5, 1.5) }
-    }, ({ D, z, tau, tauB }) => {
-      const x = tau * z
-      // Baking (bake/src/slicing.rs) projects it along τ_b onto the centre plane.
-      const baked = x - tauB * (z - D)
-      const offWorld = (baked / D - tau) * D
-      return Math.abs(offWorld - (tau - tauB) * (z - D)) < 1e-6
+      return { D, z, x: r(-1, 1) * z, eye: [r(-3, 3), r(-2, 0.5)] }
+    }, ({ D, z, x, eye: [e, f] }) => {
+      const sigma = x / z
+      const tau = (x - e) / (z - f)
+      // Projected from the eye (chunk_faces in bake/src/faces.rs).
+      const baked = e + ((x - e) * (D - f)) / (z - f)
+      const offWorld = (baked / D - sigma) * D
+      return Math.abs(offWorld - (sigma - tau) * (z - D)) < 1e-6
     })
   })
 })
 
-describe('Step 2: within a slice |z − D| ≤ s/2', () => {
+describe('Step 2: within a slice |z − D| ≤ t/2', () => {
   /*
    * A voxel in layer c reaches from layer c − 1 to c + 1, so a slice whose
    * sites are in layers [l + lo, l + hi] (siteLayers, l its slab's first layer)
-   * spans [l + lo − 1, l + hi + 1], s = thickness · LAYER thick, and
+   * spans [l + lo − 1, l + hi + 1], t = thickness layer spacings thick, and
    * sliceCentre is its middle. With step 1, every point of a slice is drawn
-   * at most |τ − τ_b|·s/2 from where it belongs.
+   * at most |σ − τ|·t/2 layer spacings from where it belongs.
    */
   it('holds for every point of the voxels of random slices', () => {
     forAll(2000, r => {
@@ -127,8 +128,8 @@ describe('Step 3 (assumption): a leak is at most the sum of two edge errors', ()
    * In perspective, a hidden interval B lies inside an occluding interval O
    * (for one occluder). Drawn, each end of O moves by at most e_O and each
    * end of B by at most e_B, so at most e_O + e_B of B shows past O on
-   * either side. With step 2 both are τ_err·s/2, so a leak is at most
-   * τ_err·s world units at the slice. Several occluders, faces seen
+   * either side. With step 2 both are |σ − τ|·t/2, so a leak is at most
+   * |σ − τ|·t layer spacings at the slice. Several occluders, faces seen
    * edge-on and the cut faces of slabs are what step 8 checks.
    */
   it('holds for random nested intervals and displacements', () => {
@@ -148,94 +149,96 @@ describe('Step 3 (assumption): a leak is at most the sum of two edge errors', ()
   })
 })
 
-describe('Step 4: in pixels, a leak is at most τ_err·focal / detail', () => {
+describe('Step 4: |σ − τ| ≤ eyeError = 2N / d, d the depth from the eye in layers', () => {
   /*
-   * A leak of w world units on a plane at distance D ≥ a is w·focal/D ≤
-   * w·focal/a pixels. With step 3, w ≤ τ_err·s. Slices are at most
-   * a / detail thick (or one voxel, see step 7), so the leak is at most
-   * τ_err·s·focal/a ≤ τ_err·focal/detail pixels. This checks the slicing
-   * keeps thickness ≤ max(2, a / detail), in layers, a measured to the
-   * slice's near side (single layers, level 0, are 2 thick).
+   * The eye is the site of N·FCC nearest the camera, so the camera is in
+   * its cell, a rhombic dodecahedron N times a voxel's: at most N layers
+   * along the axis, and off by δ, |δx| + |δz| ≤ √2·N in world units
+   * (at its corners on the world axes). In world units, with the eye δ
+   * from the camera, σ − τ = (δx − σ·δz) / (z − δz), at most
+   * (|δx| + |δz|) / (d · LAYER) = 2N / d for the face's rays (|σ| ≤ 1
+   * across, ≤ LAYER up). The bound is nearly reached.
+   */
+  const at = (r: (lo: number, hi: number) => number) => {
+    const level = Math.floor(r(0, MAX_LEVEL + 1))
+    const n = 2 ** level
+    const camera = { x: r(-200, 200), y: r(-200, 200), z: r(-200, 200) }
+    const [a, b, c] = eyeOf(level, camera)
+    const eye = { x: a * LAYER, y: b, z: c * LAYER }
+    // A point among the face's rays, 2N to 20N layers past the eye.
+    const z = eye.z + r(2 * n, 20 * n) * LAYER
+    const [sx, sy] = [r(-1, 1), r(-LAYER, LAYER)]
+    const sigma = inFace(sx, sy, 1) ? [sx, sy] : [0, 0]
+    const point = { x: camera.x + sigma[0] * (z - camera.z), y: camera.y + sigma[1] * (z - camera.z), z }
+    const tau = [(point.x - eye.x) / (z - eye.z), (point.y - eye.y) / (z - eye.z)]
+    return { level, ahead: (eye.z - camera.z) / LAYER, sigma, tau, d: (z - eye.z) / LAYER }
+  }
+
+  it('holds for random cameras and points', () => {
+    forAll(5000, at, ({ level, ahead, sigma, tau, d }) =>
+      ahead <= 2 ** level + EPSILON && sigma.every((s, i) => Math.abs(s - tau[i]) <= eyeError(level, d) + EPSILON))
+  })
+
+  it('is nearly tight', () => {
+    const random = sampler(17)
+    const worst = Math.max(...Array.from({ length: 20000 }, () => {
+      const { level, sigma, tau, d } = at(random)
+      return Math.abs(sigma[0] - tau[0]) / eyeError(level, d)
+    }))
+    expect(worst).toBeGreaterThan(0.8)
+  })
+})
+
+describe('Step 5: in pixels, a leak is at most 2N·t·focal / (a·(a − N))', () => {
+  /*
+   * A leak of w layer spacings on a plane at distance D ≥ a is w·focal/D ≤
+   * w·focal/a pixels. With steps 3 and 4, w ≤ t·2N/(a − N): the eye is at
+   * most N layers ahead of the camera. This checks the slicing keeps
+   * thickness ≤ max(2, a / detail), in layers, a measured to the slice's
+   * near side (single layers, level 0, are 2 thick).
    */
   it('selectSlices keeps every slice at most max(2, a / detail) thick', () => {
     forAll(300, r => ({ cameraZ: r(-300, 300), detail: 2 ** r(0, 8), range: r(10, 1000) }), ({ cameraZ, detail, range }) =>
-      selectSlices(cameraZ, 2, range, detail).every(s => {
+      selectSlices(cameraZ, NEAR, range, detail).every(s => {
         const a = nearSide(s) - cameraZ
         return thickness(s.level) <= Math.max(2, a / detail) && sliceCentre(s) / LAYER - cameraZ >= a
       }))
   })
 })
 
-describe('Step 5: rays through a chunk are within C / (2·detail) of its centre ray', () => {
+describe('Step 6: leakFreeDetail closes the loop', () => {
   /*
-   * A chunk of a slice is C · 2^level layer spacings wide and 1/√2 of that
-   * high (chunkCell), less than C · thickness, on the plane at distance D ≥ a, so
-   * its rays span at most C · thickness · LAYER / D in tangent, at most
-   * C / detail when thickness ≤ a / detail (step 4). The renderer only
-   * shows what lands inside the chunk's cell, so no ray is further than
-   * half that from the ray through the cell's centre.
-   */
-  it('holds for the chunks of random slicings', () => {
-    forAll(300, r => ({ cameraZ: r(-300, 300), detail: 2 ** r(0, 8) }), ({ cameraZ, detail }) =>
-      selectSlices(cameraZ, 2, 1000, detail)
-        .filter(s => thickness(s.level) <= (nearSide(s) - cameraZ) / detail)
-        .every(s => {
-          const { width, height } = chunkCell(s.level, 0, 0)
-          return Math.max(width, height) / 2 / (sliceCentre(s) - cameraZ * LAYER) <= C / (2 * detail) + EPSILON
-        }))
-  })
-})
-
-describe('Step 6: τ_err ≤ C / detail', () => {
-  /*
-   * A chunk is baked along the multiple of Δ = directionStep(detail)
-   * nearest to its centre ray, so at most Δ/2 from it, and Δ ≤ C / detail.
-   * With step 5, every ray through the chunk is within
-   * C / (2·detail) + Δ/2 ≤ C / detail of the baking direction. (Also, on
-   * screen no ray is more than tan(fov/2) from straight ahead.)
-   */
-  it('directions are at most Δ/2 off, with Δ ≤ C / detail', () => {
-    forAll(5000, r => ({ detail: 2 ** r(-2, 10), tangent: r(-3, 3) }), ({ detail, tangent }) => {
-      const step = directionStep(detail)
-      return step <= C / detail && Math.abs(nearestDirection(tangent, step) - tangent) <= step / 2 + EPSILON
-    })
-  })
-})
-
-describe('Step 7: leakFreeDetail closes the loop', () => {
-  /*
-   * Steps 4 and 6: the leak is at most τ_err·focal/detail pixels with
-   * τ_err ≤ min(tan(fov/2), C / detail). Setting τ_err = √(C·ε / focal)
-   * (or tan(fov/2) if smaller) and detail = τ_err·focal/ε makes both
-   * equalities; leakFreeDetail then rounds detail up, which only shrinks
-   * min(tan, C/detail)·focal/detail. So the leak is at most ε pixels, for
-   * every focal length, field of view and tolerance.
+   * Step 5 with a ≥ t · detail and r = N / t: a leak is at most
+   * 2r·focal / (detail·(detail − r)) pixels, decreasing in detail.
+   * leakFreeDetail solves it for ε with the largest r of any level, and
+   * rounds up. It is also at least 3r, so every voxel is at least 2N layers
+   * past its eye (the eye error baking allows for, at most 1), and level 0
+   * begins NEAR layers ahead, its voxels reaching a layer nearer and its
+   * eye at most one layer ahead.
    *
-   * Closer than 2 · `detail` layer spacings, a / detail < 2 but slices are
-   * at least one layer (two spacings) thick, so step 4's bound becomes
-   * τ_err · 2 layer spacings: at most 2 · tan(fov/2) spacings.
+   * Closer than 2 · `detail` layers, a / detail < 2 but slices are
+   * at least one layer (two spacings) thick, so step 5's bound becomes
+   * 2 layer spacings there (an eye error of at most 1).
    */
-  const leakBound = (focal: number, tan: number, detail: number) =>
-    (Math.min(tan, C / detail) * focal) / detail
+  const leakBound = (focal: number, detail: number) => Math.max(...Array.from({ length: MAX_LEVEL + 1 }, (_, level) => {
+    const r = 2 ** level / thickness(level)
+    return (2 * r * focal) / (detail * (detail - r))
+  }))
 
   it('keeps the bound within ε for random settings', () => {
-    forAll(5000, r => ({ focal: 2 ** r(4, 12), tan: r(0.05, 2), epsilon: r(0.5, 64) }), ({ focal, tan, epsilon }) => {
-      const detail = leakFreeDetail(focal, tan, epsilon)
-      return detail === 1 || leakBound(focal, tan, detail) <= epsilon + EPSILON
-    })
-  })
-
-  it('uses the angle error it was derived with', () => {
-    forAll(1000, r => ({ focal: 2 ** r(4, 12), tan: r(0.05, 2), epsilon: r(0.5, 64) }), ({ focal, tan, epsilon }) => {
-      const tauErr = bakeAngleError(focal, tan, epsilon)
-      return tauErr <= tan && Math.abs(tauErr - Math.min(tan, Math.sqrt((C * epsilon) / focal))) < EPSILON
-    })
+    forAll(5000, r => ({ focal: 2 ** r(4, 14), epsilon: r(0.5, 64) }), ({ focal, epsilon }) =>
+      leakBound(focal, leakFreeDetail(focal, epsilon)) <= epsilon + EPSILON)
   })
 
   it('half the detail would break it', () => {
     const focal = 640
-    const detail = leakFreeDetail(focal, 1, 16) / 2
-    expect(leakBound(focal, 1, detail)).toBeGreaterThan(16)
+    expect(leakBound(focal, leakFreeDetail(focal, 16) / 2)).toBeGreaterThan(16)
+  })
+
+  it('keeps every voxel 2N layers past its eye', () => {
+    forAll(300, r => ({ cameraZ: r(-300, 300), focal: 2 ** r(4, 14), epsilon: r(0.5, 64) }), ({ cameraZ, focal, epsilon }) =>
+      selectSlices(cameraZ, NEAR, 1000, leakFreeDetail(focal, epsilon)).every(s =>
+        nearSide(s) - (cameraZ + 2 ** s.level) >= 2 * 2 ** s.level))
   })
 })
 
@@ -245,11 +248,12 @@ describe('Step 7: leakFreeDetail closes the loop', () => {
  * depth c, voxels (a, 0, c) with a and c even. The plane cuts each into the
  * square |Δa|, |Δc| ≤ 1 (in lattice units; a and c are both LAYER per
  * unit, so tangents are the same as in face coordinates), and these tile
- * it. Slices, chunks, directions and faces come from the renderer's own
- * functions; only the clipping to cells and the compositing are restated
- * here, along the line b = 0 of each chunk. A leak is a run of screen where
- * the renderer shows a voxel that no perspective ray reaches, measured in
- * pixels of a SCREEN-pixel screen.
+ * it. Slices, chunks and faces come from the renderer's own functions; the
+ * eyes are the sites of N·FCC in the plane (a, c multiples of 2N), at most
+ * N off the camera along each, as step 4 allows. Only the clipping to cells
+ * and the compositing are restated here, along the line b = 0 of each
+ * chunk. A leak is a run of screen where the renderer shows a voxel that no
+ * perspective ray reaches, measured in pixels of a SCREEN-pixel screen.
  */
 describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', TAN_HALF_FOV => {
   interface Cell { u: number; z: number }
@@ -314,8 +318,7 @@ describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', T
     return from < to ? [from, to] : null
   }
 
-  /** dirStep 0 bakes every chunk straight along the face's axis. */
-  function parallaxOwners(cells: Cell[], cu: number, cz: number, slices: SliceId[], dirStep: number): number[] {
+  function parallaxOwners(cells: Cell[], cu: number, cz: number, slices: SliceId[]): number[] {
     // The renderer's own face logic, on voxels (u, 0, z) of the face's lattice.
     const { right: R, forward: F } = face.lattice
     const baker = new ChunkBaker(VoxelGrid.fromVoxels(cells.map(({ u, z }) => ({
@@ -326,6 +329,8 @@ describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', T
     for (const slice of [...slices].reverse()) {
       const centre = sliceCentre(slice)
       const distance = centre - cz * LAYER
+      const twoN = 2 * 2 ** slice.level
+      const eye = [twoN * Math.round(cu / twoN), 0, twoN * Math.round(cz / twoN)] as const
       // Bricks of row 0, which holds b = 0: brick i spans [x + i · w, x + (i + 1) · w).
       const { x, width: w } = chunkCell(slice.level, 0, 0)
       const inSlice = ({ u, z }: Cell) => holds(slice, [u, 0, z])
@@ -334,8 +339,7 @@ describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', T
         return [i - 1, i, i + 1]
       }))
       for (const i of chunkCells) {
-        const tan = dirStep === 0 ? 0 : Math.max(-1, Math.min(1, nearestDirection((x + (i + 0.5) * w - cu * LAYER) / distance, dirStep)))
-        const data = baker.faces({ face: face.name, ...slice, i, j: 0, tanX: tan, tanY: 0, fillDetail: 0 })
+        const data = baker.faces({ face: face.name, ...slice, i, j: 0, eye, fill: false })
         for (let f = 0; f < data.length / FACE; f++) {
           if (data[f * FACE + 9] === 0) continue
           const extent = onAxis(data.subarray(f * FACE, f * FACE + 8))
@@ -354,9 +358,9 @@ describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', T
   }
 
   /** Every leak: its width in screen pixels and in lattice units at its nearest leaked voxel. */
-  function leaks(cells: Cell[], cu: number, cz: number, detail: number, straight = false): { pixels: number; units: number }[] {
+  function leaks(cells: Cell[], cu: number, cz: number, detail: number): { pixels: number; units: number }[] {
     const visible = perspectiveVisible(cells, cu, cz)
-    const owner = parallaxOwners(cells, cu, cz, selectSlices(cz, 2, DEPTH, detail), straight ? 0 : directionStep(detail))
+    const owner = parallaxOwners(cells, cu, cz, selectSlices(cz, NEAR, DEPTH, detail))
     const runs: { rays: number; distance: number }[] = []
     let run: { rays: number; distance: number } | null = null
     for (const cell of owner) {
@@ -375,32 +379,22 @@ describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', T
 
   // Camera above the terrain looking over it, like the lake world.
   const scenes = [1, 2, 3, 4].map(seed => ({ cells: terrain(seed), cu: 12 + seed * 7.4, cz: -0.2 - seed * 0.4 }))
-  const detail = leakFreeDetail(focal, TAN_HALF_FOV, MAX_LEAK)
+  const detail = leakFreeDetail(focal, MAX_LEAK)
   // Within the leak bound, give or take one ray. Slices are at least one
   // layer (two spacings) thick, so near the camera (closer than 2 · detail)
-  // the bound is 2 · tan(fov / 2) units instead, which is more pixels there.
+  // the bound is 2 units instead, which is more pixels there.
   const withinBound = ({ pixels, units }: { pixels: number; units: number }) =>
-    pixels <= MAX_LEAK + step * focal || units <= 2 * TAN_HALF_FOV + step * DEPTH
+    pixels <= MAX_LEAK + step * focal || units <= 2 + step * DEPTH
 
-  it('keeps every leak within max(max leak pixels, 2 · tan(fov / 2) units) with leakFreeDetail', () => {
+  it('keeps every leak within max(max leak pixels, 2 units) with leakFreeDetail', () => {
     for (const { cells, cu, cz } of scenes) {
       expect(leaks(cells, cu, cz, detail).filter(l => !withinBound(l))).toEqual([])
     }
   })
 
-  it('leaks more with 4x thicker slices', () => {
-    const outside = scenes.flatMap(({ cells, cu, cz }) => leaks(cells, cu, cz, detail / 4).filter(l => !withinBound(l)))
+  // The bound takes the face's widest rays; a narrower view leaks less.
+  it('leaks more with 8x thicker slices', () => {
+    const outside = scenes.flatMap(({ cells, cu, cz }) => leaks(cells, cu, cz, detail / 8).filter(l => !withinBound(l)))
     expect(outside.length).toBeGreaterThan(0)
   })
-
-  // Only where the baking directions are what allows the thinner detail.
-  if (bakeAngleError(focal, TAN_HALF_FOV, MAX_LEAK) < TAN_HALF_FOV) {
-    it('leaks less than baking every chunk straight, seen from high above', () => {
-      const widest = (straight: boolean) => Math.max(...[120, 200].flatMap(cu => [5, 6].flatMap(seed =>
-        leaks(terrain(seed), cu, -0.6, detail, straight)
-          .filter(l => l.units > 2 * TAN_HALF_FOV + step * DEPTH)
-          .map(l => l.pixels))))
-      expect(widest(false)).toBeLessThan(widest(true) * 0.7)
-    })
-  }
 })

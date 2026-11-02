@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { ParallaxRenderer, DEFAULT_RENDER_DISTANCE, type Chunk, type Frame } from './renderer'
 import { World } from './world'
-import { selectSlices, leakFreeDetail, chunkCell, directionStep, nearestDirection, sliceCentre } from './slice-selection'
-import { FACES, LAYER, faceTangents, focalLength, inFace, projector, toLocal, viewBasis, type Face, type Orientation } from './view'
+import { selectSlices, leakFreeDetail, chunkCell, eyeOf } from './slice-selection'
+import { FACES, LAYER, faceTangents, focalLength, projector, toLocal, viewBasis, type Face, type Orientation } from './view'
 import type { Vec3 } from './world'
 
 // A small world with trees: rasterising the forest (~700k voxels) in jsdom
@@ -18,7 +18,7 @@ const ALONG = faceNamed('+x+z')
 function expectedSlices(camera: Vec3, orientation: Orientation, detail: number, distance = DEFAULT_RENDER_DISTANCE) {
   const view = { orientation, width: 800, height: 600, focal: focalLength(90, 800, 600) }
   return FACES.filter(face => faceTangents(view, face)).flatMap(face =>
-    selectSlices(toLocal(face, camera).z / LAYER, 2 / LAYER, distance / LAYER, detail).map(s => ({ face: face.name, ...s })))
+    selectSlices(toLocal(face, camera).z / LAYER, 4, distance / LAYER, detail).map(s => ({ face: face.name, ...s })))
 }
 
 describe('ParallaxRenderer', () => {
@@ -112,26 +112,22 @@ describe('ParallaxRenderer', () => {
       expect(lastUpdate().voxelsRendered).toBeGreaterThanOrEqual(chunks.reduce((n, c) => n + c.facesDrawn, 0))
     })
 
-    it("bakes each chunk along the grid direction nearest to the ray through its centre, among the face's rays", () => {
+    it("bakes a level's chunks from its eye, and again only once the camera leaves the eye's cell", () => {
       render()
-      const step = directionStep(renderer.getDetail())
-      let [oblique, onGrid] = [0, 0]
+      const eyes = (camera: Vec3) => new Map(layers().map(l => [`${l.face}:${String(l.slice.level)}`, eyeOf(l.slice.level, toLocal(faceNamed(l.face), camera)).join()]))
+      const before = eyes(renderer.getCamera())
       for (const layer of layers()) {
-        const camera = toLocal(faceNamed(layer.face), renderer.getCamera())
-        const distance = sliceCentre(layer.slice) - camera.z
-        for (const chunk of layer.chunks) {
-          const { x, y, width: w, height: h } = chunkCell(layer.slice.level, chunk.i, chunk.j)
-          expect(inFace(chunk.tanX, chunk.tanY, 1 + 1e-9)).toBe(true)
-          const nearest = [(x + w / 2 - camera.x) / distance, (y + h / 2 - camera.y) / distance].map(t => nearestDirection(t, step) + 0)
-          if (inFace(nearest[0], nearest[1], 1)) {
-            expect([chunk.tanX, chunk.tanY]).toEqual(nearest)
-            onGrid++
-          }
-          if (chunk.tanX !== 0 || chunk.tanY !== 0) oblique++
-        }
+        for (const chunk of layer.chunks) expect(chunk.eye.join()).toBe(before.get(`${layer.face}:${String(layer.slice.level)}`))
       }
-      expect(oblique).toBeGreaterThan(0)
-      expect(onGrid).toBeGreaterThan(0)
+      // Up past level 0's cell, within the others'.
+      renderer.setCamera({ y: renderer.getCamera().y + 0.75 })
+      render()
+      const after = eyes(renderer.getCamera())
+      const moved = new Set([...after].filter(([key, eye]) => before.get(key) !== eye).map(([key]) => key))
+      expect(moved.size).toBeGreaterThan(0)
+      const rebaked = layers().filter(l => l.chunks.some(c => c.eye.join() !== before.get(`${l.face}:${String(l.slice.level)}`)))
+      expect(rebaked.length).toBeGreaterThan(0)
+      expect(rebaked.every(l => moved.has(`${l.face}:${String(l.slice.level)}`))).toBe(true)
     })
 
     it('rasterises fewer pixels for farther, thicker slices', () => {
@@ -152,11 +148,11 @@ describe('ParallaxRenderer', () => {
         expect(box.right).toBeGreaterThan(0)
         expect(box.bottom).toBeGreaterThan(0)
       }
-      // A narrower view shows less of every slice. (Not necessarily in fewer
-      // chunks: its thinner slices have more, some holding only grown faces.)
+      // A smaller view at the same focal length, so with the same slices,
+      // shows less of every slice.
       const narrow = new ParallaxRenderer(world)
-      narrow.resize(800, 600)
-      narrow.setFov(20)
+      narrow.resize(400, 300)
+      narrow.setFov((2 * Math.atan(0.5) * 180) / Math.PI)
       narrow.setOrientation({ yaw, pitch })
       narrow.render()
       expect(narrow.getStats().lastUpdate?.cachedPixels).toBeLessThan(wide.cachedPixels)
@@ -329,7 +325,7 @@ describe('ParallaxRenderer', () => {
         renderer.setMaxLeak(pixels)
         const tan = Math.tan((fov * Math.PI) / 360)
         // The longer viewport side is 800 px; a face draws rays up to tangent 1.
-        expect(renderer.getDetail()).toBe(leakFreeDetail(400 / tan, 1, pixels))
+        expect(renderer.getDetail()).toBe(leakFreeDetail(400 / tan, pixels))
       }
     })
 

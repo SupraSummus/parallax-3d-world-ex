@@ -1,8 +1,8 @@
 //! The voxels of a chunk cell that can show: its surface, read once per
-//! cell and reused for every direction its chunks are baked along.
+//! cell and reused for every eye its chunks are baked from.
 
 use crate::cells::Cells;
-use crate::slicing::{LAYER, chunk_cell, site_layers, thickness};
+use crate::slicing::{EYE_ERROR, LAYER, chunk_cell, site_layers, thickness};
 use crate::world::{FACE_KINDS, Geometry, Reader};
 
 /** A voxel of a cell's surface. Bit k of `open` and `cut` is face kind k. */
@@ -32,18 +32,23 @@ pub struct Slice {
     pub cutoff: f64,
 }
 
-/** The largest growth chunk_faces looks for, as a tangent (direction_error is about 0.5 with the defaults). */
-pub const MAX_REACH: f64 = 1.0;
+/**
+ * How far past the face's rays (|tan| ≤ 1 in x, LAYER in y) a ray from the
+ * eye may be, as a tangent, where the camera's rays are the face's, plus
+ * how far gap filling may grow faces: EYE_ERROR each (REACH in
+ * slice-selection.ts).
+ */
+const REACH: f64 = 2.0 * EYE_ERROR;
 
 /**
  * How far around its cell, in face units, a chunk of a slice of `level`
- * may draw voxels: rays through it reach |tan| ≤ 1 in x and LAYER in y,
- * and gap filling MAX_REACH more, over half the slice's thickness, plus
- * the extent of a voxel.
+ * may draw voxels: rays from the eye through the shown part of it reach
+ * |tan| ≤ 1 + REACH in x and LAYER + REACH in y, faces grown included,
+ * over half the slice's thickness, plus the extent of a voxel.
  */
 fn cell_margin(level: i32) -> (f64, f64) {
     let half = thickness(level) as f64 / 2.0 * LAYER;
-    ((1.0 + MAX_REACH) * half + 1.5, (LAYER + MAX_REACH) * half + 1.5)
+    ((1.0 + REACH) * half + 1.5, (LAYER + REACH) * half + 1.5)
 }
 
 /** Where a site is relative to a slice: in a nearer one, in it, in a farther one. */
@@ -56,7 +61,7 @@ const FARTHER: i8 = 1;
  * a slice, and of the margin around it its chunks may show (cell_margin),
  * that have an open face (one no neighbour covers), or a face whose
  * neighbour is in another slice (the slice is cut there and the cut must
- * show). Buried voxels are dropped. They go by layer, far to near.
+ * show). Buried voxels are dropped.
  * `cells` are the slice's atoms', `next` those one size up (for the
  * cutoff).
  */
