@@ -389,6 +389,9 @@ without waiting for the main thread, which may be busy for hundreds of milliseco
 Chunks posted but not yet taken when the list was made are skipped (`bakeHandler`).
 Racing ahead, workers also bake far chunks that nearer ones turn out to cover:
 on the forest, about a third more.
+The app renders in a task queued behind the workers' messages, not in the animation frame:
+while a key is held, the browser puts input and frames before other tasks,
+and baked chunks would wait until it is released.
 Without a bakery (tests), `render()` bakes missing chunks itself.
 
 ## 4. Faces, turning and compositing (`view.ts`, `renderer.ts`, `compositor.ts`)
