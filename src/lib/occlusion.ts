@@ -5,6 +5,7 @@
 import type { Chunk, Placement } from './renderer'
 import { bakerInstance } from './chunk-baker'
 import { FACES, faceBasis, type Face, type ScreenBox, type View } from './view'
+import { chunkCell } from './slice-selection'
 
 /** The coverage exports (bake/src/coverage.rs). */
 interface Exports {
@@ -65,12 +66,13 @@ export class Coverage {
 
   /**
    * Adds what a layer of the current face draws opaque: its placements
-   * (from the same aligned chunk grid, see chunkCell) on the plane
+   * (chunks of a slice of `level`, see chunkCell) on the plane
    * z = distance. `camera` is the camera's position in face coordinates.
    */
-  cover(placements: Placement[], distance: number, cell: { width: number; height: number }, camera: { x: number; y: number }) {
+  cover(placements: Placement[], distance: number, level: number, camera: { x: number; y: number }) {
     for (const { chunk, x, y } of placements) {
-      this.wasm.coverage_cover(this.handle(chunk), x, y, chunk.i * cell.width - camera.x, chunk.j * cell.height - camera.y, cell.width, cell.height, distance)
+      const cell = chunkCell(level, chunk.i, chunk.j)
+      this.wasm.coverage_cover(this.handle(chunk), x, y, cell.x - camera.x, cell.y - camera.y, cell.width, cell.height, distance)
     }
     this.wasm.coverage_end_layer(distance)
   }

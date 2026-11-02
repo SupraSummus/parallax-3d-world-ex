@@ -5,6 +5,7 @@
 //! The same module finds what nearer layers cover on the main thread
 //! (coverage.rs).
 
+mod cells;
 mod coverage;
 mod faces;
 mod fill;
@@ -15,10 +16,11 @@ mod world;
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use cells::Cells;
 use faces::{Faces, chunk_faces};
 use fill::{Scratch, fill_faces, solid_blocks};
-use slicing::chunk_cell;
-use surface::{Voxel, cell_surface};
+use slicing::{LAYER, atom_level, chunk_cell, thickness};
+use surface::{Slice, Voxel, cell_surface};
 use world::{FACE_KINDS, GEOMETRY, Geometry, Grid, LATTICE, Lattice, Reader, VIEW_FACES};
 
 /**
@@ -31,16 +33,19 @@ use world::{FACE_KINDS, GEOMETRY, Geometry, Grid, LATTICE, Lattice, Reader, VIEW
 const RENDER_SCALE: f64 = 10.0;
 
 /**
- * Chunk pixels per unit for a slice of `size`: 40 / (size + 1), between 1
- * (2 pixels across a voxel) and RENDER_SCALE. A slice of size s lies at
- * distance ≥ (s + 1) · detail · LAYER, where a unit is at most
- * focal / ((s + 1) · detail · LAYER) screen pixels, about 40 / (s + 1) with
- * the defaults; finer chunks would not show. Other settings just scale the
+ * Chunk pixels per unit for a slice of `level`: 40 / t, t its thickness
+ * (see thickness), between 1 (2 pixels across a voxel) and RENDER_SCALE.
+ * Such a slice lies at distance ≥ t · detail · LAYER, where a unit is at
+ * most focal / (t · detail · LAYER) screen pixels, about 40 / t with the
+ * defaults; finer chunks would not show. Other settings just scale the
  * chunks on screen.
  */
-fn render_scale(size: i32) -> f64 {
-    (40.0 / (size as f64 + 1.0)).floor().clamp(1.0, RENDER_SCALE)
+fn render_scale(level: i32) -> f64 {
+    (40.0 / thickness(level) as f64).floor().clamp(1.0, RENDER_SCALE)
 }
+
+/** Levels of cells slices are made of (atomLevel of MAX_LEVEL in slice-selection.ts), and one more for a cutoff. */
+const LEVELS: usize = 5;
 
 /** Cell surfaces kept for baking the same cell along other directions. */
 const MAX_SURFACES: usize = 1024;
@@ -55,7 +60,8 @@ pub struct Image {
     pub faces_drawn: usize,
 }
 
-type SurfaceKey = (usize, i32, i32, i32, i32);
+/** Face, level, layer, cutoff (as bits), i, j. */
+type SurfaceKey = (usize, i32, i32, u64, i32, i32);
 
 /** One world's grid, palettes and lattices, and the buffers reused across bakes. */
 pub struct Baker {
@@ -64,6 +70,8 @@ pub struct Baker {
     lattices: [Lattice; VIEW_FACES],
     /** Per view face: material · FACE_KINDS + kind → RGBA. */
     palettes: Vec<u32>,
+    /** Per level, which cell owns each site; made on first use. */
+    cells: [Option<Cells>; LEVELS],
     /** Cell surfaces, with the bake count they were last used at. */
     surfaces: HashMap<SurfaceKey, (Vec<Voxel>, u64)>,
     uses: u64,
@@ -82,6 +90,7 @@ impl Baker {
             geometry,
             lattices,
             palettes,
+            cells: Default::default(),
             surfaces: HashMap::new(),
             uses: 0,
             faces: Faces::new(),
@@ -94,9 +103,9 @@ impl Baker {
 
     /** Fills self.faces with the faces of a chunk (see chunk_faces), from its cell's surface, cached. */
     #[allow(clippy::too_many_arguments)]
-    fn chunk_faces(&mut self, face: usize, depth: i32, size: i32, i: i32, j: i32, tan_x: f64, tan_y: f64, detail: f64) {
+    fn chunk_faces(&mut self, face: usize, slice: &Slice, i: i32, j: i32, tan_x: f64, tan_y: f64, detail: f64) {
         self.uses += 1;
-        let key = (face, depth, size, i, j);
+        let key = (face, slice.level, slice.layer, slice.cutoff.to_bits(), i, j);
         if !self.surfaces.contains_key(&key) {
             if self.surfaces.len() >= MAX_SURFACES {
                 let oldest = self.surfaces.iter().min_by_key(|(_, (_, used))| *used).map(|(k, _)| *k);
@@ -104,32 +113,39 @@ impl Baker {
                     self.surfaces.remove(&oldest);
                 }
             }
+            // The slice's atoms, and the cells one size up only for a cutoff.
+            let level = atom_level(slice.level) as usize;
+            let above = if slice.cutoff.is_finite() { level + 1 } else { level };
+            for l in [level, above] {
+                self.cells[l].get_or_insert_with(|| Cells::new(1 << l));
+            }
+            let (Some(cells), Some(next)) = (&self.cells[level], &self.cells[above]) else { unreachable!() };
             let reader = Reader::new(&self.grid, self.lattices[face]);
-            self.surfaces.insert(key, (cell_surface(&reader, &self.geometry, depth, size, i, j), 0));
+            self.surfaces.insert(key, (cell_surface(&reader, &self.geometry, cells, next, slice, i, j), 0));
         }
         let surface = self.surfaces.get_mut(&key).expect("just inserted");
         surface.1 = self.uses;
-        chunk_faces(&mut self.faces, &self.geometry, &surface.0, depth, size, i, j, tan_x, tan_y, detail);
+        chunk_faces(&mut self.faces, &self.geometry, &surface.0, slice, i, j, tan_x, tan_y, detail);
     }
 
     /**
-     * Bakes chunk (i, j) of the slice [depth, depth + size) of view face
-     * `face`, along (tan_x, tan_y, 1), grown for slices of `detail` (0 for
-     * none), clipped to the cell and cropped to what is drawn. See
-     * ChunkBaker.bake.
+     * Bakes chunk (i, j) of a slice of view face `face`, along
+     * (tan_x, tan_y, 1), grown for slices of `detail` (0 for none), clipped
+     * to the cell and cropped to what is drawn. See ChunkBaker.bake.
      */
     #[allow(clippy::too_many_arguments)]
-    pub fn bake(&mut self, face: usize, depth: i32, size: i32, i: i32, j: i32, tan_x: f64, tan_y: f64, detail: f64) -> Image {
-        self.chunk_faces(face, depth, size, i, j, tan_x, tan_y, detail);
+    pub fn bake(&mut self, face: usize, slice: &Slice, i: i32, j: i32, tan_x: f64, tan_y: f64, detail: f64) -> Image {
+        self.chunk_faces(face, slice, i, j, tan_x, tan_y, detail);
 
         // Drawn extent, clipped to the cell.
-        let cell = chunk_cell(size);
-        let min_x = self.faces.min_x.max(i as f64 * cell.width);
-        let max_x = self.faces.max_x.min((i + 1) as f64 * cell.width);
-        let min_y = self.faces.min_y.max(j as f64 * cell.height);
-        let max_y = self.faces.max_y.min((j + 1) as f64 * cell.height);
+        let cell = chunk_cell(slice.level, i, j);
+        let (left, bottom) = (cell.left as f64 * LAYER, cell.bottom as f64);
+        let min_x = self.faces.min_x.max(left);
+        let max_x = self.faces.max_x.min(left + cell.width);
+        let min_y = self.faces.min_y.max(bottom);
+        let max_y = self.faces.max_y.min(bottom + cell.height);
 
-        let scale = render_scale(size);
+        let scale = render_scale(slice.level);
         let empty = max_x <= min_x || max_y <= min_y;
         let width = if empty { 0 } else { ((max_x - min_x) * scale).ceil() as usize };
         let height = if empty { 0 } else { ((max_y - min_y) * scale).ceil() as usize };
@@ -212,10 +228,10 @@ pub extern "C" fn world_ready(min_x: i32, min_y: i32, min_z: i32, nx: i32, ny: i
  */
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
-pub extern "C" fn bake(face: u32, depth: i32, size: i32, i: i32, j: i32, tan_x: f64, tan_y: f64, detail: f64) -> *const f64 {
+pub extern "C" fn bake(face: u32, level: i32, layer: i32, cutoff: f64, i: i32, j: i32, tan_x: f64, tan_y: f64, detail: f64) -> *const f64 {
     STATE.with_borrow_mut(|state| {
         let State::Ready(baker) = state else { return std::ptr::null() };
-        let image = baker.bake(face as usize, depth, size, i, j, tan_x, tan_y, detail);
+        let image = baker.bake(face as usize, &Slice { level, layer, cutoff }, i, j, tan_x, tan_y, detail);
         RESULT.with_borrow_mut(|result| {
             *result = [
                 image.width as f64,
@@ -240,10 +256,10 @@ pub extern "C" fn bake(face: u32, depth: i32, size: i32, i: i32, j: i32, tan_x: 
  */
 #[unsafe(no_mangle)]
 #[allow(clippy::too_many_arguments)]
-pub extern "C" fn faces(face: u32, depth: i32, size: i32, i: i32, j: i32, tan_x: f64, tan_y: f64, detail: f64) -> *const f64 {
+pub extern "C" fn faces(face: u32, level: i32, layer: i32, cutoff: f64, i: i32, j: i32, tan_x: f64, tan_y: f64, detail: f64) -> *const f64 {
     STATE.with_borrow_mut(|state| {
         let State::Ready(baker) = state else { return std::ptr::null() };
-        baker.chunk_faces(face as usize, depth, size, i, j, tan_x, tan_y, detail);
+        baker.chunk_faces(face as usize, &Slice { level, layer, cutoff }, i, j, tan_x, tan_y, detail);
         baker.numbers.clear();
         for f in &baker.faces.list {
             baker.numbers.extend(f.corners);

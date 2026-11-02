@@ -1,6 +1,8 @@
 # Rendering Architecture
 
-The world is cut into slices of layers, and each slice into aligned chunks;
+The world is cut into slices, each a slab between two layers of a
+coarser FCC lattice made of whole cells of a finer one,
+and each slice into chunks, bricks of the lattice seen along its axis;
 each chunk in view is rasterised once, flat, as seen from a direction
 close to the camera's, into a pixel buffer, and WebGL draws the buffers
 on their slices' planes in perspective.
@@ -16,73 +18,116 @@ the one after, so neighbouring slices interlock.
 
 ```
 World (voxels) ──selectSlices──▶ slices ──chunks in view──▶ cached pixels ──Frame──▶ WebGL ──▶ screen
-   world.ts               slice-selection.ts                  renderer.ts          compositor.ts
+   world.ts      slice-selection.ts, cells.ts                 renderer.ts          compositor.ts
                                                                │      ▲
                                                  missing chunks▼      │pixels
                                                  bake workers (worker-bakery.ts)
 ```
 
-## 1. Slice selection (`slice-selection.ts`)
+## 1. Slice selection (`slice-selection.ts`, `cells.ts`)
 
 Two constraints: slices must be thin enough not to show what perspective
-hides (physical, section 2), and aligned so they can be cached (NAPOT).
+hides (physical, section 2), and named the same wherever the camera is,
+so they can be cached.
 
-### Alignment (camera-independent)
+### Cells of coarser lattices
 
-Depths and sizes count layers. Slice sizes are powers of two up to 64.
-A slice of size N may only start at depth z with `z % N == 0`:
+Every second site in each direction of the FCC lattice is again an FCC
+lattice, twice as coarse, and so on: N·FCC for N = 1, 2, 4, …
+(`cells.ts`).
+In a face's lattice coordinates (section 4) its sites are the (a, b, c)
+with all three multiples of N and a/N, b/N, c/N of one parity,
+so it has its own layers along every face's axis, N layers apart.
+Each site belongs to the cell of the nearest site of N·FCC,
+a rhombic dodecahedron N times a voxel's.
+Sites exactly between cells, on a cell's face or corner,
+go to the cell with the greatest c, then b, then a:
+the minimal tie-break, and the same along every face.
+A cell holds N³ sites, in layers c0 − N to c0 + N − 1 around its own
+site's layer c0 (`ownedLayers`; at N = 2, c0 − 2 to c0).
+Cells are as round as rhombic dodecahedra:
+no direction is preferred.
 
-```
-z=0  → every size
-z=8  → 1, 2, 4, 8
-z=6  → 1, 2
-```
+Cells of different N do not nest.
+A cell of 2N·FCC cuts in half the 12 cells of N·FCC
+centred on its faces, and in six the 6 at its four-fold corners;
+a tree of nested cells would need cells of a preferred direction
+(the README's design principles put isotropy first).
+So each level is used on its own.
 
-`getSliceAtDepth(z, minSize)` returns the smallest aligned size ≥ minSize, or
-the largest aligned size if none is big enough. Alignment means a given
-`(depth, size)` slice always contains the same voxels, wherever the camera is.
+### Slices are slabs of whole cells
 
-Sizes must nest (each divides the next) for alignment to work: with
-non-power sizes such as 1, 2, 3, 5, 8, … few sizes are aligned at any depth
-and the walk jumps to huge slices.
+A slice (`SliceId`) of level k is a slab between two layers of 2^k·FCC:
+the sites whose atom has its own site in the 2^k layers from layer · 2^k.
+Its atoms are the cells of 2^ℓ·FCC, ℓ = `atomLevel(k)` = max(0, k − 3):
+up to level 3 single voxels, slabs of 1, 2, 4 or 8 layers of them;
+above, eight layers of cells of 2, 4, 8 layers.
+Slabs of levels with the same atoms nest: one of level k + 1 is two of level k.
+A slice splits no atom, except where the atoms grow (cutoffs, below):
+there the smaller cells along the boundary are shared by two levels.
+
+Why eight layers of cells and not one:
+cells of neighbouring layers interlock, as voxels do.
+Along the axis, a layer of rhombic dodecahedra N layers apart is 2N deep,
+in columns alternating between even and odd layers;
+a slice is drawn flat and the leak bound limits its depth (section 2),
+so slices of single layers of cells would take twice as many.
+In a slab of R layers of cells only its two faces are ragged:
+it is about (R + 1)·N deep for R·N layers, 1.12 times for R = 8.
+(No other direction does much better:
+along [111] a layer of cells is 1.5 times as deep as layers are apart, 1.06 for R = 8.)
+
+A slice's sites span `siteLayers` from its slab's first layer,
+and its voxels a layer more each way:
+`thickness` = 2^k + 1 up to level 3, then 18, 37 and 73;
+its centre plane, where its chunks are baked and drawn,
+is halfway through that (`sliceCentre`).
+A ray within a face's rhombus (section 4) meets the cells of a face's
+layers in order, as it meets voxels;
+only voxels on a cell's boundary, half in one cell and half in the next,
+can be met out of order by a ray, by up to a voxel.
+A slice is named by face, level, slab and cutoff (below),
+so it always holds the same voxels and can be cached.
 
 ### Camera selection
 
-`selectSlices(cameraZ, near, far, detail)` walks from the first layer at
-least `near` ahead (a nearer slice, scaled by focal / d, could fill the
-screen) to `cameraZ + far`. A slice of size s holds s layers but is s + 1
-thick: its voxels reach from depth − 1 to depth + s. At each step it
-requests `minSize` = the largest power of two ≤ a / detail − 1, where a is
-the distance to the slice's near side (depth − 1), so that its thickness is
-at most a / detail; it takes what the world provides (never more than requested),
-and continues from the end of that slice. The result tiles the range with
-no gaps or overlaps. `detail` comes from the leak tolerance (section 2);
-thinner slices are always allowed, so alignment never breaks the bound.
+`selectSlices(cameraZ, near, far, detail)` walks away from the camera
+level by level.
+Level 0 starts at the first layer at least `near` ahead
+(a nearer slice, scaled by focal / d, could fill the screen).
+Each next level begins at `until`,
+the first of its slabs (a multiple of 2^(k+1)) far enough for its
+thickness, at most a / detail with a the distance to its near side.
+`detail` comes from the leak tolerance (section 2).
+Level 0 is always allowed: a voxel can't be cut.
 
-From camera z=0 with detail 1, sizes go 1, 1, 1, 2, 2, 4, 4, 8, …: a power
-of two is reached one step after it is requested.
+From level 3 on, the next level's atoms are larger,
+and cells of two sizes do not nest:
+a site's cell of one size may lie before `until` while its cell of the
+other lies after, by less than 3N (N the smaller cells' spacing).
+So level k goes on to the slab starting at `until`,
+and its slabs within reach (ending past until − 4N − 2)
+get `until` as their cutoff and hold only the sites
+whose cell one size up begins before it;
+the next level holds the rest.
+Such a level is also at least 3N long,
+so that a site of its first slabs never belongs to an earlier level.
+So every site in range is in exactly one slice,
+which `slice-selection.test.ts` checks site by site.
+A level's last slices may have their centre planes up to two layers
+farther than the next level's first,
+but hold sites before that level begins, so they are drawn first.
 
-Camera at z=-67: alignment forces some slices smaller than requested
-(e.g. at -62 only sizes 1, 2 are aligned), then sizes catch up:
+From camera z = 0 with detail 1 (`level:slab`, `|cutoff`):
 
-| a | minSize | Depth | Aligned sizes | Size |
-|---|---|---|---|---|
-| 0 | 1 | -66 | 1, 2 | 1 |
-| 1 | 1 | -65 | 1 | 1 |
-| 2 | 1 | -64 | 1–64 | 1 |
-| 3 | 2 | -63 | 1 | 1 |
-| 4 | 2 | -62 | 1, 2 | 2 |
-| 6 | 4 | -60 | 1, 2, 4 | 4 |
-| 10 | 8 | -56 | 1–8 | 8 |
-| 18 | 16 | -48 | 1–16 | 16 |
-| 34 | 32 | -32 | 1–32 | 32 |
-| 66 | 64 | 0 | 1–64 | 64 |
-| 130 | 64 | 64 | 1–64 | 64 |
-| 194 | 64 | 128 | 1–64 | 64 |
+```
+0:1 0:2 0:3  1:2 1:3  2:2 2:3  3:2 3:3|32 3:4|32  4:2 4:3|64 4:4|64  5:2 5:3|128 5:4|128  6:2 6:3
+```
 
-Covering distance n takes O(detail · log n) slices. Slices are keyed by
-depth and size only, so after a detail change the slices still needed stay
-cached.
+Covering distance n takes O(detail · log n) slices,
+1 + 1/R times as many as slabs of whole layers would.
+Moving the camera along the axis keeps every slice
+but a few where levels change (section 5).
 
 ## 2. Occlusion leaks
 
@@ -101,7 +146,7 @@ below). T = 1: a stack draws rays up to 45° from its axis (section 4).
 plus end to end against ray-cast perspective, in
 [`src/lib/leak-bound.test.ts`](../src/lib/leak-bound.test.ts); read it to
 follow or change the reasoning. In short, for one lateral axis, a slice
-with near side at distance a, thickness s ((size + 1) · LAYER, as voxels
+with near side at distance a, thickness s (`thickness` · LAYER, as voxels
 reach a layer past their own), centre plane at D, baked along tangent τ_b
 (section 3):
 
@@ -113,8 +158,8 @@ reach a layer past their own), centre plane at D, baked along tangent τ_b
    τ_err·s (the one modelling assumption; checked end to end).
 4. In pixels that is τ_err·s·focal/a, and slices are at most a / detail
    thick, so at most τ_err·focal/detail.
-5. A slice is cut into chunks at most C·size layer spacings wide (C = 16),
-   each spanning at most C / detail on screen.
+5. A slice is cut into chunks at most C·thickness layer spacings wide
+   (C = 16), each spanning at most C / detail on screen.
 6. Each chunk is baked along the direction, on a grid spaced by
    Δ ≤ C / detail (`directionStep`), nearest to its centre ray, so
    τ_err ≤ C / detail; on screen also τ_err ≤ T.
@@ -142,35 +187,43 @@ Slices of one face for range 400, 1280-pixel-wide viewport, 90° (focal 640):
 
 | ε | Straight baking: detail | Slices | Directed baking: detail | Slices |
 |---|---|---|---|---|
-| 16 px | 45.3 | 246 | 26.9 | 168 |
+| 16 px | 45.3 | 339 | 26.9 | 249 |
 
 The bound is nearly tight; the ray-cast check also shows directed baking
 leaking about half as much as straight baking at the same detail. It
-cannot be pushed to zero by thinner slices: even size-1 slices leak,
+cannot be pushed to zero by thinner slices: even single layers leak,
 because the back faces and the inside of the slab are flattened.
 
 ## 3. Chunks and rasterisation (`renderer.ts`, `chunk-baker.ts`, `bake/`)
 
-When a chunk cell is first baked, the voxels of the cell (and a margin
-around it) with a face that is not covered by a neighbour, or a face
-towards the camera whose neighbour is in the previous slice (the slice is
-cut there, and the cut must show), are indexed, with a bitmask of their
-open and cut faces; buried voxels are dropped (`cell_surface`). They are
-read layer by layer from the world's grid in the face's lattice
-coordinates (section 4).
+When a chunk cell is first baked, the voxels of the slice in the cell
+(and a margin around it) with a face that is not covered by a neighbour,
+or a face whose neighbour is in another slice (the slice is cut there,
+and the cut must show), are indexed, with a bitmask of their open and cut
+faces; buried voxels are dropped (`cell_surface`).
+Which slice a site is in comes from a table of its atom over one period
+of N·FCC, 2N along each of a, b and c (`bake/src/cells.rs`).
+Cells interlock, so a face towards the camera may be cut by a farther slice.
+Voxels are read layer by layer from the world's grid in the face's
+lattice coordinates (section 4).
 
-**Chunks.** A slice is split into aligned cells of its face's lattice
-(`chunkCell`): chunk (i, j) holds the voxels with a in [16s·i, 16s·(i + 1))
-and b in [8s·j, 8s·(j + 1)) (lattice coordinates, section 4), and draws
-[i·w, (i + 1)·w) × [j·h, (j + 1)·h) of the slice's centre plane,
-w = 16s·LAYER ≈ 11.3s, h = 8s (NAPOT again, in whole sites).
-Since a slice's size is about its distance / detail,
+**Chunks.** A slice of level k is split into bricks (`chunkCell`).
+Seen along the axis, the sites of M·FCC, M = C/2 · 2^k, lie in rows M
+apart, every 2M in a, alternate rows shifted by M:
+the brick around one reaches M either way in a and M/2 in b,
+so rows of bricks are offset by half a brick, like a wall's,
+and each brick is the shadow of one column of cells of M·FCC,
+with six neighbours like the hexagon around its site.
+Brick (i, j) is row j's i-th, 2M·LAYER ≈ 11.3 · 2^k by M = 8 · 2^k
+of the slice's centre plane, at most C times its thickness.
+Since a slice's thickness is about its distance / detail,
 every chunk covers about the same part of the screen. Only chunks whose
 cell reaches the screen are rasterised; empty ones are cached too, so
 their cells are not searched again, but not shown.
 
 **Empty cells.** A chunk draws the voxels of its cell and a margin around it
 (`cellMargin`), within a few units of their b.
+The renderer looks them up in the layers the slice's sites span.
 `LayerIndex` (`voxel-grid.ts`) holds, per face, layer c and block of 8 columns a,
 the least and greatest b of its voxels.
 A cell with no voxels it can draw is never baked
@@ -215,23 +268,26 @@ No antialiasing: a soft 1-pixel edge magnified 20× on screen is a blur.
 **Filling gaps.** A slice draws a point at depth z′, seen at tangent σ,
 (σ − τ)·(z′ − c) off (section 2).
 Within a slice that keeps surfaces whole;
-only where a surface goes on into the next slice can it tear.
+only where a surface goes on into another slice can it tear.
 At the boundary between slices k (nearer) and k + 1,
 the nearer one draws its far edge (σ − τ_k)·s_k/2 off
 and the farther one its near edge −(σ − τ_{k+1})·s_{k+1}/2 off,
 so on screen they are apart by
 J = (σ − τ_k)·s_k/(2D_k) + (σ − τ_{k+1})·s_{k+1}/(2D_{k+1}).
-(s is the slice's thickness, size + 1.)
+(s is the slice's thickness.)
 A surface running along z moves towards the screen centre
 with depth: J opens a gap where σ is farther from the centre than τ,
 and makes the slices overlap (the leak of section 2) where it is nearer.
 A gap is |J| − t/D_{k+1}, as the cut of a solid t units thick covers t/D:
 only thin things tear, e.g. a one-layer floor seen from high above.
 So each slice closes its share:
-the open faces of voxels with a neighbour in the next or previous slice
-grow towards where they belong, by (σ − τ)·s/2 for the σ that open a gap
+the open faces of voxels with a neighbour in another slice
+grow towards where they belong, by (σ − τ)·d for the σ that open a gap,
+d the depth of the voxel's tips from the centre plane
+(slices interlock, so where they meet is the voxel's own depth, at most s/2)
 (`chunk_faces`; σ − τ is bounded from the face's offset from its cell's
-centre, over the distance ≥ size · detail layers, plus half a direction step).
+centre, over the distance ≥ (thickness − 1) · detail layers,
+plus half a direction step).
 Faces only rays up to 1 off the direction reach are left out
 (`MAX_REACH`; about 0.5 is needed with the defaults),
 so a cell's surface needs only a fixed margin around it.
@@ -253,11 +309,11 @@ A chunk's voxels are those of its cell and a margin around it
 (`cell_surface`, cached per cell, so other directions reuse it),
 stored by layer, far to near.
 
-**Resolution.** A chunk of a size-s slice is drawn at `render_scale(s)`
-pixels per world unit: 40 / (s + 1), between 1 and 10 (2 to 20 pixels
-across a voxel). A slice of size s lies at distance ≥ (s + 1) · detail
-layers, where a unit is at most focal / ((s + 1) · detail · LAYER),
-about 40 / (s + 1) screen pixels at 1600 × 900 (34 / (s + 1) at 1280),
+**Resolution.** A chunk of a slice of thickness t is drawn at
+`render_scale` pixels per world unit: 40 / t, between 1 and 10 (2 to 20
+pixels across a voxel). Such a slice lies at distance ≥ t · detail
+layers, where a unit is at most focal / (t · detail · LAYER),
+about 40 / t screen pixels at 1600 × 900 (34 / t at 1280),
 so more pixels would not show. The nearest slices get 10, so
 magnified rhombi keep their slanted edges. Other settings scale the chunk
 on screen.
@@ -268,10 +324,12 @@ doesn't depend on the camera's position, so a chunk is drawn once when it
 first comes into view (with its direction) and is never redrawn.
 
 On the forest at 1280 × 800, 90°, looking along an axis (yaw 0):
-677 slices of 5 faces, ~3200 chunks drawn,
-~110 Mpx cached; a first render baking all of them takes ~7 s on one thread.
-Looking diagonally (yaw 45°): 845 slices, ~5 s.
-render() with everything cached takes ~30 ms in Node.
+996 slices of 5 faces, ~2500 chunks drawn,
+~180 Mpx cached; a first render baking all of them takes ~7 s on one thread.
+Looking diagonally (yaw 45°): 1246 slices, ~110 Mpx, ~3 s.
+render() with everything cached takes ~60 ms in Node (~35 ms at 45°).
+Slices of whole layers took about 2/3 of these slices,
+2/5 of the pixels and half the baking.
 
 **Workers.** In the app, a frame never waits for chunks:
 each render lists the missing chunks in view,
@@ -281,9 +339,12 @@ Until a chunk arrives, the cell's latest bake (along an older direction) stands 
 if that one is covered (section 4), nothing is baked.
 A cell never baked shows nothing yet, e.g. right after start.
 Those cells are baked first, then the rest, each near to far across all faces.
-When the camera moves along a face's axis, its slices re-tile.
-`matchTilings` pairs the new slices with the ones drawn last,
-in segments ending where both have a boundary;
+When the camera moves along a face's axis, its slices re-tile
+where levels change.
+`matchTilings` pairs the new slices with the ones drawn last:
+slices in both stand for themselves,
+and the new ones between two of them
+for the old ones between the same two;
 until a segment's new slices have a bake in every cell they show,
 the old ones are drawn instead.
 The list is split by cell between the workers,
@@ -405,11 +466,11 @@ distance (or of the last slice, if farther).
 
 ## 5. Caching
 
-Slices are keyed by `face:depth:size` and hold their chunks keyed by corner.
+Slices are keyed by `face:level:slab:cutoff` and hold their chunks keyed by brick.
 Insertion order of the slice `Map` is the LRU order. Slices and chunks that
 leave the view lose their textures but stay cached so moving back
-reuses them: up to `MAX_CACHED_SLICES` = 256 slices, and hidden chunks
-up to `MAX_HIDDEN_CHUNK_PIXELS` = 32 Mpx (oldest slices' first). Chunks
+reuses them: up to `MAX_CACHED_SLICES` = 2048 slices, and hidden chunks
+up to `MAX_HIDDEN_CHUNK_PIXELS` = 48 Mpx (oldest slices' first). Chunks
 of cells in view are kept even if they draw nothing, or they would be
 baked again on every render.
 
@@ -419,7 +480,7 @@ baked again on every render.
 | turning | Slices and chunks reused; chunks entering the view baked |
 | field of view change | Focal length, hence detail and directions, change: slices still needed are reused, chunks rebaked |
 | leak tolerance change | Slices still needed are reused |
-| small z movement | Far slices reused; a few slices re-tile, the ones they replace standing in until baked |
+| small z movement | Slices reused but where levels change: there a few slices get a new cutoff or level, the ones they replace standing in until baked |
 | resize | Slices reused unless the longer side crosses a quarter octave (detail changes); placements update |
 | gap filling toggle | Chunks rebaked (keyed by how far they are grown) |
 | world regeneration | Whole cache cleared |
@@ -496,8 +557,15 @@ so from the parallax camera's position both renderers should agree.
 - More faces are in view at once than with a cube's six (four or more,
   against one to three), each with its own near slices: baking the view
   looking along an axis takes ~2.5× as long (section 3).
-- Closer than 2 · `detail`, slices are nearer than (size + 1) · detail,
+- Closer than 2 · `detail`, slices are nearer than thickness · detail,
   so gap filling may leave gaps there.
+- Slices are slabs of whole cells, drawn in order, but a voxel on a
+  cell's boundary is half in the next layer of cells: where it overlaps a
+  voxel of the next slice on screen, the nearer slice's one may show
+  though the other is in front, by up to a voxel.
+- Slabs of whole cells are ragged on both sides,
+  1.06 to 1.12 times as deep as their layers (section 1),
+  so they take about that many more slices than slabs of whole layers.
 - Rhombic dodecahedra have jagged outlines: a flat wall or floor is a
   surface of pyramids, and a silhouette along an axis is a zigzag.
 - Four voxels per old cube, each showing up to six faces towards the

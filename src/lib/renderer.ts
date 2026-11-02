@@ -1,4 +1,4 @@
-import { selectSlices, leakFreeDetail, directionStep, nearestDirection, sliceCentre, chunkCell, cellMargin, matchTilings, type SliceBoundary } from './slice-selection'
+import { selectSlices, leakFreeDetail, directionStep, nearestDirection, sliceCentre, chunkCell, chunkCells, cellMargin, matchTilings, sliceKey as sliceName, siteLayers, thickness, type SliceId } from './slice-selection'
 import { ChunkBaker, type ChunkImage, type ChunkRequest } from './chunk-baker'
 import { World, type Vec3, type WorldType } from './world'
 import { LayerIndex, type VoxelData } from './voxel-grid'
@@ -38,13 +38,13 @@ export interface Placement {
  * go face by face, near to far; a face draws only its own rays (inFace in
  * view.ts), and nearer layers hide what is behind them. A layer is a
  * slice's centre plane, `distance` ahead of the camera along its face's
- * axis; the slice holds the face's layers [depth, depth + size) (see Face
- * in view.ts). `fog` is the share of the horizon colour mixed into a
+ * axis; the slice's sites are in the face's layers [depth, depth + size)
+ * (see Face in view.ts, siteLayers). `fog` is the share of the horizon colour mixed into a
  * layer's pixels, and into the sky where no layer is drawn.
  */
 export interface Frame extends View {
   fog: number
-  layers: { face: Face; depth: number; size: number; distance: number; placements: Placement[]; fog: number }[]
+  layers: { face: Face; slice: SliceId; depth: number; size: number; distance: number; placements: Placement[]; fog: number }[]
 }
 
 export interface UpdateStats {
@@ -100,23 +100,23 @@ export const MAX_RENDER_DISTANCE = 800
 // back reuses them, up to these caps (a face has about 150 slices, and 12 faces
 // look all around). What is in view is never evicted.
 const MAX_CACHED_SLICES = 2048
-const MAX_HIDDEN_CHUNK_PIXELS = 32_000_000
+const MAX_HIDDEN_CHUNK_PIXELS = 48_000_000
 
 // Exponential distance fog towards the horizon colour: at viewing distance d
 // a voxel keeps exp(-d / fogDistance) of its own colour. The fog distance
 // scales with the render distance so the far cut-off stays hazy.
 export const FOG_PER_RENDER_DISTANCE = 0.7
 
-function sliceKey(face: string, depth: number, size: number): string {
-  return `${face}:${String(depth)}:${String(size)}`
+function sliceKey(face: string, slice: SliceId): string {
+  return `${face}:${sliceName(slice)}`
 }
 
 /** A cached slice and the chunks baked so far. */
 interface Slice {
+  id: SliceId
+  /** Its voxels may be in its face's layers [depth, depth + size) (see siteLayers). */
   depth: number
   size: number
-  /** Chunk cells, see chunkCell. */
-  cell: ReturnType<typeof chunkCell>
   /** Baked chunks by cell (keyed by cellKey). */
   cells: Map<number, CellChunks>
   /** Pixels of its chunks. */
@@ -222,11 +222,11 @@ export class ParallaxRenderer {
   private width = 0
   private height = 0
 
-  // Keyed by sliceKey(face, depth, size). Map insertion order doubles as
+  // Keyed by sliceKey(face, slice). Map insertion order doubles as
   // LRU order (oldest first).
   private slices = new Map<string, Slice>()
   // Per face, the slices it drew (see matchTilings).
-  private tilings = new Map<string, SliceBoundary[]>()
+  private tilings = new Map<string, SliceId[]>()
   // Chunks of the cells in view in the most recent render, drawn or not:
   // evicted, one would be baked again on the next render.
   private inView = new Set<Chunk>()
@@ -291,7 +291,7 @@ export class ParallaxRenderer {
     const frame: Frame = { ...view, fog: 0, layers: [] }
     // All slices of the view (also those still baking).
     const keep = new Set<Slice>()
-    const tilings = new Map<string, SliceBoundary[]>()
+    const tilings = new Map<string, SliceId[]>()
 
     for (const face of FACES) {
       // The face's part of the screen, on a plane at distance d: tangents · d around the camera.
@@ -300,23 +300,23 @@ export class ParallaxRenderer {
       const camera = toLocal(face, this.camera)
       pass.coverage?.setFace(face)
       const of = { face, tangents, camera, boxOf: screenBox(view, face) }
-      const drawn: SliceBoundary[] = []
+      const drawn: SliceId[] = []
       const commit = (slice: Slice, result: Drawn) => {
-        const { depth, size } = slice
+        const { id, depth, size } = slice
         for (const { chunk } of result.placements) {
           if (this.fresh.delete(chunk)) chunksRegenerated++
           else chunksReused++
         }
         chunksCovered += result.covered
         farthest = Math.max(farthest, result.distance)
-        frame.layers.push({ face, depth, size, distance: result.distance, placements: result.placements, fog: this.fog(result.distance) })
-        pass.coverage?.cover(result.placements, result.distance, slice.cell, camera)
-        drawn.push({ depth, size })
+        frame.layers.push({ face, slice: id, depth, size, distance: result.distance, placements: result.placements, fog: this.fog(result.distance) })
+        pass.coverage?.cover(result.placements, result.distance, id.level, camera)
+        drawn.push(id)
       }
 
       const wanted = selectSlices(camera.z / LAYER, NEAR_DEPTH / LAYER, this.renderDistance / LAYER, detail)
       for (const segment of matchTilings(wanted, this.tilings.get(face.name) ?? [])) {
-        const slices = segment.wanted.map(({ depth, size }) => this.getSlice(face, depth, size))
+        const slices = segment.wanted.map(id => this.getSlice(face, id))
         for (const slice of slices) keep.add(slice)
         // If the slices re-tiled, the ones they replace stand in until they
         // have something in every cell they show (baking on the main thread,
@@ -375,8 +375,8 @@ export class ParallaxRenderer {
   }
 
   /** The cached slices `previous`, if they differ from `slices` and are all still cached. */
-  private standIns(face: Face, previous: SliceBoundary[], slices: Slice[]): Slice[] | null {
-    const cached = previous.map(({ depth, size }) => this.slices.get(sliceKey(face.name, depth, size)))
+  private standIns(face: Face, previous: SliceId[], slices: Slice[]): Slice[] | null {
+    const cached = previous.map(id => this.slices.get(sliceKey(face.name, id)))
     if (cached.length === 0 || cached.some(s => !s)) return null
     if (cached.length === slices.length && cached.every((s, k) => s === slices[k])) return null
     return cached as Slice[]
@@ -390,12 +390,15 @@ export class ParallaxRenderer {
     const key = cellKey(i, j)
     let extent = slice.extents.get(key)
     if (extent === undefined) {
-      const { depth, size } = slice
-      const { columns, rows } = slice.cell
-      const margin = cellMargin(size)
-      const found = this.layerIndex().range(face.lattice, depth, depth + size, i * columns - margin.columns, (i + 1) * columns + margin.columns)
-      const lo = found ? Math.max(found[0], j * rows - margin.rows) : 0
-      const hi = found ? Math.min(found[1], (j + 1) * rows + margin.rows) : -1
+      const { id, depth, size } = slice
+      const { x, y, width, height } = chunkCell(id.level, i, j)
+      // The cell's sites, in lattice units.
+      const [left, right] = [x, x + width].map(v => Math.round(v / LAYER))
+      const [bottom, top] = [y, y + height]
+      const margin = cellMargin(id.level)
+      const found = this.layerIndex().range(face.lattice, depth, depth + size, left - margin.columns, right + margin.columns)
+      const lo = found ? Math.max(found[0], bottom - margin.rows) : 0
+      const hi = found ? Math.min(found[1], top + margin.rows) : -1
       extent = lo <= hi ? [lo, hi] : null
       slice.extents.set(key, extent)
     }
@@ -411,9 +414,10 @@ export class ParallaxRenderer {
    */
   private drawSlice(pass: Pass, { face, tangents, camera, boxOf }: FaceView, slice: Slice, mode: 'want' | 'standIn' | 'probe'): Drawn {
     const { view, step, fillDetail, coverage, inView } = pass
-    const { depth, size } = slice
+    const { id } = slice
+    const { level, layer, cutoff } = id
     // Slices start at least NEAR_DEPTH ahead of the camera, so this is > 0.
-    const distance = sliceCentre({ depth, size }) - camera.z
+    const distance = sliceCentre(id) - camera.z
     const result: Drawn = { distance, placements: [], covered: 0, unbaked: 0 }
     const covered = (box: ScreenBox) => {
       const c = coverage?.hides(box) ?? false
@@ -426,83 +430,82 @@ export class ParallaxRenderer {
     const right = camera.x + tangents.maxX * distance
     const bottom = camera.y + tangents.minY * distance
     const top = camera.y + tangents.maxY * distance
-    const { width: w, height: h } = slice.cell
     // How far from its voxel's b a face may be drawn (see chunk_faces in
     // bake/src/faces.rs): a voxel's extent, baking along tangents up to
     // LAYER in y over half the slice's thickness, and growth to fill gaps,
     // by at most the span of rays through the cell (with its margin) off
     // its direction.
-    const half = ((size + 1) / 2) * LAYER
-    const growth = fillDetail > 0 ? (h / 2 + cellMargin(size).rows + 1 + half) / (size * fillDetail * LAYER) + step / 2 : 0
-    const reach = 1.5 + (LAYER + growth) * half
-    // Cell (i, j) draws [i · w, (i + 1) · w) × [j · h, (j + 1) · h).
-    for (let i = Math.floor(left / w); i * w < right; i++) {
-      for (let j = Math.floor(bottom / h); j * h < top; j++) {
-        // Nothing to draw: not baked at all. Otherwise, what it draws lies within reach of its voxels.
-        const extent = this.cellExtent(face, slice, i, j)
-        if (!extent) continue
-        const x0 = i * w - camera.x
-        const x1 = x0 + w
-        const y0 = Math.max(j * h, extent[0] - reach) - camera.y
-        const y1 = Math.min((j + 1) * h, extent[1] + reach) - camera.y
-        if (y0 >= y1) continue
-        // The face draws only its own rays: the cell must reach its rhombus (inFace).
-        if (!inFace(closestToZero(x0, x1), closestToZero(y0, y1), distance)) continue
-        // The screen shows a quadrilateral of the plane, less than its bounding box.
-        const cellBox = boxOf(x0, x1, y0, y1, distance)
-        if (!onScreen(view, cellBox)) continue
-        // Bake along the grid direction nearest to the ray through the cell's centre,
-        // within the face's rays: the rays shown are, and baking needs it
-        // (see chunk_faces in bake/src/faces.rs).
-        const tanX = Math.max(-1, Math.min(1, nearestDirection(((i + 0.5) * w - camera.x) / distance, step)))
-        const maxY = (1 - Math.abs(tanX)) * LAYER
-        const tanY = Math.max(-maxY, Math.min(maxY, nearestDirection(((j + 0.5) * h - camera.y) / distance, step)))
-        const cell = slice.cells.get(cellKey(i, j))
-        let chunk = findChunk(cell, tanX, tanY, fillDetail)
-        if (covered(cellBox)) {
-          // Not drawn, nor baked, but kept if baked.
-          const kept = chunk ?? cell?.latest
-          if (kept) inView.add(kept)
-          continue
-        }
-        if (mode === 'probe') {
-          if (!chunk && !cell?.latest) result.unbaked++
-          continue
-        }
-        if (!chunk) {
-          // An older bake of the cell, if any, stands in.
-          const latest = cell?.latest
-          if (mode === 'standIn') {
-            chunk = latest
-          } else if (this.baker) {
-            const request = { face: face.name, depth, size, i, j, tanX, tanY, fillDetail }
-            chunk = this.store(request, this.baker.bake(request))
-          } else {
-            // Not wanted if what stands in is hidden anyway.
-            if (latest && coverage && latest.facesDrawn > 0 && coverage.hidesChunk(latest, latest.originX - camera.x, latest.originY - camera.y, distance)) {
-              inView.add(latest)
-              result.covered++
-              continue
-            }
-            pass.pending++
-            pass.missing.push({ request: { face: face.name, depth, size, i, j, tanX, tanY, fillDetail }, distance, stale: !!latest })
-            chunk = latest
-          }
-          if (!chunk) continue
-        }
-        inView.add(chunk)
-        if (chunk.facesDrawn === 0) continue
-        // The chunk's content, not just its cell, must reach the screen.
-        const contentLeft = chunk.originX - camera.x
-        const contentTop = chunk.originY - camera.y
-        const box = boxOf(contentLeft, contentLeft + chunk.width / chunk.scale, contentTop - chunk.height / chunk.scale, contentTop, distance)
-        if (!onScreen(view, box)) continue
-        if (coverage?.hidesChunk(chunk, contentLeft, contentTop, distance)) {
-          result.covered++
-          continue
-        }
-        result.placements.push({ chunk, x: contentLeft, y: contentTop })
+    const h = chunkCell(level, 0, 0).height
+    const half = (thickness(level) / 2) * LAYER
+    const growth = fillDetail > 0 ? (h / 2 + cellMargin(level).rows + 1 + half) / ((thickness(level) - 1) * fillDetail * LAYER) + step / 2 : 0
+    const extentReach = 1.5 + (LAYER + growth) * half
+    for (const [i, j] of chunkCells(level, left, right, bottom, top)) {
+      const cellRect = chunkCell(level, i, j)
+      // Nothing to draw: not baked at all. Otherwise, what it draws lies within reach of its voxels.
+      const extent = this.cellExtent(face, slice, i, j)
+      if (!extent) continue
+      const x0 = cellRect.x - camera.x
+      const x1 = x0 + cellRect.width
+      const y0 = Math.max(cellRect.y, extent[0] - extentReach) - camera.y
+      const y1 = Math.min(cellRect.y + h, extent[1] + extentReach) - camera.y
+      if (y0 >= y1) continue
+      // The face draws only its own rays: the cell must reach its rhombus (inFace).
+      if (!inFace(closestToZero(x0, x1), closestToZero(y0, y1), distance)) continue
+      // The screen shows a quadrilateral of the plane, less than its bounding box.
+      const cellBox = boxOf(x0, x1, y0, y1, distance)
+      if (!onScreen(view, cellBox)) continue
+      // Bake along the grid direction nearest to the ray through the cell's centre,
+      // within the face's rays: the rays shown are, and baking needs it
+      // (see chunk_faces in bake/src/faces.rs).
+      // + 0 turns −0 into 0: a direction is part of the chunk's name.
+      const tanX = Math.max(-1, Math.min(1, nearestDirection((cellRect.x + cellRect.width / 2 - camera.x) / distance, step))) + 0
+      const maxY = (1 - Math.abs(tanX)) * LAYER
+      const tanY = Math.max(-maxY, Math.min(maxY, nearestDirection((cellRect.y + h / 2 - camera.y) / distance, step))) + 0
+      const cell = slice.cells.get(cellKey(i, j))
+      let chunk = findChunk(cell, tanX, tanY, fillDetail)
+      if (covered(cellBox)) {
+        // Not drawn, nor baked, but kept if baked.
+        const kept = chunk ?? cell?.latest
+        if (kept) inView.add(kept)
+        continue
       }
+      if (mode === 'probe') {
+        if (!chunk && !cell?.latest) result.unbaked++
+        continue
+      }
+      if (!chunk) {
+        // An older bake of the cell, if any, stands in.
+        const latest = cell?.latest
+        if (mode === 'standIn') {
+          chunk = latest
+        } else if (this.baker) {
+          const request = { face: face.name, level, layer, cutoff, i, j, tanX, tanY, fillDetail }
+          chunk = this.store(request, this.baker.bake(request))
+        } else {
+          // Not wanted if what stands in is hidden anyway.
+          if (latest && coverage && latest.facesDrawn > 0 && coverage.hidesChunk(latest, latest.originX - camera.x, latest.originY - camera.y, distance)) {
+            inView.add(latest)
+            result.covered++
+            continue
+          }
+          pass.pending++
+          pass.missing.push({ request: { face: face.name, level, layer, cutoff, i, j, tanX, tanY, fillDetail }, distance, stale: !!latest })
+          chunk = latest
+        }
+        if (!chunk) continue
+      }
+      inView.add(chunk)
+      if (chunk.facesDrawn === 0) continue
+      // The chunk's content, not just its cell, must reach the screen.
+      const contentLeft = chunk.originX - camera.x
+      const contentTop = chunk.originY - camera.y
+      const box = boxOf(contentLeft, contentLeft + chunk.width / chunk.scale, contentTop - chunk.height / chunk.scale, contentTop, distance)
+      if (!onScreen(view, box)) continue
+      if (coverage?.hidesChunk(chunk, contentLeft, contentTop, distance)) {
+        result.covered++
+        continue
+      }
+      result.placements.push({ chunk, x: contentLeft, y: contentTop })
     }
     return result
   }
@@ -585,8 +588,8 @@ export class ParallaxRenderer {
 
   /**
    * Sets how many screen pixels of hidden geometry may show between slices
-   * (clamped to [MIN_MAX_LEAK, MAX_MAX_LEAK]). Slices are keyed by depth and
-   * size, so the ones still needed stay cached.
+   * (clamped to [MIN_MAX_LEAK, MAX_MAX_LEAK]). Slices are keyed by level and
+   * layer, so the ones still needed stay cached.
    */
   setMaxLeak(pixels: number) {
     this.maxLeak = Math.min(MAX_MAX_LEAK, Math.max(MIN_MAX_LEAK, pixels))
@@ -630,8 +633,8 @@ export class ParallaxRenderer {
   }
 
   /** Returns the cached slice, or a new one with no chunks. */
-  private getSlice(face: Face, depth: number, size: number): Slice {
-    const key = sliceKey(face.name, depth, size)
+  private getSlice(face: Face, id: SliceId): Slice {
+    const key = sliceKey(face.name, id)
     const cached = this.slices.get(key)
     if (cached) {
       // Re-insert to mark as most recently used.
@@ -640,10 +643,12 @@ export class ParallaxRenderer {
       return cached
     }
 
+    const start = id.layer * 2 ** id.level
+    const [first, last] = siteLayers(id.level)
     const slice: Slice = {
-      depth,
-      size,
-      cell: chunkCell(size),
+      id,
+      depth: start + first,
+      size: last - first + 1,
       cells: new Map(),
       pixels: 0,
       extents: new Map(),
@@ -654,8 +659,8 @@ export class ParallaxRenderer {
 
   /** Caches a baked chunk, unless its slice has been evicted meanwhile. */
   private store(request: ChunkRequest, image: ChunkImage): Chunk | undefined {
-    const { face, depth, size, i, j, tanX, tanY, fillDetail } = request
-    const slice = this.slices.get(sliceKey(face, depth, size))
+    const { face, level, layer, cutoff, i, j, tanX, tanY, fillDetail } = request
+    const slice = this.slices.get(sliceKey(face, { level, layer, cutoff }))
     if (!slice) return
     const key = cellKey(i, j)
     let cell = slice.cells.get(key)

@@ -6,20 +6,18 @@
  */
 import wasm from '../../bake/target/wasm32-unknown-unknown/release/bake.wasm?inline'
 import { shadedPalette, VOXEL_GEOMETRY } from './bake'
+import type { SliceId } from './slice-selection'
 import { FACES } from './view'
 import type { VoxelData } from './voxel-grid'
 
 /**
- * A chunk to bake: cell (i, j) (see chunkCell) of the slice
- * [depth, depth + size) of a face (by name, see FACES), seen along
- * (tanX, tanY, 1), in the face's coordinates, with faces grown to fill
- * gaps for slices of `fillDetail` (0 for none; see docs/architecture.md,
- * section 3).
+ * A chunk to bake: cell (i, j) (see chunkCell) of a slice (see SliceId) of
+ * a face (by name, see FACES), seen along (tanX, tanY, 1), in the face's
+ * coordinates, with faces grown to fill gaps for slices of `fillDetail`
+ * (0 for none; see docs/architecture.md, section 3).
  */
-export interface ChunkRequest {
+export interface ChunkRequest extends SliceId {
   face: string
-  depth: number
-  size: number
   i: number
   j: number
   tanX: number
@@ -58,7 +56,7 @@ interface Baker {
   bake: Call
   faces: Call
 }
-type Call = (face: number, depth: number, size: number, i: number, j: number, tanX: number, tanY: number, detail: number) => number
+type Call = (face: number, level: number, layer: number, cutoff: number, i: number, j: number, tanX: number, tanY: number, detail: number) => number
 
 /**
  * @internal Numbers per face in ChunkBaker.faces: its four corners on the
@@ -133,38 +131,38 @@ export class ChunkBaker {
   }
 
   /** Calls `bake` or `faces` and returns the first `length` numbers of its result. */
-  private call(baker: Call, { face, depth, size, i, j, tanX, tanY, fillDetail }: ChunkRequest, length: number): Float64Array {
+  private call(baker: Call, { face, level, layer, cutoff, i, j, tanX, tanY, fillDetail }: ChunkRequest, length: number): Float64Array {
     const index = faceIndex.get(face)
     if (index === undefined) throw new Error(`no face ${face}`)
     // Before reading memory.buffer: the call may grow (and so replace) it.
-    const at = baker(index, depth, size, i, j, tanX, tanY, fillDetail)
+    const at = baker(index, level, layer, cutoff, i, j, tanX, tanY, fillDetail)
     if (at === 0) throw new Error('the baker has no world')
     return new Float64Array(this.baker.memory.buffer, at, length)
   }
 }
 
 /** Numbers per request in a `want` message (see encodeRequests). */
-const REQUEST = 8
+const REQUEST = 9
 
 /** Requests packed into numbers, REQUEST each, to post to a worker cheaply. */
 export function encodeRequests(requests: readonly ChunkRequest[]): Float64Array {
   const packed = new Float64Array(requests.length * REQUEST)
-  requests.forEach(({ face, depth, size, i, j, tanX, tanY, fillDetail }, n) => {
+  requests.forEach(({ face, level, layer, cutoff, i, j, tanX, tanY, fillDetail }, n) => {
     const index = faceIndex.get(face)
     if (index === undefined) throw new Error(`no face ${face}`)
-    packed.set([index, depth, size, i, j, tanX, tanY, fillDetail], n * REQUEST)
+    packed.set([index, level, layer, cutoff, i, j, tanX, tanY, fillDetail], n * REQUEST)
   })
   return packed
 }
 
 /** The n-th request of encodeRequests' numbers. */
 function decodeRequest(packed: Float64Array, n: number): ChunkRequest {
-  const [face, depth, size, i, j, tanX, tanY, fillDetail] = packed.subarray(n * REQUEST, (n + 1) * REQUEST)
-  return { face: FACES[face].name, depth, size, i, j, tanX, tanY, fillDetail }
+  const [face, level, layer, cutoff, i, j, tanX, tanY, fillDetail] = packed.subarray(n * REQUEST, (n + 1) * REQUEST)
+  return { face: FACES[face].name, level, layer, cutoff, i, j, tanX, tanY, fillDetail }
 }
 
 /** A key per chunk request. */
-const requestKey = ({ face, depth, size, i, j, tanX, tanY, fillDetail }: ChunkRequest) => [face, depth, size, i, j, tanX, tanY, fillDetail].join()
+const requestKey = ({ face, level, layer, cutoff, i, j, tanX, tanY, fillDetail }: ChunkRequest) => [face, level, layer, cutoff, i, j, tanX, tanY, fillDetail].join()
 
 /**
  * Messages to a bake worker: a new world (numbered by `generation`, which

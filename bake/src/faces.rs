@@ -1,7 +1,7 @@
 //! The faces of a chunk, baked onto its slice's centre plane.
 
-use crate::slicing::{LAYER, bake, chunk_cell, direction_error, direction_step, slice_centre};
-use crate::surface::{MAX_REACH, Voxel};
+use crate::slicing::{LAYER, bake, chunk_cell, direction_error, direction_step, slice_centre, thickness};
+use crate::surface::{MAX_REACH, Slice, Voxel};
 use crate::world::{FACE_KINDS, Geometry};
 
 /** A voxel face baked onto a slice's centre plane. */
@@ -51,8 +51,8 @@ impl Faces {
 }
 
 /**
- * Fills `faces` with the faces of chunk (i0, j0) of the slice
- * [depth, depth + size) that a ray along (tan_x, tan_y, 1) can reach,
+ * Fills `faces` with the faces of chunk (i0, j0) of a slice that a ray
+ * along (tan_x, tan_y, 1) can reach,
  * baked onto the slice's centre plane, in painting order: far to near. A
  * face is reached if it faces against the ray (normal · direction < 0).
  * The direction must be one of the face's rays (inFace in view.ts).
@@ -80,8 +80,7 @@ pub fn chunk_faces(
     faces: &mut Faces,
     geometry: &Geometry,
     surface: &[Voxel],
-    depth: i32,
-    size: i32,
+    slice: &Slice,
     i0: i32,
     j0: i32,
     tan_x: f64,
@@ -89,31 +88,36 @@ pub fn chunk_faces(
     detail: f64,
 ) {
     faces.clear();
-    let cell = chunk_cell(size);
-    let centre = slice_centre(depth, size);
-    // A voxel reaches a layer past its own, so a slice reaches this far from its centre plane.
-    let half = (size as f64 + 1.0) / 2.0 * LAYER;
+    let cell = chunk_cell(slice.level, i0, j0);
+    let centre = slice_centre(slice.level, slice.layer);
     let reach = if detail > 0.0 { MAX_REACH.min(direction_error(detail)) } else { 0.0 };
-    let (left, bottom) = (i0 as f64 * cell.width, j0 as f64 * cell.height);
+    let (left, bottom) = (cell.left as f64 * LAYER, cell.bottom as f64);
 
-    let per_unit = if detail > 0.0 { 1.0 / (size as f64 * detail * LAYER) } else { 0.0 };
+    // The slice's centre plane is at least (thickness − 1) · detail layer spacings from the camera.
+    let per_unit = if detail > 0.0 { 1.0 / ((thickness(slice.level) - 1) as f64 * detail * LAYER) } else { 0.0 };
     let half_step = if detail > 0.0 { direction_step(detail) / 2.0 } else { 0.0 };
-    // A ray through the plane at p, from a camera at distance D ≥ size · detail
-    // layer spacings, has tangent σ = τc + (p − cell centre) / D, and the cell's
-    // centre ray τc is within half a direction step of the baking direction. A
-    // face at depth z′ is drawn (σ − tan) · (z′ − centre) off. On the slice's
-    // near or far boundary (d = z′ − centre = −half or half) that pulls the
-    // slice's edge away from the next slice's when σ is farther from the screen
-    // centre than tan, so the face grows back by that much, for the largest such
-    // σ − tan over a face spanning [lo, hi] along an axis. Returns the growth
-    // below and above.
-    let grow = |tan: f64, cell_centre: f64, lo: f64, hi: f64, d0: f64, d1: f64| -> (f64, f64) {
+    // A ray through the plane at p, from a camera at distance D ≥ that, has
+    // tangent σ = τc + (p − cell centre) / D, and the cell's centre ray τc is
+    // within half a direction step of the baking direction. A face at depth
+    // z′ is drawn (σ − tan) · (z′ − centre) off. Where its voxel meets one in
+    // another slice, d = z′ − centre ahead of the plane, that pulls it away
+    // from the other slice's drawing of the surface when σ is farther from
+    // the screen centre than tan, so the face grows back by that much, for
+    // the largest such σ − tan over a face spanning [lo, hi] along an axis,
+    // and each d in `ds`. Returns the growth below and above.
+    let grow = |tan: f64, cell_centre: f64, lo: f64, hi: f64, ds: &[f64]| -> (f64, f64) {
         let above = ((hi - cell_centre) * per_unit).max(0.0) + half_step;
         let below = ((cell_centre - lo) * per_unit).max(0.0) + half_step;
         // σ above tan opens a gap where σ > 0; below tan, where σ < 0.
         let up = if above > (-tan).max(0.0) { above } else { 0.0 };
         let down = if below > tan.max(0.0) { below } else { 0.0 };
-        ((up * d1).max(down * -d0), (up * -d0).max(down * d1))
+        // σ − tan > 0 moves a point d ahead of the plane towards −(σ − tan) · d.
+        ds.iter().fold(
+            (0.0, 0.0),
+            |(gb, ga): (f64, f64), &d| {
+                if d > 0.0 { (gb.max(up * d), ga.max(down * d)) } else { (gb.max(down * -d), ga.max(up * -d)) }
+            },
+        )
     };
     let cell_x = left + cell.width / 2.0;
     let cell_y = bottom + cell.height / 2.0;
@@ -123,10 +127,10 @@ pub fn chunk_faces(
         // Baking moves the layer's sites by (near_x, near_y), and each unit of depth from them by (−tan_x, −tan_y).
         let (near_x, near_y) = bake(0.0, 0.0, c as f64 * LAYER, tan_x, tan_y, centre);
         let (x, y) = (a as f64 * LAYER, b as f64);
-        // Only a voxel that goes on into the previous or next slice can open a gap.
-        let d0 = if voxel.cut != 0 { -half } else { 0.0 };
-        let d1 = if voxel.on_far { half } else { 0.0 };
-        let crossing = per_unit > 0.0 && d0 != d1;
+        // Only a voxel that goes on into another slice can open a gap, where
+        // it meets its neighbour there: within a layer of its own.
+        let crossing = per_unit > 0.0 && voxel.cut != 0;
+        let ds = [(c - 1) as f64 * LAYER - centre, (c + 1) as f64 * LAYER - centre];
         for k in 0..FACE_KINDS {
             if (voxel.open | voxel.cut) & (1 << k) == 0 {
                 continue;
@@ -149,8 +153,8 @@ pub fn chunk_faces(
                 let extent = |v: [f64; 4]| (v[0].min(v[1]).min(v[2]).min(v[3]), v[0].max(v[1]).max(v[2]).max(v[3]));
                 let (l, r) = extent([corners[0], corners[2], corners[4], corners[6]]);
                 let (bt, tp) = extent([corners[1], corners[3], corners[5], corners[7]]);
-                let (gl, gr) = grow(tan_x, cell_x, l, r, d0, d1);
-                let (gb, gt) = grow(tan_y, cell_y, bt, tp, d0, d1);
+                let (gl, gr) = grow(tan_x, cell_x, l, r, &ds);
+                let (gb, gt) = grow(tan_y, cell_y, bt, tp, &ds);
                 growth = [gl, gb, gr, gt];
             }
             let colour = voxel.material as usize * FACE_KINDS + k;
