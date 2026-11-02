@@ -108,7 +108,7 @@ export interface View {
   focal: number
 }
 
-/** Direction through the screen point (sx, sy), in CSS pixels from the top-left, in a face's coordinates. */
+/** Direction through the screen point (sx, sy), in CSS pixels from the top-left, in a face's coordinates. @internal */
 export function screenRay(view: View, face: Face, sx: number, sy: number): Vec3 {
   const { right, up, forward } = faceBasis(face, view.orientation)
   const a = sx - view.width / 2
@@ -155,7 +155,7 @@ export interface TangentBox {
  * convex cone spanned by `rays` (in order around it), or null if it has
  * none of them, or only along an edge.
  */
-export function tangentBox(rays: Vec3[]): TangentBox | null {
+function tangentBox(rays: Vec3[]): TangentBox | null {
   for (const side of PYRAMID_SIDES) rays = clip(rays, side)
   const tangents = rays.map(r => ({ x: r.x / r.z, y: r.y / r.z }))
   // Shoelace area: a cone the face only touches along an edge shows nothing of it.
@@ -185,6 +185,7 @@ export function faceTangents(view: View, face: Face): TangentBox | null {
  * top-left) of a camera-relative point in face coordinates, or null if it
  * is not in front of the camera. The compositor's vertex shader does the
  * same.
+ * @internal
  */
 export function projector(view: View, face: Face): (p: Vec3) => { x: number; y: number } | null {
   const camera = faceBasis(face, view.orientation)

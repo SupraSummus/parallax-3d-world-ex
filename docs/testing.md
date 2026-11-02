@@ -49,5 +49,7 @@ pnpm exec vitest -t "cache"     # filter by test name
 - Prefer one invariant test over a grid of inputs to many near-identical
   example tests. For a claim about all inputs, check it on seeded random
   samples (`forAll` in `leak-bound.test.ts`) so failures reproduce.
+- Tag exports that only tests use `@internal`;
+  `pnpm knip:production` checks that everything else is used outside tests.
 - Visual output is not covered by unit tests; check it in the browser
   (`pnpm dev`).

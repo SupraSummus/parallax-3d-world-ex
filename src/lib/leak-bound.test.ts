@@ -215,13 +215,13 @@ describe('Step 7: leakFreeDetail closes the loop', () => {
    * at least one layer (two spacings) thick, so step 4's bound becomes
    * τ_err · 2 layer spacings: at most 2 · tan(fov/2) spacings.
    */
-  const leakBound = (focal: number, tan: number, epsilon: number, detail: number) =>
+  const leakBound = (focal: number, tan: number, detail: number) =>
     (Math.min(tan, C / detail) * focal) / detail
 
   it('keeps the bound within ε for random settings', () => {
     forAll(5000, r => ({ focal: 2 ** r(4, 12), tan: r(0.05, 2), epsilon: r(0.5, 64) }), ({ focal, tan, epsilon }) => {
       const detail = leakFreeDetail(focal, tan, epsilon)
-      return detail === 1 || leakBound(focal, tan, epsilon, detail) <= epsilon + EPSILON
+      return detail === 1 || leakBound(focal, tan, detail) <= epsilon + EPSILON
     })
   })
 
@@ -235,7 +235,7 @@ describe('Step 7: leakFreeDetail closes the loop', () => {
   it('half the detail would break it', () => {
     const focal = 640
     const detail = leakFreeDetail(focal, 1, 16) / 2
-    expect(leakBound(focal, 1, 16, detail)).toBeGreaterThan(16)
+    expect(leakBound(focal, 1, detail)).toBeGreaterThan(16)
   })
 })
 

@@ -47,7 +47,7 @@ export interface Frame extends View {
   layers: { face: Face; slice: SliceId; depth: number; size: number; distance: number; placements: Placement[]; fog: number }[]
 }
 
-export interface UpdateStats {
+interface UpdateStats {
   renderTime: number
   /** Distance / max slice thickness, from the leak tolerance (see leakFreeDetail). */
   detail: number
@@ -580,10 +580,6 @@ export class ParallaxRenderer {
   /** Sets how far ahead slices are drawn (clamped to [MIN_RENDER_DISTANCE, MAX_RENDER_DISTANCE]). */
   setRenderDistance(distance: number) {
     this.renderDistance = Math.min(MAX_RENDER_DISTANCE, Math.max(MIN_RENDER_DISTANCE, distance))
-  }
-
-  getMaxLeak(): number {
-    return this.maxLeak
   }
 
   /**

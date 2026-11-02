@@ -27,7 +27,7 @@ export const VOXEL_GEOMETRY = Float64Array.from(VOXEL_FACES.flatMap(({ normal, c
   ...latticeOf(normal), ...placed(latticeOf(normal)), ...corners.flatMap(c => placed(latticeOf(c))),
 ]))
 
-/** Brightness of a face by the axis it faces along, shared with the reference viewer. */
+/** Brightness of a face by the axis it faces along, shared with the reference viewer. @internal */
 export const FACE_SHADE = { front: 0.9, back: 0.65, left: 0.7, right: 0.8, bottom: 0.55, top: 1 }
 
 /**
