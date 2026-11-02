@@ -11,32 +11,24 @@ pub fn spacing(level: i32) -> i32 {
     1 << level
 }
 
-/** Layers c − c0 of the sites a cell of `level` holds, around its own layer c0: see ownedLayers in cells.ts. */
-pub fn owned_layers(level: i32) -> (i32, i32) {
-    let n = spacing(level);
-    match level {
-        0 => (0, 0),
-        1 => (-2, 0),
-        _ => (-n, n - 1),
-    }
-}
-
 /** See ATOM_SHIFT in slice-selection.ts. */
-const ATOM_SHIFT: i32 = 3;
+const ATOM_SHIFT: i32 = 6;
 
-/** See atomLevel. */
+/** See atomLevel: the level of the grid a slice of `level` reads. */
 pub fn atom_level(level: i32) -> i32 {
     (level - ATOM_SHIFT).max(0)
 }
 
+// The rest is for slices as their grid sees them (in_grid in lib.rs): of
+// level at most ATOM_SHIFT, made of single voxels, in the grid's units.
+
 /** See siteLayers: the layers a slice's sites may be in, relative to its slab's first. */
 pub fn site_layers(level: i32) -> (i32, i32) {
-    let atoms = atom_level(level);
-    let (lo, hi) = owned_layers(atoms);
-    (lo, (1 << level) - spacing(atoms) + hi)
+    debug_assert!(level <= ATOM_SHIFT);
+    (0, (1 << level) - 1)
 }
 
-/** See thickness in slice-selection.ts. */
+/** See thickness in slice-selection.ts: its voxels reach a layer past their sites'. */
 pub fn thickness(level: i32) -> i32 {
     let (first, last) = site_layers(level);
     last - first + 2

@@ -21,10 +21,10 @@ pub struct Voxel {
 }
 
 /**
- * A slice: slab `layer` of `level` (see SliceId in slice-selection.ts),
- * the sites whose atom (cell of atom_level) has its site in the slab's
- * 2^level layers. If `cutoff` is finite, only those whose cell one atom
- * size up lies before layer `cutoff`.
+ * A slice as its grid sees it (in_grid in lib.rs): slab `layer` of `level`
+ * (see SliceId in slice-selection.ts), the sites in the slab's 2^level
+ * layers. If `cutoff` is finite, only those whose cell of 2·FCC has its
+ * site before layer `cutoff`.
  */
 pub struct Slice {
     pub level: i32,
@@ -62,10 +62,9 @@ const FARTHER: i8 = 1;
  * that have an open face (one no neighbour covers), or a face whose
  * neighbour is in another slice (the slice is cut there and the cut must
  * show). Buried voxels are dropped.
- * `cells` are the slice's atoms', `next` those one size up (for the
- * cutoff).
+ * `next` are the cells of 2·FCC (for the cutoff).
  */
-pub fn cell_surface(reader: &Reader, geometry: &Geometry, cells: &Cells, next: &Cells, slice: &Slice, i: i32, j: i32) -> Vec<Voxel> {
+pub fn cell_surface(reader: &Reader, geometry: &Geometry, next: &Cells, slice: &Slice, i: i32, j: i32) -> Vec<Voxel> {
     let cell = chunk_cell(slice.level, i, j);
     let (mx, my) = cell_margin(slice.level);
     let (ma, mb) = ((mx / LAYER).ceil() as i32, my.ceil() as i32);
@@ -74,7 +73,7 @@ pub fn cell_surface(reader: &Reader, geometry: &Geometry, cells: &Cells, next: &
     let a1 = (cell.left + cell.columns + ma).min(max[0] + 1);
     let b0 = (cell.bottom - mb).max(min[1]);
     let b1 = (cell.bottom + cell.rows + mb).min(max[1] + 1);
-    // Its atoms' sites are in layers [start, end).
+    // Its sites are in layers [start, end).
     let start = slice.layer * (1 << slice.level);
     let end = start + (1 << slice.level);
     let (first, last) = site_layers(slice.level);
@@ -89,10 +88,9 @@ pub fn cell_surface(reader: &Reader, geometry: &Geometry, cells: &Cells, next: &
         if slice.cutoff.is_finite() && next.owner_c(a, b, c) as f64 >= slice.cutoff {
             return FARTHER;
         }
-        let owner = cells.owner_c(a, b, c);
-        if owner < start {
+        if c < start {
             NEARER
-        } else if owner >= end {
+        } else if c >= end {
             FARTHER
         } else {
             IN

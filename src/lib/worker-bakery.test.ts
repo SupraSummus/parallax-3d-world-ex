@@ -5,7 +5,7 @@ import type { Orientation } from './view'
 import { picture } from './picture.test-helper'
 import { VoxelGrid } from './voxel-grid'
 import { WorkerBakery, type BakeWorker } from './worker-bakery'
-import { World } from './world'
+import { levelsOf, World } from './world'
 
 // A small world with trees, as in renderer.test.ts.
 const world = new World(12345, 'hills_with_trees')
@@ -40,7 +40,7 @@ function workerRenderer(workers = [new FakeWorker(), new FakeWorker()]) {
  * `bake` returns how many it baked, `baked` how many in all.
  */
 function slowRenderer() {
-  const baker = new ChunkBaker(world.grid)
+  const baker = new ChunkBaker(world.levels)
   let wanted: ChunkRequest[] = []
   let deliver: Parameters<Bakery['connect']>[0] = () => undefined
   const renderer = new ParallaxRenderer(world, { bakery: { connect(d) { deliver = d }, setWorld() {}, want(r) { wanted = r } } })
@@ -157,7 +157,7 @@ describe('WorkerBakery', () => {
       handle({ type: 'want', requests: encodeRequests(cells.map(at)), received })
     }
     const run = (count = Infinity) => { for (; count > 0 && steps.length > 0; count--) steps.shift()?.() }
-    handle({ type: 'world', generation: 1, grid: world.grid })
+    handle({ type: 'world', generation: 1, levels: world.levels })
     want(0, 0, 1, 2)
     run(1)
     // Replaces what is left; 0 is on its way, so not baked again.
@@ -255,14 +255,14 @@ describe('WorkerBakery', () => {
 
   it('drops chunks baked from a replaced world', async () => {
     const request = { face: '+x+z', level: 5, layer: 0, cutoff: Infinity, i: 0, j: 0, eye: [0, 0, 0] as const, fill: false }
-    expect(new ChunkBaker(world.grid).bake(request).facesDrawn).toBeGreaterThan(0)
+    expect(new ChunkBaker(world.levels).bake(request).facesDrawn).toBeGreaterThan(0)
 
     const bakery = new WorkerBakery([new FakeWorker()])
     const delivered: number[] = []
     bakery.connect((_, image) => { delivered.push(image.facesDrawn) })
-    bakery.setWorld(world.grid)
+    bakery.setWorld(world.levels)
     bakery.want([request])
-    bakery.setWorld(VoxelGrid.fromVoxels([]))
+    bakery.setWorld(levelsOf(VoxelGrid.fromVoxels([])))
     bakery.want([request])
     await tick()
     expect(delivered).toEqual([0])
