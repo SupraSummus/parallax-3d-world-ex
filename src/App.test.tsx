@@ -31,6 +31,14 @@ describe('App', () => {
     expect(screen.getByText('Total Updates').nextElementSibling).not.toHaveTextContent(/^0$/)
   })
 
+  it('shows a spinner while generating a world', async () => {
+    render(<App />)
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: /Regenerate World/ }))
+    expect(screen.getByRole('status')).toHaveTextContent('Generating world')
+    await waitFor(() => { expect(screen.queryByRole('status')).not.toBeInTheDocument() })
+  })
+
   it('hides and re-shows the statistics panel', () => {
     render(<App />)
     fireEvent.click(screen.getByRole('button', { name: 'Hide statistics' }))

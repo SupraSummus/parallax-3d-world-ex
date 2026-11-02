@@ -62,6 +62,8 @@ function App() {
   const [fillGaps, setFillGaps] = useState(true)
   const [skipCovered, setSkipCovered] = useState(true)
   const [showSeams, setShowSeams] = useState(false)
+  // Generating a world blocks this thread for a second or two; a spinner shows meanwhile.
+  const [generating, setGenerating] = useState(true)
 
   // Read from the movement loop without restarting it.
   const getMoveSpeed = useEffectEvent(() => moveSpeed)
@@ -103,6 +105,7 @@ function App() {
       requestRender()
     }
     handleResize()
+    setGenerating(false)
 
     window.addEventListener('resize', handleResize)
     return () => {
@@ -202,8 +205,15 @@ function App() {
 
   const handleRegenerateWorld = (type: WorldType = worldType) => {
     setWorldType(type)
-    rendererRef.current?.regenerateWorld(Date.now(), type)
-    requestRender()
+    setGenerating(true)
+    // Once the spinner is painted: after the next frame.
+    requestAnimationFrame(() => {
+      setTimeout(() => {
+        rendererRef.current?.regenerateWorld(Date.now(), type)
+        requestRender()
+        setGenerating(false)
+      })
+    })
   }
 
   // The viewer rebuilds the same world from its seed and type.
@@ -283,6 +293,7 @@ function App() {
       <div className="pointer-events-none absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2">
         <Crosshair size={20} className="text-white/60" />
       </div>
+      {generating && <Generating />}
 
       <div className="pointer-events-none absolute inset-0 flex justify-between gap-4 p-4">
         <aside className="flex w-72 min-h-0 flex-col gap-3 overflow-y-auto">
@@ -431,6 +442,16 @@ function App() {
           )}
         </aside>
       </div>
+    </div>
+  )
+}
+
+/** Also in index.html, shown until the app first renders. */
+function Generating() {
+  return (
+    <div role="status" className="pointer-events-none absolute inset-0 flex items-center justify-center gap-3 font-mono text-sm text-white">
+      <span className="size-5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+      Generating world…
     </div>
   )
 }

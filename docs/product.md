@@ -49,6 +49,7 @@ stacks meet on screen. See [architecture.md](architecture.md).
 
 **Worlds** – Procedurally generated, regenerable with a new seed; the camera
 moves to the world's spawn point.
+Generating takes a second or two, with a spinner meanwhile.
 - *Forest* (default): a 96 m × 160 m autumn forest valley, voxels 0.35 m
   apart: a winding path, spruces, birches and oaks, ferns, bushes, boulders
   and fallen logs, and a ridge closing the far end. ~2.8M voxels.
