@@ -24,6 +24,7 @@ pnpm exec vitest -t "cache"     # filter by test name
 | `bake/src/fill.rs` | Shared edges filled without overlap or gaps; grown faces equal to the face swept over its growth, painted only into empty pixels; blocks all or partly drawn |
 | `src/lib/world.test.ts` | Toy world types: determinism, bounds in blocks |
 | `src/lib/city.test.ts` | City: determinism, voxel budget, spawn looking through an open entrance |
+| `src/lib/generator.test.ts` | Every world (forest; test worlds of fog, caves, a village): a box generated whole equals its parts generated alone, in any order, at several levels; each level stops as many rays and on the same materials as the level two finer; things reaching past their population or parent are refused |
 | `src/lib/forest.test.ts` | Forest: determinism, coverage, voxel budget, tree heights in metres, clear spawn |
 | `src/viewer/mesh.test.ts` | Reference viewer mesh: face culling between neighbours, rhombic dodecahedra at their sites, winding |
 | `src/lib/view.test.ts` | Camera basis, faces are rotations, projection against screen rays, faces cover every ray on screen, culling, screen boxes against projected corners |

@@ -1,7 +1,7 @@
 import type { Vec3 } from './world'
-import { VOXEL_FACES } from './fcc'
-import { VoxelGrid, isSite, type Material } from './voxel-grid'
+import { isSite, type VoxelGrid } from './voxel-grid'
 import { fbm, hash, rng, smoothstep, valueNoise } from './noise'
+import { areaProfile, ball, box, boundsOfShapes, capsule, ellipsoid, generate, lathe, type Box, type Cell, type Field, type Generator, type Kinds, type Node, type Point, type Population, type Shape } from './generator'
 
 /**
  * Metres per lattice unit: voxels are FCC sites (voxel-grid.ts), nearest
@@ -16,15 +16,11 @@ const vox = (metres: number) => Math.round(metres / UNIT_SIZE)
 /** Radius of branches and fallen logs, in units: thick enough to stay one piece on the lattice. */
 const BRANCH_RADIUS = 0.3 / UNIT_SIZE
 
-// Extent in units: 96 m wide, 160 m deep, heights from -8 m to 64 m.
-const MIN_X = vox(-48)
-const MAX_X = vox(48)
-const MIN_Z = vox(-32)
-const MAX_Z = vox(128)
-const MIN_Y = vox(-8)
-const MAX_Y = vox(64)
-const NX = MAX_X - MIN_X
-const NZ = MAX_Z - MIN_Z
+/**
+ * The part of the (endless) forest the app shows, in units: 96 m wide,
+ * 160 m deep, heights from -8 m to 64 m.
+ */
+const EXTENT: Box = { minX: vox(-48), minY: vox(-8), minZ: vox(-32), maxX: vox(48), maxY: vox(64), maxZ: vox(128) }
 
 // Material kinds; each voxel gets one shade of its kind, picked by position.
 // `type` ids follow world.ts: 1 grass, 2 dirt, 3 stone, 4 wood, 5 leaves, 6 flower.
@@ -53,75 +49,12 @@ const KINDS = {
   bracken: { type: 5, colors: ['#a8642a', '#b97a35', '#8f5524'] },
   bush: { type: 5, colors: ['#3d6b28', '#477a2e', '#355f22'] },
   flower: { type: 6, colors: ['#e8d34a', '#c9b1ff', '#f2f2f2', '#e86a6a'] },
-} satisfies Record<string, { type: number; colors: string[] }>
+} satisfies Kinds<string>
 type Kind = keyof typeof KINDS
 
-const MATERIALS: Material[] = [{ color: '', type: 0 }] // index 0 = empty
-const KIND_MATERIALS = {} as Record<Kind, number[]>
-for (const [kind, { type, colors }] of Object.entries(KINDS) as [Kind, (typeof KINDS)[Kind]][]) {
-  KIND_MATERIALS[kind] = colors.map(color => MATERIALS.push({ color, type }) - 1)
-}
-const LEAVES_TYPE = 5
 
 // ---------------------------------------------------------------------------
-// Voxel grid
-
-/** The world's voxel grid, with placement helpers that pick a shade of a kind. */
-class Grid {
-  readonly voxels = new VoxelGrid(
-    { minX: MIN_X, minY: MIN_Y, minZ: MIN_Z, maxX: MAX_X, maxY: MAX_Y, maxZ: MAX_Z },
-    MATERIALS,
-  )
-  constructor(private readonly shadeSeed: number) {}
-
-  get(x: number, y: number, z: number): number {
-    return this.voxels.get(x, y, z)
-  }
-
-  /** Places a shade of `kind` at a site; keeps an existing voxel unless `replace`. Points that are not sites, or out of range, are ignored. */
-  put(x: number, y: number, z: number, kind: Kind, replace = false) {
-    const i = this.voxels.index(x, y, z)
-    const { cells } = this.voxels
-    if (i < 0 || (!replace && cells[i] !== 0)) return
-    const shades = KIND_MATERIALS[kind]
-    cells[i] = shades[Math.floor(hash(this.shadeSeed, x, y, z) * shades.length)]
-  }
-
-  /** Fills the sites in a ball, keeping each with probability `fill`. */
-  ball(cx: number, cy: number, cz: number, radius: number, kind: Kind, fill: number, random: () => number) {
-    const r2 = radius * radius
-    for (let y = Math.ceil(cy - radius); y <= cy + radius; y++) {
-      for (let z = Math.ceil(cz - radius); z <= cz + radius; z++) {
-        const rest = r2 - (y - cy) ** 2 - (z - cz) ** 2
-        if (rest < 0) continue
-        const half = Math.sqrt(rest)
-        const x0 = Math.ceil(cx - half)
-        // Sites only: x + y + z even.
-        for (let x = x0 + ((x0 + y + z) & 1); x <= cx + half; x += 2) {
-          if (random() < fill) this.put(x, y, z, kind)
-        }
-      }
-    }
-  }
-
-  /** Fills the sites within `radius` of the segment from p to q (branches, fallen logs). */
-  capsule(px: number, py: number, pz: number, qx: number, qy: number, qz: number, radius: number, kind: Kind) {
-    const [dx, dy, dz] = [qx - px, qy - py, qz - pz]
-    const length2 = dx * dx + dy * dy + dz * dz
-    for (let x = Math.ceil(Math.min(px, qx) - radius); x <= Math.max(px, qx) + radius; x++) {
-      for (let y = Math.ceil(Math.min(py, qy) - radius); y <= Math.max(py, qy) + radius; y++) {
-        for (let z = Math.ceil(Math.min(pz, qz) - radius); z <= Math.max(pz, qz) + radius; z++) {
-          if (!isSite(x, y, z)) continue
-          const t = length2 === 0 ? 0 : Math.max(0, Math.min(1, ((x - px) * dx + (y - py) * dy + (z - pz) * dz) / length2))
-          if ((x - px - t * dx) ** 2 + (y - py - t * dy) ** 2 + (z - pz - t * dz) ** 2 <= radius * radius) this.put(x, y, z, kind, true)
-        }
-      }
-    }
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Generator
+// Fields: what the layers know about any column, from the seed alone.
 
 interface Column {
   height: number
@@ -133,12 +66,24 @@ interface Column {
   onPath: boolean
 }
 
+type Species = 'spruce' | 'birch' | 'oak'
+const SPECIES: Species[] = ['spruce', 'birch', 'oak']
+const TREES: Record<Species, (x: number, ground: number, z: number, random: () => number) => Node<Kind>> = {
+  spruce: spruceTree,
+  birch: birchTree,
+  oak: oakTree,
+}
+/** The colour of each species' crowns from far away. */
+const FOLIAGE: Record<Species, Kind> = { spruce: 'spruce', birch: 'birchGold', oak: 'oakOrange' }
+
 /**
  * An autumn forest valley: a winding path along the valley floor, wooded
  * slopes rising on both sides, and a ridge closing the view at the far end.
  * Spruce, birch and oak, with ferns, bushes, boulders and fallen logs.
+ * Endless: the app shows `EXTENT` of it.
+ * @internal
  */
-export function generateForest(seed: number): { grid: VoxelGrid; spawn: Vec3 } {
+export function forest(seed: number): { generator: Generator<Kind>; spawn: Vec3 } {
   const s = (k: number) => (seed | 0) + k * 1013904223
   const pathPhase = hash(s(1), 0, 0) * 100
   /** Path centre line, in metres. */
@@ -152,183 +97,282 @@ export function generateForest(seed: number): { grid: VoxelGrid; spawn: Vec3 } {
     const pathDip = (1 - smoothstep(1, 2.2, fromPath)) * 0.3
     return hills + valley + ridge - pathDip
   }
-  // Ground heights of the extent and a border of one unit around it, computed once.
-  const heights = new Int32Array((NX + 2) * (NZ + 2))
-  for (let x = MIN_X - 1; x <= MAX_X; x++) {
-    for (let z = MIN_Z - 1; z <= MAX_Z; z++) heights[(x - MIN_X + 1) * (NZ + 2) + z - MIN_Z + 1] = vox(groundMetres(x * UNIT_SIZE, z * UNIT_SIZE))
+  /** Ground height in units. */
+  const ground = (x: number, z: number) => vox(groundMetres(x * UNIT_SIZE, z * UNIT_SIZE))
+
+  /** Column (x, z), given the ground's height there and at its four neighbours. */
+  const columnOf = (x: number, z: number, h: number, neighbours: readonly number[]): Column => {
+    const xm = x * UNIT_SIZE
+    const zm = z * UNIT_SIZE
+    const slope = Math.max(...neighbours.map(n => Math.abs(n - h)))
+    const conifer = smoothstep(0.4, 0.6, fbm(s(5), xm / 40, zm / 40)) * 0.75 + smoothstep(6, 16, h * UNIT_SIZE) * 0.25
+    const density = smoothstep(0.3, 0.48, fbm(s(6), xm / 22, zm / 22))
+    const onPath = Math.abs(xm - pathX(zm)) < 1.1 + valueNoise(s(7), zm / 3, 0) * 0.5
+    const floor = valueNoise(s(8), xm / 2.5, zm / 2.5)
+    let surface: Kind
+    if (onPath) surface = 'path'
+    else if (slope >= 3) surface = floor < 0.5 ? 'stone' : 'mossyStone'
+    else if (density < 0.2) surface = floor < 0.75 ? 'grass' : 'moss'
+    else if (conifer > 0.5) surface = floor < 0.55 ? 'needles' : 'moss'
+    else surface = floor < 0.6 ? 'litter' : 'moss'
+    return { height: h, surface, conifer, density, onPath }
   }
-  /** Ground height in units; also defined outside the extent. */
-  const ground = (x: number, z: number) =>
-    x >= MIN_X - 1 && x <= MAX_X && z >= MIN_Z - 1 && z <= MAX_Z
-      ? heights[(x - MIN_X + 1) * (NZ + 2) + z - MIN_Z + 1]
-      : vox(groundMetres(x * UNIT_SIZE, z * UNIT_SIZE))
-
-  const grid = new Grid(s(4))
-  const columns: Column[] = new Array<Column>(NX * NZ)
-  const column = (x: number, z: number) => columns[(x - MIN_X) * NZ + (z - MIN_Z)]
-
-  // Terrain.
-  for (let x = MIN_X; x < MAX_X; x++) {
-    for (let z = MIN_Z; z < MAX_Z; z++) {
-      const xm = x * UNIT_SIZE
-      const zm = z * UNIT_SIZE
-      const h = ground(x, z)
-      const neighbours = [ground(x - 1, z), ground(x + 1, z), ground(x, z - 1), ground(x, z + 1)]
-      const slope = Math.max(...neighbours.map(n => Math.abs(n - h)))
-      const conifer = smoothstep(0.4, 0.6, fbm(s(5), xm / 40, zm / 40)) * 0.75 + smoothstep(6, 16, h * UNIT_SIZE) * 0.25
-      const density = smoothstep(0.3, 0.48, fbm(s(6), xm / 22, zm / 22))
-      const onPath = Math.abs(xm - pathX(zm)) < 1.1 + valueNoise(s(7), zm / 3, 0) * 0.5
-      const floor = valueNoise(s(8), xm / 2.5, zm / 2.5)
-
-      let surface: Kind
-      if (onPath) surface = 'path'
-      else if (slope >= 3) surface = floor < 0.5 ? 'stone' : 'mossyStone'
-      else if (density < 0.2) surface = floor < 0.75 ? 'grass' : 'moss'
-      else if (conifer > 0.5) surface = floor < 0.55 ? 'needles' : 'moss'
-      else surface = floor < 0.6 ? 'litter' : 'moss'
-      columns[(x - MIN_X) * NZ + (z - MIN_Z)] = { height: h, surface, conifer, density, onPath }
-
-      // Fill deep enough that no gaps open between slices or on slopes.
-      const bottom = Math.min(h - vox(1.5), ...neighbours)
-      const rock = surface === 'stone' || surface === 'mossyStone'
-      for (let y = bottom + ((x + bottom + z) & 1); y <= h; y += 2) {
-        grid.put(x, y, z, y > h - vox(1) ? surface : rock ? 'stone' : 'soil')
-      }
-    }
-  }
+  const column = (x: number, z: number) =>
+    columnOf(x, z, ground(x, z), [ground(x - 1, z), ground(x + 1, z), ground(x, z - 1), ground(x, z + 1)])
 
   // Start on the path at the near end, at about the height of a tall shrub.
-  const spawnZ = MIN_Z + vox(1)
+  const spawnZ = EXTENT.minZ + vox(1)
   const spawnX = Math.round(pathX(spawnZ * UNIT_SIZE) / UNIT_SIZE)
   // On a site, so it is in a voxel's cell, which is empty.
-  const spawnY = column(spawnX, spawnZ).height + vox(3)
+  const spawnY = ground(spawnX, spawnZ) + vox(3)
   const spawn = { x: spawnX, y: spawnY + ((spawnX + spawnY + spawnZ) & 1), z: spawnZ }
 
-  const random = rng(s(9))
+  /**
+   * A random spot on the ground under the square a cell reaches over (2N
+   * wide): every spot on the ground is in one cell, which picks it as often
+   * as any, so things are as even as one per square 2N wide.
+   */
+  const spot = (cell: Cell, n: number): Point => {
+    const [cx, , cz] = cell.centre
+    const pick = cell.random('spot')
+    const [x, z] = [cx - n + Math.floor(pick() * 2 * n), cz - n + Math.floor(pick() * 2 * n)]
+    return [x, ground(x, z), z]
+  }
 
-  // Trees on a jittered grid.
-  const cell = vox(4)
-  for (let cx = MIN_X; cx < MAX_X; cx += cell) {
-    for (let cz = MIN_Z; cz < MAX_Z; cz += cell) {
-      const x = cx + Math.floor(random() * cell)
-      const z = cz + Math.floor(random() * cell)
-      if (x >= MAX_X || z >= MAX_Z) continue
+  /** The chance a cell of trees around column (x, z) has one. */
+  const treeChance = (x: number, z: number, c: Column) => {
+    if (c.surface === 'stone' || Math.abs(x * UNIT_SIZE - pathX(z * UNIT_SIZE)) < 2.8) return 0
+    // Keep the view from the spawn point clear of low branches.
+    if (Math.hypot(x - spawn.x, z - spawn.z) < vox(7)) return 0
+    return 0.15 + c.density * 0.75
+  }
+  const speciesChances = (c: Column): Record<Species, number> =>
+    ({ spruce: c.conifer, birch: (1 - c.conifer) * 0.45, oak: (1 - c.conifer) * 0.55 })
+
+  // -------------------------------------------------------------------------
+  // Layers, drawn in this order.
+
+  // The ground: along each column, soil or stone under a layer of its surface.
+  const terrain: Field<Kind> = {
+    name: 'terrain',
+    order: 0,
+    axis: 1,
+    spans(x, z, spacing) {
+      const h = ground(x, z)
+      const around = [ground(x - spacing, z), ground(x + spacing, z), ground(x, z - spacing), ground(x, z + spacing)]
+      const { surface } = spacing === 1 ? columnOf(x, z, h, around) : column(x, z)
+      // Deep enough that no gaps open between slices or on slopes; the top site shows the surface.
+      const bottom = Math.min(h - vox(1.5), ...around)
+      const top = h + 1 - Math.max(vox(1), 2 * spacing)
+      return [
+        { from: bottom, to: top, kind: surface === 'stone' || surface === 'mossyStone' ? 'stone' : 'soil' },
+        { from: top, to: h + 1, kind: surface },
+      ]
+    },
+  }
+
+  // Trees, each in the cell its foot is in: at most one per 4 m × 4 m.
+  const TREE_CELL = vox(2)
+  const profiles = Object.fromEntries(SPECIES.map(species => {
+    const samples = Array.from({ length: 64 }, (_, i) => TREES[species](0, 0, 0, rng(s(17) + i)))
+    return [species, areaProfile(samples, 1)]
+  })) as Record<Species, (height: number) => number>
+  const trees: Population<Kind> = {
+    name: 'trees',
+    order: 1,
+    cell: TREE_CELL,
+    reach: [vox(9), vox(26), vox(9)],
+    size: vox(8),
+    anchor: cell => spot(cell, TREE_CELL),
+    make([x, y, z], cell) {
+      const random = cell.random('tree')
       const c = column(x, z)
-      if (random() > 0.15 + c.density * 0.75 || c.surface === 'stone') continue
-      if (Math.abs(x * UNIT_SIZE - pathX(z * UNIT_SIZE)) < 2.8) continue
-      // Keep the view from the spawn point clear of low branches.
-      if (Math.hypot(x - spawn.x, z - spawn.z) < vox(7)) continue
-      const species = random()
-      const treeRandom = rng(s(10) + x * 7349 + z * 15731)
-      if (species < c.conifer) spruceTree(grid, x, c.height, z, treeRandom)
-      else if (species < c.conifer + (1 - c.conifer) * 0.45) birchTree(grid, x, c.height, z, treeRandom)
-      else oakTree(grid, x, c.height, z, treeRandom)
-    }
+      if (random() > treeChance(x, z, c)) return undefined
+      const chances = speciesChances(c)
+      let pick = random()
+      const species = SPECIES.find(sp => (pick -= chances[sp]) < 0) ?? 'oak'
+      return TREES[species](x, y, z, random)
+    },
+    // A medium as dense as the trees' area per volume over each column (a quarter of it shadows a ray).
+    far: {
+      name: 'canopy',
+      order: 1,
+      op: 'fill',
+      axis: 1,
+      spans(x, z, spacing) {
+        const c = column(x, z)
+        const perArea = treeChance(x, z, c) / (2 * TREE_CELL) ** 2
+        if (perArea === 0) return []
+        const chances = speciesChances(c)
+        let pick = hash(s(18), x, z)
+        const kind = FOLIAGE[SPECIES.find(sp => (pick -= chances[sp]) < 0) ?? 'oak']
+        const spans = []
+        for (let from = 0; from < vox(26); from += spacing) {
+          let area = 0
+          for (let h = from; h < from + spacing; h++) area += SPECIES.reduce((sum, sp) => sum + chances[sp] * profiles[sp](h), 0)
+          if (area > 0) spans.push({ from: c.height + from, to: c.height + from + spacing, kind, extinction: (perArea * area) / spacing / 4 })
+        }
+        return spans
+      },
+    },
   }
 
-  // Undergrowth, boulders and fallen logs, per column of units: (0.25 m)².
-  for (let x = MIN_X; x < MAX_X; x++) {
-    for (let z = MIN_Z; z < MAX_Z; z++) {
-      const c = column(x, z)
-      const y = c.height + 1
-      const roll = random()
-      if (roll < 0.00015) boulder(grid, x, c.height, z, random)
-      else if (roll < 0.000225 && !c.onPath) fallenLog(grid, x, z, ground, random)
-      if (c.onPath || grid.get(x, y, z) !== 0 || !isSite(x, y, z)) continue
-      const r = random()
-      if (c.surface === 'grass') {
-        if (r < 0.04) grid.put(x, y, z, 'tallGrass')
-        else if (r < 0.055) grid.put(x, y, z, 'flower')
-      } else if (c.surface !== 'stone' && c.surface !== 'mossyStone') {
-        if (r < 0.0125) fern(grid, x, y, z, c.conifer > 0.5 ? 'fern' : 'bracken', random)
-        else if (r < 0.016) grid.ball(x, y, z, vox(0.5 + random() * 0.5), 'bush', 0.8, random)
-        else if (r < 0.017) grid.put(x, y, z, 'flower')
+  // Boulders and fallen logs, about one per 430 m² and 830 m².
+  const ROCK_CELL = vox(4)
+  const boulders: Population<Kind> = {
+    name: 'boulders',
+    order: 2,
+    cell: ROCK_CELL,
+    reach: vox(3),
+    size: vox(8),
+    anchor: cell => spot(cell, ROCK_CELL),
+    make: ([x, y, z], cell) => {
+      const random = cell.random('boulder')
+      return random() < 0.15 ? { shapes: boulder(x, y, z, random) } : undefined
+    },
+  }
+  const logs: Population<Kind> = {
+    name: 'logs',
+    order: 2,
+    cell: ROCK_CELL,
+    reach: vox(10),
+    size: vox(8),
+    anchor: cell => spot(cell, ROCK_CELL),
+    make: ([x, , z], cell) => {
+      const random = cell.random('log')
+      return random() < 0.077 && !column(x, z).onPath ? { shapes: fallenLog(x, z, ground, random) } : undefined
+    },
+  }
+
+  // Undergrowth, per column of units: (0.25 m)², in square patches N wide
+  // around each cell's centre (the patches of one column of cells tile the ground).
+  // A patch belongs to the cell its centre's ground is in: half a unit up,
+  // that is never on the boundary, so always in one of the column's cells.
+  // It fills only empty sites.
+  const PLANTS = 16
+  const plants: Population<Kind> = {
+    name: 'plants',
+    order: 3,
+    cell: PLANTS,
+    reach: [0, vox(10), 0],
+    size: vox(1),
+    anchor: ({ centre: [cx, , cz] }) => [cx, ground(cx, cz) + 0.5, cz],
+    make(_, { centre: [cx, , cz] }) {
+      const shapes: Shape<Kind>[] = []
+      for (let x = cx - PLANTS / 2; x < cx + PLANTS / 2; x++) {
+        for (let z = cz - PLANTS / 2; z < cz + PLANTS / 2; z++) {
+          const c = column(x, z)
+          const y = c.height + 1
+          if (c.onPath || !isSite(x, y, z)) continue
+          const r = hash(s(15), x, z)
+          const random = rng(Math.floor(hash(s(16), x, z) * 4294967296))
+          const site = (kind: Kind) => box([x, y, z], [x + 1, y + 1, z + 1], kind)
+          if (c.surface === 'grass') {
+            if (r < 0.04) shapes.push(site('tallGrass'))
+            else if (r < 0.055) shapes.push(site('flower'))
+          } else if (c.surface !== 'stone' && c.surface !== 'mossyStone') {
+            if (r < 0.0125) shapes.push(...fern(x, y, z, c.conifer > 0.5 ? 'fern' : 'bracken', random))
+            else if (r < 0.016) shapes.push(ball([x, y, z], vox(0.5 + random() * 0.5), 'bush', { fill: 0.8 }))
+            else if (r < 0.017) shapes.push(site('flower'))
+          }
+        }
       }
-    }
+      return shapes.length > 0 ? { shapes } : undefined
+    },
   }
 
-  // Drop leaves enclosed on all twelve sides: crowns become shells, which
-  // keeps the reference viewer's voxel count down.
-  const { voxels } = grid
-  const { cells, minX, minY, minZ, nx, ny, nz } = voxels
-  const half = nx / 2
-  const leaves = MATERIALS.map(m => m.type === LEAVES_TYPE)
-  // A neighbour (a, b, c) of the site at index i, whose x - minX has parity p, is at i + offset[p][k].
-  const offsets = [0, 1].map(p => VOXEL_FACES.map(({ normal: [a, b, c] }) => (c * ny + b) * half + ((p + a) >> 1)))
-  const enclosed: number[] = []
-  for (let z = minZ + 1; z < minZ + nz - 1; z++) {
-    for (let y = minY + 1; y < minY + ny - 1; y++) {
-      const row = ((z - minZ) * ny + (y - minY)) * half
-      for (let x = minX + 2 + ((minX + y + z) & 1); x < minX + nx - 2; x += 2) {
-        const i = row + ((x - minX) >> 1)
-        if (!leaves[cells[i]]) continue
-        if (offsets[(x - minX) & 1].every(o => cells[i + o] !== 0)) enclosed.push(i)
-      }
-    }
+  return {
+    generator: { kinds: KINDS, seed: s(4), layers: [terrain, trees, boulders, logs, plants] },
+    spawn,
   }
-  for (const i of enclosed) cells[i] = 0
+}
 
-  return { grid: voxels, spawn }
+/** The forest's `EXTENT`, and where the camera starts. */
+export function generateForest(seed: number): { grid: VoxelGrid; spawn: Vec3 } {
+  const { generator, spawn } = forest(seed)
+  return { grid: generate(generator, EXTENT), spawn }
+}
+
+// ---------------------------------------------------------------------------
+// Things. `random` picks their shapes.
+
+/**
+ * A tree of `shapes`, with the parts its crown hides as a child: from far
+ * away, hidden parts would show, as each shape is drawn on its own. Its
+ * crown of `clusters`, once they are smaller than the sites, is drawn as
+ * one solid of their volume.
+ */
+function tree(shapes: Shape<Kind>[], hidden: Shape<Kind>[], crown?: { trunk: Shape<Kind>; clusters: Shape<Kind>[]; fill: number }): Node<Kind> {
+  const node = { shapes, bounds: boundsOfShapes([...shapes, ...hidden]), children: () => [{ name: 'hidden', size: vox(0.5), shapes: hidden }] }
+  if (!crown) return node
+  const { trunk, clusters, fill } = crown
+  // An ellipsoid of the clusters' outline, shrunk to their volume (overlapping as if at random) and solid.
+  const b = boundsOfShapes(clusters)
+  const box: Point = [(b.maxX - b.minX) / 2, (b.maxY - b.minY) / 2, (b.maxZ - b.minZ) / 2]
+  const volume = (4 / 3) * Math.PI * box[0] * box[1] * box[2]
+  const filled = clusters.reduce((sum, { extents: [a, c, d] }) => sum + (Math.PI / 6) * a * c * d * fill, 0)
+  const shrink = (1 - Math.exp(-filled / volume)) ** (1 / 3)
+  const outline = ellipsoid([(b.minX + b.maxX) / 2, (b.minY + b.maxY) / 2, (b.minZ + b.maxZ) / 2], [box[0] * shrink, box[1] * shrink, box[2] * shrink], clusters[0].kind)
+  return { ...node, far: { detail: Math.min(...clusters.map(c => Math.min(...c.extents))), shapes: [trunk, outline] } }
 }
 
 /** A vertical trunk, `width` units square (at least 2, to stay one piece on the lattice), from just below `ground` up to `top`. */
-function trunk(grid: Grid, x: number, ground: number, z: number, top: number, width: number, kind: Kind) {
-  for (let y = ground - 1; y <= top; y++) {
-    for (let dx = 0; dx < width; dx++) {
-      for (let dz = 0; dz < width; dz++) grid.put(x + dx, y, z + dz, kind, true)
-    }
-  }
-}
+const trunk = (x: number, ground: number, z: number, top: number, width: number, kind: Kind) =>
+  box([x, ground - 1, z], [x + width, top + 1, z + width], kind, { op: 'paint' })
 
 /** Conical spruce with drooping whorls of branches. */
-function spruceTree(grid: Grid, x: number, ground: number, z: number, random: () => number) {
+function spruceTree(x: number, ground: number, z: number, random: () => number): Node<Kind> {
   const height = vox(14 + random() * 10)
   const width = height >= vox(20) ? vox(1) : vox(0.5)
   const top = ground + height
-  trunk(grid, x, ground, z, top - vox(1), width, 'spruceBark')
   const base = ground + Math.round(height * (0.15 + random() * 0.15))
+  const shapes = [trunk(x, ground, z, base, width, 'spruceBark')]
+  const hidden = [box([x, base + 1, z], [x + width, top, z + width], 'spruceBark', { op: 'paint' })]
   const radius = height * (0.17 + random() * 0.05)
   const whorl = vox(1.5 + random() * 0.6)
-  const centre = (width - 1) / 2
-  for (let y = base; y <= top + vox(0.5); y++) {
-    const t = (y - base) / (top + vox(0.5) - base)
+  const [cx, cz] = [x + (width - 1) / 2, z + (width - 1) / 2]
+  const crownTop = top + vox(0.5)
+  const r = (y: number) => {
     // Each whorl is widest at its bottom, giving the layered silhouette.
-    const phase = ((top - y) % whorl) / whorl
-    const r = radius * (1 - t) * (0.5 + 0.5 * phase) + vox(0.35)
-    const ri = Math.ceil(r)
-    for (let dz = -ri; dz <= ri + width - 1; dz++) {
-      // Sites only: x + y + z even.
-      for (let dx = -ri + ((x - ri + y + z + dz) & 1); dx <= ri + width - 1; dx += 2) {
-        const d = Math.hypot(dx - centre, dz - centre)
-        if (d <= r && random() < 0.95 - 0.35 * (d / r) ** 3) grid.put(x + dx, y, z + dz, 'spruce')
-      }
-    }
+    const phase = (((top - y) % whorl) + whorl) % whorl / whorl
+    return radius * (1 - (y - base) / (crownTop - base)) * (0.5 + 0.5 * phase) + vox(0.35)
   }
+  // From half a unit below the lowest whorl to half above the top, so level 0 has a disc of sites at each y.
+  const [from, to] = [base - 0.5, crownTop + 0.5]
+  const fill = (px: number, py: number, pz: number) => 0.95 - 0.35 * (Math.hypot(px - cx, pz - cz) / r(py)) ** 3
+  shapes.push(lathe([cx, from, cz], [cx, to, cz], t => r(Math.round(from + t * (to - from))), 'spruce', { fill }))
+  return tree(shapes, hidden)
 }
 
 /** Slender white birch with a wavy trunk and a loose, clumpy crown. */
-function birchTree(grid: Grid, x: number, ground: number, z: number, random: () => number) {
+function birchTree(x: number, ground: number, z: number, random: () => number): Node<Kind> {
   const height = vox(12 + random() * 7)
-  let tx = x
-  let tz = z
-  let bark: Kind = 'birchBark'
-  for (let y = ground - 1; y <= ground + height; y++) {
-    if ((y - ground) % vox(3) === 0 && y - ground > vox(4) && random() < 0.35) {
+  const [shapes, marks]: Shape<Kind>[][] = [[], []]
+  // Two units square, so the trunk stays one piece on the lattice; it shifts by a unit now and then.
+  let [tx, tz, from] = [x, z, ground - 1]
+  for (let y = ground - 1; y <= ground + height + 1; y++) {
+    const end = y === ground + height + 1
+    if (end || ((y - ground) % vox(3) === 0 && y - ground > vox(4) && random() < 0.35)) {
+      shapes.push(box([tx, from, tz], [tx + 2, y, tz + 2], 'birchBark', { op: 'paint' }))
+      if (end) break
       if (random() < 0.5) tx += random() < 0.5 ? -1 : 1
       else tz += random() < 0.5 ? -1 : 1
+      from = y
     }
-    // Bark in bands half a metre tall, some with a black mark.
-    if ((y - ground) % vox(0.5) === 0) bark = random() < 0.18 ? 'birchMark' : 'birchBark'
-    // Two units square, so the trunk stays one piece on the lattice.
-    for (let dx = 0; dx < 2; dx++) for (let dz = 0; dz < 2; dz++) grid.put(tx + dx, y, tz + dz, bark, true)
+    // Black marks in bands half a metre tall.
+    if ((y - ground) % vox(0.5) === 0 && random() < 0.18) marks.push(box([tx, y, tz], [tx + 2, y + vox(0.5), tz + 2], 'birchMark', { op: 'paint' }))
   }
+  shapes.push(...marks)
   const foliage: Kind = random() < 0.65 ? 'birchGold' : 'birchGreen'
   const crownBottom = ground + height * 0.45
+  const bole = box([x, ground - 1, z], [x + 2, crownBottom, z + 2], 'birchBark', { op: 'paint' })
+  const clusterShapes: Shape<Kind>[] = []
   const crownTop = ground + height + vox(1)
   const cy = (crownBottom + crownTop) / 2
   const ry = (crownTop - crownBottom) / 2
   const rx = vox(2 + random() * 1.2)
   const clusters = 12 + Math.floor(random() * 6)
+  const branches: Shape<Kind>[] = []
   for (let i = 0; i < clusters; i++) {
     // Uniform point in the crown ellipsoid.
     let ox, oy, oz
@@ -337,87 +381,73 @@ function birchTree(grid: Grid, x: number, ground: number, z: number, random: () 
       oy = random() * 2 - 1
       oz = random() * 2 - 1
     } while (ox * ox + oy * oy + oz * oz > 1)
-    const px = tx + ox * rx
-    const py = cy + oy * ry
-    const pz = tz + oz * rx
-    grid.capsule(tx + 0.5, py - vox(0.5), tz + 0.5, px, py, pz, BRANCH_RADIUS, 'birchBark')
-    grid.ball(px, py, pz, vox(0.8 + random() * 0.6), foliage, 0.7, random)
+    const p: Point = [tx + ox * rx, cy + oy * ry, tz + oz * rx]
+    branches.push(capsule([tx + 0.5, p[1] - vox(0.5), tz + 0.5], p, BRANCH_RADIUS, 'birchBark'))
+    clusterShapes.push(ball(p, vox(0.8 + random() * 0.6), foliage, { fill: 0.7 }))
   }
+  return tree([...shapes, ...clusterShapes], branches, { trunk: bole, clusters: clusterShapes, fill: 0.7 })
 }
 
 /** Broad oak: thick trunk, a few branches each ending in a leaf cluster. */
-function oakTree(grid: Grid, x: number, ground: number, z: number, random: () => number) {
+function oakTree(x: number, ground: number, z: number, random: () => number): Node<Kind> {
   const height = vox(12 + random() * 8)
   const trunkTop = ground + Math.round(height * (0.45 + random() * 0.1))
   const width = vox(1)
-  trunk(grid, x, ground, z, trunkTop, width, 'bark')
+  const shapes = [trunk(x, ground, z, trunkTop, width, 'bark')]
   const roll = random()
   const foliage: Kind = roll < 0.45 ? 'oakGreen' : roll < 0.75 ? 'oakOrange' : 'oakGold'
   const cx = x + (width - 1) / 2
   const cz = z + (width - 1) / 2
   const branches = 4 + Math.floor(random() * 3)
-  const ends: [number, number, number][] = [[cx, ground + height - vox(2), cz]]
+  const ends: Point[] = [[cx, ground + height - vox(2), cz]]
+  const hidden: Shape<Kind>[] = []
   for (let i = 0; i < branches; i++) {
     const angle = (i / branches) * Math.PI * 2 + random() * 0.8
     const reach = vox(2.5 + random() * 2.5)
     const startY = trunkTop - Math.floor(random() * vox(2))
-    const end: [number, number, number] = [
-      cx + Math.cos(angle) * reach,
-      Math.min(startY + vox(2 + random() * 3), ground + height - vox(1.5)),
-      cz + Math.sin(angle) * reach,
-    ]
-    grid.capsule(cx, startY, cz, end[0], end[1], end[2], BRANCH_RADIUS, 'bark')
+    const end: Point = [cx + Math.cos(angle) * reach, Math.min(startY + vox(2 + random() * 3), ground + height - vox(1.5)), cz + Math.sin(angle) * reach]
+    hidden.push(capsule([cx, startY, cz], end, BRANCH_RADIUS, 'bark'))
     ends.push(end)
   }
-  for (const [ex, ey, ez] of ends) {
-    grid.ball(ex, ey, ez, vox(1.8 + random() * 1.2), foliage, 0.8, random)
-  }
+  const clusters = ends.map(end => ball(end, vox(1.8 + random() * 1.2), foliage, { fill: 0.8 }))
+  return tree([...shapes, ...clusters], hidden, { trunk: shapes[0], clusters, fill: 0.8 })
 }
 
 /** A fern or bracken clump about a metre across: fronds spreading from the middle. */
-function fern(grid: Grid, x: number, y: number, z: number, kind: Kind, random: () => number) {
-  grid.ball(x, y, z, 1.5, kind, 1, random)
-  if (random() < 0.5) grid.ball(x, y + vox(0.5), z, 1.5, kind, 1, random)
+function fern(x: number, y: number, z: number, kind: Kind, random: () => number): Shape<Kind>[] {
+  const shapes = [ball([x, y, z], 1.5, kind)]
+  if (random() < 0.5) shapes.push(ball([x, y + vox(0.5), z], 1.5, kind))
   for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-    if (random() < 0.6) grid.ball(x + dx * vox(0.5), y, z + dz * vox(0.5), 1.5, kind, 1, random)
+    if (random() < 0.6) shapes.push(ball([x + dx * vox(0.5), y, z + dz * vox(0.5)], 1.5, kind))
   }
+  return shapes
 }
 
 /** A half-buried rock with moss on its upper side. */
-function boulder(grid: Grid, x: number, ground: number, z: number, random: () => number) {
+function boulder(x: number, ground: number, z: number, random: () => number): Shape<Kind>[] {
   const rx = vox(0.8 + random() * 1.4)
   const ry = rx * (0.6 + random() * 0.3)
   const rz = vox(0.8 + random() * 1.4)
-  for (let dx = -rx; dx <= rx; dx++) {
-    for (let dz = -rz; dz <= rz; dz++) {
-      for (let dy = -Math.ceil(ry); dy <= Math.ceil(ry); dy++) {
-        const d = (dx / rx) ** 2 + (dy / ry) ** 2 + (dz / rz) ** 2
-        if (d > 1) continue
-        grid.put(x + dx, ground + dy, z + dz, dy > ry * 0.4 && random() < 0.7 ? 'mossyStone' : 'stone', true)
-      }
-    }
-  }
+  return [
+    ellipsoid([x, ground, z], [rx, ry, rz], 'stone', { op: 'paint' }),
+    ellipsoid([x, ground, z], [rx, ry, rz], 'mossyStone', { op: 'paint', fill: (_x, y) => (y - ground > ry * 0.4 ? 0.7 : 0) }),
+  ]
 }
 
 /** A fallen trunk lying across the ground, with moss on top. */
-function fallenLog(
-  grid: Grid,
-  x: number,
-  z: number,
-  ground: (x: number, z: number) => number,
-  random: () => number,
-) {
+function fallenLog(x: number, z: number, ground: (x: number, z: number) => number, random: () => number): Shape<Kind>[] {
   const length = vox(4 + random() * 5)
   const angle = random() * Math.PI
   const dx = Math.cos(angle)
   const dz = Math.sin(angle)
   const [ex, ez] = [x + dx * length, z + dz * length]
   const lift = BRANCH_RADIUS * 1.5
-  grid.capsule(x, ground(x, z) + lift, z, ex, ground(Math.round(ex), Math.round(ez)) + lift, ez, BRANCH_RADIUS * 1.5, 'deadwood')
+  const shapes: Shape<Kind>[] = [capsule([x, ground(x, z) + lift, z], [ex, ground(Math.round(ex), Math.round(ez)) + lift, ez], BRANCH_RADIUS * 1.5, 'deadwood')]
   // Moss in patches on top.
   for (let i = 0; i <= length; i += vox(0.5)) {
     const px = Math.round(x + dx * i)
     const pz = Math.round(z + dz * i)
-    if (random() < 0.5) grid.ball(px, ground(px, pz) + lift * 2 + 1, pz, 1.2, 'moss', 1, random)
+    if (random() < 0.5) shapes.push(ball([px, ground(px, pz) + lift * 2 + 1, pz], 1.2, 'moss'))
   }
+  return shapes
 }
