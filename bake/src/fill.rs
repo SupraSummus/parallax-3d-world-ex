@@ -125,7 +125,7 @@ fn sweep(quad: &mut [f64; 16], left: f64, up: f64, right: f64, down: f64) -> usi
  * plane from (origin_x, origin_y) (top-left) at `scale` pixels per unit,
  * without antialiasing: a pixel is filled when its centre is inside, with
  * half-open edges, so faces sharing an edge neither overlap nor leave a gap
- * there. Faces the baking direction reaches are painted in order.
+ * there. Faces the eye reaches are painted in order.
  *
  * Then every face, grown (its outline swept over the rectangle of its
  * growth, see Face), is painted where nothing is yet, nearest first. This
@@ -250,7 +250,8 @@ mod tests {
 
     /** The faces filled into 40 × 40 pixels showing [0, 4] × [0, 4] at 10 pixels per unit; the palette maps a colour to itself. */
     fn fill(list: Vec<Face>) -> Vec<u32> {
-        let faces = Faces { list, ..Faces::new() };
+        let mut faces = Faces::new();
+        faces.list = list;
         let palette: Vec<u32> = (0..16).collect();
         let mut pixels = vec![0; 40 * 40];
         fill_faces(&mut Scratch::default(), &faces, &palette, &mut pixels, 40, 40, 0.0, 4.0, 10.0);

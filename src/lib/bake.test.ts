@@ -39,14 +39,16 @@ describe('shadedPalette', () => {
 
 /**
  * The colour (an index into shadedPalette) that the first voxel of a slice
- * hit by the ray (px, py, centre) + t · (tanX, tanY, 1) shows: the face it
+ * hit by the ray from `eye` through (px, py, centre) shows: the face it
  * enters through. All in face coordinates. Null if it hits nothing, or if
  * rays a hair apart disagree (an edge passes there).
  */
-function rayCast(sites: (Vec3 & { id: number })[], centre: number, px: number, py: number, tanX: number, tanY: number): number | null {
+function rayCast(sites: (Vec3 & { id: number })[], centre: number, px: number, py: number, eye: Vec3): number | null {
   // Kinds' normals in face coordinates, the same on every face.
   const normals = VOXEL_FACES.map(({ normal: [x, y, z] }) => toLocal(FACES[0], { x, y, z }))
   const one = (ox: number, oy: number) => {
+    // Along (tanX, tanY, 1) from the plane, both ways.
+    const [tanX, tanY] = [(ox - eye.x) / (centre - eye.z), (oy - eye.y) / (centre - eye.z)]
     let best = { t: Infinity, colour: -1 }
     for (const v of sites) {
       let enter = -Infinity
@@ -98,17 +100,18 @@ describe('ChunkBaker', () => {
 
   // Slices with sites above the blob's bottom show cut faces; the blob is
   // within one slab of level 3, and of level 4, made of cells of 2·FCC.
-  // Directions within the face's rhombus, some on its edge.
+  // Eyes (lattice coordinates) ahead and to the sides.
   it.each([
-    [0, 0, Infinity, 0, 0], [0, 3, Infinity, 0.5, -0.25], [1, 1, Infinity, -1, 0], [1, 2, Infinity, 0.25, 0.5], [2, 1, Infinity, 0.5, 0.25],
-    [3, 0, 4, 0.5, 0.35], [4, 0, Infinity, -0.5, -0.35], [0, 5, Infinity, 0, -LAYER],
-  ])('paints what a ray along the baking direction hits first (level %s, layer %s, cutoff %s, tangents %s, %s)', (level, layer, cutoff, tanX, tanY) => {
+    [0, 0, Infinity, [0, 0, -12]], [0, 3, Infinity, [8, -4, -8]], [1, 1, Infinity, [-16, 0, -10]], [1, 2, Infinity, [4, 8, -6]],
+    [2, 1, Infinity, [8, 4, -8]], [3, 0, 4, [8, 6, -14]], [4, 0, Infinity, [-8, -6, -20]], [0, 5, Infinity, [0, -8, -4]],
+  ] as const)('paints what a ray from the eye hits first (level %s, layer %s, cutoff %s, eye %j)', (level, layer, cutoff, eye) => {
     const slice = { level, layer, cutoff }
     const centre = sliceCentre(slice)
     const sites = voxels.filter(v => holds(slice, [v.a, v.b, v.c]))
       .map(v => ({ x: v.a * LAYER, y: v.b, z: v.c * LAYER, id: ids.get(v.color) ?? 0 }))
     expect(sites.length).toBeGreaterThan(20)
-    const { width, height, pixels, originX, originY, scale } = baker.bake({ face: face.name, ...slice, i: 0, j: 0, tanX, tanY, fillDetail: 0 })
+    const { width, height, pixels, originX, originY, scale } = baker.bake({ face: face.name, ...slice, i: 0, j: 0, eye, fill: false })
+    const from = { x: eye[0] * LAYER, y: eye[1], z: eye[2] * LAYER }
 
     let compared = 0
     const wrong: string[] = []
@@ -118,24 +121,23 @@ describe('ChunkBaker', () => {
         const [i, j] = [Math.floor(col), Math.floor(row)]
         const px = originX + (i + 0.5) / scale
         const py = originY - (j + 0.5) / scale
-        const expected = rayCast(sites, centre, px, py, tanX, tanY)
+        const expected = rayCast(sites, centre, px, py, from)
         if (expected === null) continue
         compared++
         const colour = expected < 0 ? 0 : palette[expected]
         if (pixels[j * width + i] !== colour) wrong.push(`(${String(px)}, ${String(py)}): ${String(pixels[j * width + i])} ≠ ${String(colour)}`)
       }
     }
-    // Faces seen edge-on (on the rhombus's edge) leave many samples on an edge.
     expect(compared).toBeGreaterThan(300)
     expect(wrong).toEqual([])
   }, 30_000)
 
   it('grows only the open faces of voxels going on into another slice', () => {
-    // A floor two units thick through layers 0 to 7, baked straight along
-    // the face's axis, so its sides facing up show only grown.
+    // A floor two units thick through layers 0 to 7, seen from straight
+    // ahead, level with it, so its sides facing up show only grown.
     const floor = VoxelGrid.fromVoxels(voxels.filter(v => v.b >= 0 && v.b < 2))
     const slice = { level: 1, layer: 1, cutoff: Infinity }
-    const data = new ChunkBaker(floor).faces({ face: face.name, ...slice, i: 0, j: 0, tanX: 0, tanY: 0, fillDetail: 27 })
+    const data = new ChunkBaker(floor).faces({ face: face.name, ...slice, i: 0, j: 0, eye: [0, 0, -20], fill: true })
     const filled = (a: number, b: number, c: number) => {
       const p = toWorld(face, a, b, c)
       return floor.get(p.x, p.y, p.z) !== 0

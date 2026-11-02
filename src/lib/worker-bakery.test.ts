@@ -89,7 +89,7 @@ function checksum(pixels: Uint32Array): number {
 
 /** Each layer's chunks: content and where they go. */
 const shown = (frame: Frame) => frame.layers.map(l => l.placements.map(({ chunk, x, y }) =>
-  ({ i: chunk.i, j: chunk.j, tanX: chunk.tanX, tanY: chunk.tanY, pixels: checksum(chunk.pixels), x, y })))
+  ({ i: chunk.i, j: chunk.j, eye: chunk.eye.join(), pixels: checksum(chunk.pixels), x, y })))
 
 /** What baking on the main thread shows. */
 function reference(camera?: Camera, from = world, orientation?: Orientation) {
@@ -115,15 +115,15 @@ describe('WorkerBakery', () => {
     expect(faces.size).toBeGreaterThanOrEqual(yaw === 0 ? 4 : 3)
   })
 
-  it("shows a cell's older bake while its new direction is baking", async () => {
+  it("shows a cell's older bake while its new eye's is baking", async () => {
     const renderer = workerRenderer()
     await settle(renderer)
-    // Far enough sideways that the nearest slices' directions change.
+    // Far enough sideways that the eyes of the nearest slices change.
     renderer.setCamera({ x: renderer.getCamera().x + 3 })
     const baking = shown(renderer.render())
     const target = reference(renderer.getCamera())
     const standIns = baking.flatMap((layer, i) => layer.filter(c =>
-      target[i].some(t => t.i === c.i && t.j === c.j && (t.tanX !== c.tanX || t.tanY !== c.tanY))))
+      target[i].some(t => t.i === c.i && t.j === c.j && t.eye !== c.eye)))
     expect(standIns.length).toBeGreaterThan(0)
     expect(shown(await settle(renderer))).toEqual(target)
   })
@@ -132,7 +132,7 @@ describe('WorkerBakery', () => {
     const workers = [new FakeWorker(), new FakeWorker()]
     const renderer = workerRenderer(workers)
     renderer.render()
-    expect(pending(renderer)).toBeGreaterThan(1000)
+    expect(pending(renderer)).toBeGreaterThan(200)
     renderer.setCamera({ x: 500 })
     renderer.render()
     const needed = pending(renderer)
@@ -144,12 +144,12 @@ describe('WorkerBakery', () => {
     const workers = [new FakeWorker(), new FakeWorker(), new FakeWorker()]
     await settle(workerRenderer(workers))
     const cells = workers.map(w => new Set(w.baked.map(cell)))
-    for (const set of cells) expect(set.size).toBeGreaterThan(100)
+    for (const set of cells) expect(set.size).toBeGreaterThan(50)
     expect(new Set(cells.flatMap(set => [...set])).size).toBe(cells[0].size + cells[1].size + cells[2].size)
   })
 
   it('bakes from the latest list, a chunk again only once the main thread took it', () => {
-    const at = (i: number) => ({ face: '+x+z', level: 6, layer: 0, cutoff: Infinity, i, j: 0, tanX: 0, tanY: 0, fillDetail: 0 })
+    const at = (i: number) => ({ face: '+x+z', level: 6, layer: 0, cutoff: Infinity, i, j: 0, eye: [0, 0, 0] as const, fill: false })
     const baked: [number, number][] = []
     const steps: (() => void)[] = []
     const handle = bakeHandler(({ seq, request }) => baked.push([seq, request.i]), step => steps.push(step))
@@ -178,7 +178,7 @@ describe('WorkerBakery', () => {
     renderer.setSkipCovered(false)
     await settle(renderer)
     const baked = new Set(bakery.all.map(cell))
-    // Forward and sideways: near slices re-tile, and the other chunks change direction.
+    // Forward and sideways: near slices re-tile, and the near levels' eyes move.
     const { x, z } = renderer.getCamera()
     renderer.setCamera({ x: x + 3, z: z + 3 })
     renderer.render()
@@ -212,8 +212,8 @@ describe('WorkerBakery', () => {
     }
     const [skipping, all] = [settled(true), settled(false)]
     expect(skipping.picture).toEqual(all.picture)
-    // ~150 against ~3500.
-    expect(skipping.bakes).toBeLessThan(all.bakes / 4)
+    // ~240 against ~680.
+    expect(skipping.bakes).toBeLessThan(all.bakes / 2)
   })
 
   it('while slices re-tile, shows the slices they replace until the new ones are baked', async () => {
@@ -248,12 +248,13 @@ describe('WorkerBakery', () => {
       renderer.render()
       bake(50)
     }
-    // Of the 800 baked, ~140 reach the screen; near first, ~30.
-    expect(shown() - before).toBeGreaterThan(100)
+    // Of the 800 baked, 78 reach the screen; near first, 69 (the eyes of
+    // the near levels move every render, so most of the rest is stale).
+    expect(shown() - before).toBeGreaterThan(73)
   })
 
   it('drops chunks baked from a replaced world', async () => {
-    const request = { face: '+x+z', level: 5, layer: 0, cutoff: Infinity, i: 0, j: 0, tanX: 0, tanY: 0, fillDetail: 0 }
+    const request = { face: '+x+z', level: 5, layer: 0, cutoff: Infinity, i: 0, j: 0, eye: [0, 0, 0] as const, fill: false }
     expect(new ChunkBaker(world.grid).bake(request).facesDrawn).toBeGreaterThan(0)
 
     const bakery = new WorkerBakery([new FakeWorker()])

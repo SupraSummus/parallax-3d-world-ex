@@ -93,23 +93,20 @@ describe('Renderer regressions', () => {
   describe('z-movement cache churn', () => {
     // Near layers, which change as the camera moves, hide most of the view
     // here; these tests are about the distant ones, so nothing is skipped.
-    it('reuses most chunks after a 2-unit Z move from the initial camera position', () => {
+    it('reuses the distant chunks after a 2-unit Z move from the initial camera position', () => {
       const renderer = new ParallaxRenderer(world)
       renderer.resize(800, 600)
       renderer.setSkipCovered(false)
       renderer.setCamera({ x: 0, y: 30, z: -60 })
 
-      renderer.render() // initial: everything dirty, regenerated once
+      const before = new Set(renderer.render().layers.flatMap(l => l.placements.map(p => p.chunk)))
       renderer.setCamera({ x: 0, y: 30, z: -58 })
-      renderer.render()
-
-      const stats = renderer.getStats().lastUpdate
-      expect(stats).toBeDefined()
-      // Very near layers (size 1 at viewingDistance ~2) legitimately need to
-      // redraw because their scale changes noticeably. Distant layers that
-      // cover 64 z-units shouldn't. So "reused" should meaningfully beat
-      // "regenerated".
-      expect(stats?.chunksReused ?? 0).toBeGreaterThan(stats?.chunksRegenerated ?? 0)
+      // The near levels' eyes move (their cells are a few units across, and
+      // the camera is on a boundary of level 3's), so they are baked again;
+      // the cells of levels from 4 on reach 16 units and more.
+      const distant = renderer.render().layers.filter(l => l.slice.level >= 4).flatMap(l => l.placements.map(p => p.chunk))
+      expect(distant.length).toBeGreaterThan(10)
+      expect(distant.filter(chunk => before.has(chunk)).length).toBeGreaterThan(distant.length * 0.9)
     })
 
     it('does not re-render every chunk on every keypress when moving along Z', () => {
@@ -130,9 +127,9 @@ describe('Renderer regressions', () => {
       const regensDuringMovement =
         renderer.getStats().totalChunksRegenerated - initialRegens
 
-      // Only near slices that get re-tiled, plus newly entering ones, should
-      // re-render: well under one full re-render per frame.
-      expect(regensDuringMovement).toBeLessThan(chunkCount * 2)
+      // Only the near levels, whose eyes move every unit or two, plus newly
+      // entering chunks, should re-render: well under one full re-render per frame.
+      expect(regensDuringMovement).toBeLessThan(chunkCount * 8 * 0.6)
     })
   })
 
@@ -173,8 +170,9 @@ describe('Renderer regressions', () => {
       const renderer = new ParallaxRenderer(floor)
       renderer.resize(1280, 800)
       renderer.setRenderDistance(800)
-      // Looking along the strip from just before it (a = 1.2, c = -8).
-      renderer.setCamera({ x: -3.4, y: 200, z: -4.6 })
+      // Looking along the strip from just before it (a = 3.8, c = -8), off
+      // the eyes enough for gaps to open.
+      renderer.setCamera({ x: -2.1, y: 205, z: -5.9 })
       renderer.setOrientation({ yaw: 45, pitch: 0 })
       renderer.setFillGaps(fillGaps)
       // Columns well inside the floor: grown faces may stick out past its

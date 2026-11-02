@@ -43,7 +43,7 @@ src/
     ├── city.ts              # City scene generator: streets, buildings, maze of rooms
     ├── noise.ts             # Seeded hash, value noise and PRNG for the generators
     ├── cells.ts             # Cells of the coarser lattices N·FCC that slices are made of
-    ├── slice-selection.ts   # Slices, chunks and baking directions (pure functions)
+    ├── slice-selection.ts   # Slices, chunks and the eyes they are baked from (pure functions)
     ├── view.ts              # Camera orientation, the 12 faces (FCC directions), projection
     ├── renderer.ts          # Slices and chunks in view, caching, screen placement (no DOM)
     ├── occlusion.ts         # Which screen cells nearer layers cover (bake/src/coverage.rs), to skip chunks behind them

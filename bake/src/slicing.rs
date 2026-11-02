@@ -3,7 +3,8 @@
 /** Spacing of a face's layers: see LAYER in view.ts. */
 pub const LAYER: f64 = std::f64::consts::FRAC_1_SQRT_2;
 
-const CHUNK_WIDTH_PER_SIZE: i32 = 16;
+/** M / 2^level, the bricks' lattice M·FCC (brickSpacing in slice-selection.ts). */
+const BRICK: i32 = 8;
 
 /** N = 2^level: see spacing in cells.ts. */
 pub fn spacing(level: i32) -> i32 {
@@ -57,7 +58,7 @@ pub struct Cell {
 
 /** Chunk (i, j) of a slice of `level`: brick i of row j. See chunkCell. */
 pub fn chunk_cell(level: i32, i: i32, j: i32) -> Cell {
-    let m = CHUNK_WIDTH_PER_SIZE / 2 * (1 << level);
+    let m = BRICK << level;
     Cell {
         left: (2 * i + (j & 1) - 1) * m,
         bottom: j * m - m / 2,
@@ -74,22 +75,19 @@ pub fn slice_centre(level: i32, layer: i32) -> f64 {
     ((layer * (1 << level) + first - 1) as f64 + thickness(level) as f64 / 2.0) * LAYER
 }
 
-/** See directionStep. */
-pub fn direction_step(detail: f64) -> f64 {
-    (CHUNK_WIDTH_PER_SIZE as f64 / detail).log2().floor().exp2()
+/**
+ * How far (as a tangent) a ray from the eye, a site of N·FCC (N = 2^level)
+ * whose cell holds the camera, may be from the camera's ray to the same
+ * point, d layers ahead of the eye: 2N / d (see eyeError in
+ * slice-selection.ts).
+ */
+pub fn eye_error(level: i32, d: f64) -> f64 {
+    2.0 * spacing(level) as f64 / d
 }
 
 /**
- * How far (as a tangent) a ray through a chunk may be from the direction
- * the chunk is baked along: half a chunk's span, C / (2·detail), plus half
- * the direction step. At most C / detail (see bakeAngleError in
- * slice-selection.ts).
+ * The largest eye error baking allows for: the slicing keeps every voxel
+ * at least 2N layers ahead of its eye (leakFreeDetail, and NEAR_DEPTH in
+ * renderer.ts).
  */
-pub fn direction_error(detail: f64) -> f64 {
-    CHUNK_WIDTH_PER_SIZE as f64 / (2.0 * detail) + direction_step(detail) / 2.0
-}
-
-/** Where baking along (tan_x, tan_y, 1) puts point (x, y, z): its parallel projection onto the plane z = centre. */
-pub fn bake(x: f64, y: f64, z: f64, tan_x: f64, tan_y: f64, centre: f64) -> (f64, f64) {
-    (x - tan_x * (z - centre), y - tan_y * (z - centre))
-}
+pub const EYE_ERROR: f64 = 1.0;

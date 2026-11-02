@@ -1,4 +1,4 @@
-import { selectSlices, leakFreeDetail, directionStep, nearestDirection, sliceCentre, chunkCell, chunkCells, cellMargin, matchTilings, sliceKey as sliceName, siteLayers, thickness, type SliceId } from './slice-selection'
+import { selectSlices, leakFreeDetail, eyeOf, sliceCentre, chunkCell, chunkCells, cellMargin, matchTilings, sliceKey as sliceName, siteLayers, MAX_LEVEL, type SliceId } from './slice-selection'
 import { ChunkBaker, type ChunkImage, type ChunkRequest } from './chunk-baker'
 import { World, type Vec3, type WorldType } from './world'
 import { LayerIndex, type VoxelData } from './voxel-grid'
@@ -12,14 +12,10 @@ export interface Chunk extends ChunkImage {
   /** Its cell (see chunkCell). */
   i: number
   j: number
-  /**
-   * Baking direction (tangents): the chunk is the parallel projection of
-   * its slice along (tanX, tanY, 1) onto the slice's centre plane.
-   */
-  tanX: number
-  tanY: number
-  /** Slice detail the faces are grown for, to fill gaps; 0 if not. See chunk_faces in bake/src/faces.rs. */
-  fillDetail: number
+  /** The eye it is baked from, in perspective, onto the slice's centre plane (see eyeOf). */
+  eye: readonly [number, number, number]
+  /** Whether its faces are grown to fill gaps (see chunk_faces in bake/src/faces.rs). */
+  fill: boolean
 }
 
 /**
@@ -91,7 +87,10 @@ export const MAX_MAX_LEAK = 64
 
 // Visible depth range, relative to the camera: from NEAR_DEPTH to the render
 // distance, in world units (a voxel's neighbours are √2 away, see fcc.ts).
-const NEAR_DEPTH = 2
+// Four layers: the nearest voxels then reach to three layers ahead, and
+// level 0's eye is at most one layer ahead, so they are two layers past it
+// (EYE_ERROR in slice-selection.ts).
+const NEAR_DEPTH = 4 * LAYER
 export const DEFAULT_RENDER_DISTANCE = 400
 export const MIN_RENDER_DISTANCE = 40
 export const MAX_RENDER_DISTANCE = 800
@@ -125,7 +124,7 @@ interface Slice {
   extents: Map<number, [number, number] | null>
 }
 
-/** The chunks baked of a cell, one per direction and growth, and the most recent one, shown while the one wanted is baking. */
+/** The chunks baked of a cell, one per eye and growth, and the most recent one, shown while the one wanted is baking. */
 interface CellChunks {
   chunks: Chunk[]
   latest: Chunk | undefined
@@ -146,9 +145,7 @@ interface Missing {
 /** One render's settings and what it gathers across slices. */
 interface Pass {
   view: View
-  /** See directionStep. */
-  step: number
-  fillDetail: number
+  fill: boolean
   coverage: Coverage | null
   missing: Missing[]
   /** Chunks of the cells in view. */
@@ -157,11 +154,12 @@ interface Pass {
   pending: number
 }
 
-/** A face as seen in one render: its part of the screen (see faceTangents), the camera in its coordinates, screenBox. */
+/** A face as seen in one render: its part of the screen (see faceTangents), the camera in its coordinates, each level's eye, screenBox. */
 interface FaceView {
   face: Face
   tangents: TangentBox
   camera: Vec3
+  eyes: [number, number, number][]
   boxOf: ReturnType<typeof screenBox>
 }
 
@@ -181,11 +179,11 @@ function cellKey(i: number, j: number): number {
   return (i + 2 ** 20) * 2 ** 21 + j + 2 ** 20
 }
 
-/** The cell's chunk baked along (tanX, tanY), grown for fillDetail. */
-function findChunk(cell: CellChunks | undefined, tanX: number, tanY: number, fillDetail: number): Chunk | undefined {
+/** The cell's chunk baked from `eye`, grown if `fill`. */
+function findChunk(cell: CellChunks | undefined, [a, b, c]: readonly number[], fill: boolean): Chunk | undefined {
   if (!cell) return
   for (const chunk of cell.chunks) {
-    if (chunk.tanX === tanX && chunk.tanY === tanY && chunk.fillDetail === fillDetail) return chunk
+    if (chunk.eye[0] === a && chunk.eye[1] === b && chunk.eye[2] === c && chunk.fill === fill) return chunk
   }
 }
 
@@ -281,8 +279,7 @@ export class ParallaxRenderer {
     }
     const pass: Pass = {
       view,
-      step: directionStep(detail),
-      fillDetail: this.fillGaps ? detail : 0,
+      fill: this.fillGaps,
       coverage: this.skipCovered ? this.coverage : null,
       missing: [],
       inView: new Set(),
@@ -304,7 +301,8 @@ export class ParallaxRenderer {
       if (!tangents) continue
       const camera = toLocal(face, this.camera)
       pass.coverage?.setFace(face)
-      const of = { face, tangents, camera, boxOf: screenBox(view, face) }
+      const eyes = Array.from({ length: MAX_LEVEL + 1 }, (_, level) => eyeOf(level, camera))
+      const of = { face, tangents, camera, eyes, boxOf: screenBox(view, face) }
       const drawn: SliceId[] = []
       const commit = (slice: Slice, result: Drawn) => {
         const { id, depth, size } = slice
@@ -348,8 +346,8 @@ export class ParallaxRenderer {
     this.inView = pass.inView
     this.tilings = tilings
     this.evict(keep)
-    // Cells that show nothing go first: while the camera moves, near chunks
-    // change direction all the time and would keep the workers from ever
+    // Cells that show nothing go first: while the camera moves, the eyes of
+    // near levels change often and would keep the workers from ever
     // reaching them. Then re-tiled segments, fewest misses first: one shows
     // only once all its chunks are baked, and moving fast, most re-tiled
     // again before that. Then the rest; near to far within each.
@@ -423,10 +421,11 @@ export class ParallaxRenderer {
    * re-tiled shows what it has. A `probe` only counts the cells in view
    * never baked.
    */
-  private drawSlice(pass: Pass, { face, tangents, camera, boxOf }: FaceView, slice: Slice, mode: 'want' | 'standIn' | 'probe'): Drawn {
-    const { view, step, fillDetail, coverage, inView } = pass
+  private drawSlice(pass: Pass, { face, tangents, camera, eyes, boxOf }: FaceView, slice: Slice, mode: 'want' | 'standIn' | 'probe'): Drawn {
+    const { view, fill, coverage, inView } = pass
     const { id } = slice
     const { level, layer, cutoff } = id
+    const eye = eyes[level]
     // Slices start at least NEAR_DEPTH ahead of the camera, so this is > 0.
     const distance = sliceCentre(id) - camera.z
     const result: Drawn = { distance, placements: [], covered: 0, unbaked: 0 }
@@ -441,15 +440,9 @@ export class ParallaxRenderer {
     const right = camera.x + tangents.maxX * distance
     const bottom = camera.y + tangents.minY * distance
     const top = camera.y + tangents.maxY * distance
-    // How far from its voxel's b a face may be drawn (see chunk_faces in
-    // bake/src/faces.rs): a voxel's extent, baking along tangents up to
-    // LAYER in y over half the slice's thickness, and growth to fill gaps,
-    // by at most the span of rays through the cell (with its margin) off
-    // its direction.
     const h = chunkCell(level, 0, 0).height
-    const half = (thickness(level) / 2) * LAYER
-    const growth = fillDetail > 0 ? (h / 2 + cellMargin(level).rows + 1 + half) / ((thickness(level) - 1) * fillDetail * LAYER) + step / 2 : 0
-    const extentReach = 1.5 + (LAYER + growth) * half
+    // How far from its voxel's b a face may be drawn where the face's rays show it.
+    const reach = cellMargin(level).rows
     for (const [i, j] of chunkCells(level, left, right, bottom, top)) {
       const cellRect = chunkCell(level, i, j)
       // Nothing to draw: not baked at all. Otherwise, what it draws lies within reach of its voxels.
@@ -457,23 +450,16 @@ export class ParallaxRenderer {
       if (!extent) continue
       const x0 = cellRect.x - camera.x
       const x1 = x0 + cellRect.width
-      const y0 = Math.max(cellRect.y, extent[0] - extentReach) - camera.y
-      const y1 = Math.min(cellRect.y + h, extent[1] + extentReach) - camera.y
+      const y0 = Math.max(cellRect.y, extent[0] - reach) - camera.y
+      const y1 = Math.min(cellRect.y + h, extent[1] + reach) - camera.y
       if (y0 >= y1) continue
       // The face draws only its own rays: the cell must reach its rhombus (inFace).
       if (!inFace(closestToZero(x0, x1), closestToZero(y0, y1), distance)) continue
       // The screen shows a quadrilateral of the plane, less than its bounding box.
       const cellBox = boxOf(x0, x1, y0, y1, distance)
       if (!onScreen(view, cellBox)) continue
-      // Bake along the grid direction nearest to the ray through the cell's centre,
-      // within the face's rays: the rays shown are, and baking needs it
-      // (see chunk_faces in bake/src/faces.rs).
-      // + 0 turns −0 into 0: a direction is part of the chunk's name.
-      const tanX = Math.max(-1, Math.min(1, nearestDirection((cellRect.x + cellRect.width / 2 - camera.x) / distance, step))) + 0
-      const maxY = (1 - Math.abs(tanX)) * LAYER
-      const tanY = Math.max(-maxY, Math.min(maxY, nearestDirection((cellRect.y + h / 2 - camera.y) / distance, step))) + 0
       const cell = slice.cells.get(cellKey(i, j))
-      let chunk = findChunk(cell, tanX, tanY, fillDetail)
+      let chunk = findChunk(cell, eye, fill)
       if (covered(cellBox)) {
         // Not drawn, nor baked, but kept if baked.
         const kept = chunk ?? cell?.latest
@@ -490,7 +476,7 @@ export class ParallaxRenderer {
         if (mode === 'standIn') {
           chunk = latest
         } else if (this.baker) {
-          const request = { face: face.name, level, layer, cutoff, i, j, tanX, tanY, fillDetail }
+          const request = { face: face.name, level, layer, cutoff, i, j, eye, fill }
           chunk = this.store(request, this.baker.bake(request))
         } else {
           // Not wanted if what stands in is hidden anyway.
@@ -500,7 +486,7 @@ export class ParallaxRenderer {
             continue
           }
           pass.pending++
-          pass.missing.push({ request: { face: face.name, level, layer, cutoff, i, j, tanX, tanY, fillDetail }, distance, stale: !!latest })
+          pass.missing.push({ request: { face: face.name, level, layer, cutoff, i, j, eye, fill }, distance, stale: !!latest })
           chunk = latest
         }
         if (!chunk) continue
@@ -578,7 +564,7 @@ export class ParallaxRenderer {
   /**
    * Sets the field of view in degrees (clamped to [MIN_FOV, MAX_FOV]). It
    * zooms, and changes the focal length the slicing depends on (see
-   * bakeAngleError).
+   * leakFreeDetail).
    */
   setFov(fov: number) {
     this.fov = Math.min(MAX_FOV, Math.max(MIN_FOV, fov))
@@ -614,11 +600,11 @@ export class ParallaxRenderer {
 
   /**
    * Slice detail that keeps occlusion leaks within the tolerance on the
-   * current viewport. A face draws rays within tangent 1 of its axis,
-   * however the camera is turned, so turning keeps the slices.
+   * current viewport. It does not depend on where the camera looks, so
+   * turning keeps the slices.
    */
   getDetail(): number {
-    return leakFreeDetail(focalLength(this.fov, this.width, this.height), 1, this.maxLeak)
+    return leakFreeDetail(focalLength(this.fov, this.width, this.height), this.maxLeak)
   }
 
   private view(): View {
@@ -666,14 +652,14 @@ export class ParallaxRenderer {
 
   /** Caches a baked chunk, unless its slice has been evicted meanwhile. */
   private store(request: ChunkRequest, image: ChunkImage): Chunk | undefined {
-    const { face, level, layer, cutoff, i, j, tanX, tanY, fillDetail } = request
+    const { face, level, layer, cutoff, i, j, eye, fill } = request
     const slice = this.slices.get(sliceKey(face, { level, layer, cutoff }))
     if (!slice) return
     const key = cellKey(i, j)
     let cell = slice.cells.get(key)
     if (!cell) slice.cells.set(key, cell = { chunks: [], latest: undefined })
-    if (findChunk(cell, tanX, tanY, fillDetail)) return
-    const chunk: Chunk = { ...image, i, j, tanX, tanY, fillDetail }
+    if (findChunk(cell, eye, fill)) return
+    const chunk: Chunk = { ...image, i, j, eye, fill }
     cell.chunks.push(chunk)
     cell.latest = chunk
     slice.pixels += chunk.width * chunk.height

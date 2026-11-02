@@ -10,7 +10,7 @@ rectangular buildings), only their surfaces are made of rhombi.
 ## Goals
 
 - **Cheap camera movement.** Moving mostly redraws cached images; only
-  chunks coming into view or changing baking direction are rasterised.
+  chunks coming into view, or of a level whose eye moved, are rasterised.
 - **Close to true perspective.** Nothing that perspective would hide shows
   by more than a set number of pixels.
 - **Event-driven.** Nothing renders while the camera is idle.
@@ -35,7 +35,8 @@ beyond that eight layers of the cells of a coarser FCC lattice (every
 grow with viewing distance and stay the same shape at every scale. Each
 is split into chunks, bricks laid like a wall's, each the shadow of a
 column of cells of a coarser lattice still, rasterised only in view and
-as seen from a direction close to the camera's. Slices are thin enough that
+as seen from the site of the slice's lattice nearest the camera (its eye).
+Slices are thin enough that
 geometry perspective would hide (e.g. stone under the lake's water
 surface) never shows by more than a set number of screen pixels ("Max
 Occlusion Leak", 1–64 px, default 16); the derived slice detail is shown in
@@ -109,5 +110,4 @@ waits for them; meanwhile a cell shows an older bake, or nothing.
 - Paint cut cross-sections with the colour of the surface above them: a 2D
   prototype allowed slices twice as thick at the same leak.
 - Fill gaps in screen space (only pixels no layer covers) instead of
-  growing faces: seen steeply from above, chunks baked straight show a
-  floor only as its cut, and grown faces draw most of it.
+  growing faces.
