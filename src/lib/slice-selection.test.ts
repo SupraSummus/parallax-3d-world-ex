@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { selectSlices, leakFreeDetail, matchTilings, sliceCentre, thickness, sliceKey, siteLayers, chunkCell, chunkCells, holds, type SliceId } from './slice-selection'
+import { selectSlices, leakFreeDetail, leakAngle, matchTilings, sliceCentre, thickness, sliceKey, siteLayers, chunkCell, chunkCells, holds, type SliceId } from './slice-selection'
 import { LAYER } from './view'
 
 const name = ({ level, layer, cutoff }: SliceId) => `${String(level)}:${String(layer)}${Number.isFinite(cutoff) ? `|${String(cutoff)}` : ''}`
@@ -91,14 +91,19 @@ describe('selectSlices', () => {
 
 // That the bound holds is leak-bound.test.ts; these pin the formula's two cases.
 describe('leakFreeDetail', () => {
-  it('is (r + √(r² + 8r · focal / ε)) / 2, r = 8/9', () => {
-    // 1280 px wide at 90°: focal 640. (8/9 + √(64/81 + 64/9 · 40)) / 2 = 8.9, rounded up to a quarter octave.
-    expect(leakFreeDetail(640, 16)).toBe(2 ** 3.25)
+  it('is (r + √(r² + 8r / ε)) / 2, r = 8/9', () => {
+    // 16 px at focal 640 (1280 px wide at 90°): ε = 1/40.
+    // (8/9 + √(64/81 + 64/9 · 40)) / 2 = 8.9, rounded up to a quarter octave.
+    expect(leakFreeDetail(16 / 640)).toBe(2 ** 3.25)
   })
 
   it('is at least 3r, so that voxels are 2N layers ahead of their eye', () => {
     // (8/9 + √(64/81 + 64/9)) / 2 = 1.85; 3r = 2.67, rounded up.
-    expect(leakFreeDetail(64, 64)).toBe(2 ** 1.5)
+    expect(leakFreeDetail(1)).toBe(2 ** 1.5)
+  })
+
+  it.each([0.001, 0.025, 0.1, 1])('leaks at most ε = %s (leakAngle)', epsilon => {
+    expect(leakAngle(leakFreeDetail(epsilon))).toBeLessThanOrEqual(epsilon)
   })
 })
 

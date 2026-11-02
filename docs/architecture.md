@@ -138,16 +138,17 @@ behind them; in slices, the gap between two slices can instead show a
 cross-section of the farther slice. Too-thick slices show what perspective
 hides, e.g. stone under the lake's water surface.
 
-Bound, with ε = the "max occlusion leak" setting in screen pixels (default
-16): **geometry that perspective hides never shows by more than ε pixels**
-(or, closer than 2 · `detail` layers, by more than two layer spacings;
-see below).
-The pixels are those of a view where one face's rays fill the viewport:
-their largest tangent, 1 (`inFace`), at the edge of the longer side,
-so `focal` below is `faceFocal` = max(W, H) / 2, a 90° view.
-The field of view only zooms the composited picture
-and does not change the slices:
-zoomed in further than that, leaks grow on screen by the zoom factor.
+Bound, with ε = the "max occlusion leak" setting as an angle from the
+camera (default 1.5°): **geometry that perspective hides never shows by
+more than ε** (or, closer than 2 · `detail` layers, by more than two layer
+spacings; see below).
+It is an angle because slicing does not know the field of view or the
+viewport: only the compositor turns angles into pixels, ε · `focal` of them,
+and changing either keeps every slice.
+The renderer reports that many pixels for the current view
+(`leakPixels`, with ε the bound the rounded detail actually gives).
+At 90° on a 1280 px wide view (focal 640), 1.5° is 17 px;
+zoomed in 4×, the same slices leak 4× as many pixels.
 
 **Derivation.** Every step below is stated and checked on random samples,
 plus end to end against ray-cast perspective, in
@@ -166,30 +167,31 @@ a site of N·FCC (N = 2^k) whose cell holds the camera:
 4. The camera is in the eye's cell, at most N layers along the axis
    and √2·N world units off at the cell's corners, so for the face's rays
    |σ − τ| ≤ 2N / d, d the point's depth from the eye in layers (`eyeError`).
-5. In pixels the leak is at most 2N·t·focal / (a·(a − N)),
+5. As an angle the leak is at most 2N·t / (a·(a − N)),
+   2N·t·focal / (a·(a − N)) pixels,
    and slices are at most a / detail thick.
 6. With r = N / t, at most 8/9 (level 3), that is at most
-   2r·focal / (detail·(detail − r)), which `leakFreeDetail` makes ε,
+   2r / (detail·(detail − r)) (`leakAngle`), which `leakFreeDetail` makes ε,
    rounded up to a quarter octave:
 
 ```
-detail = (r + √(r² + 8r · focal / ε)) / 2  ≈  √(16/9 · focal / ε)
+detail = (r + √(r² + 8r / ε)) / 2  ≈  √(16/9 / ε)
 ```
 
-Measured in world units instead of pixels, the bound would be the
+Measured in world units instead of an angle, the bound would be the
 same thickness at every distance and a slice count linear in the range.
-Pixels are what matters on screen, and far voxels are small, so slices
+What matters on screen is the angle, and far voxels are small, so slices
 grow with distance. Slices are at least one layer (two spacings) thick, though,
 so closer than 2 · `detail` layers the leak is bounded by two spacings
-instead (an eye error of at most 1, below), which can be more than ε pixels.
+instead (an eye error of at most 1, below), which can be more than ε.
 
-These are pixels of the view straight along the stack's axis.
+These are angles, and pixels, of the view straight along the stack's axis.
 A turned view draws a plane larger towards the screen's edges
 (by 1 / cos² of the angle from the screen centre),
 so leaks there can be up to 2× larger in a 90° view.
 
-Slices of one face for range 400, 1280-pixel-wide viewport, 90° (focal 640),
-ε = 16 px: detail 9.5 and 78 slices.
+Slices of one face for range 400,
+ε = 1/40 (1.4°, 16 px at 90° on a 1280 px wide view): detail 9.5 and 78 slices.
 Chunks baked along one direction each, nearest a grid of directions
 spaced by how wide they are, needed detail 26.9 and 170 slices:
 their error grew with the chunk's width, the eye's only with its spacing.
@@ -318,7 +320,7 @@ A chunk's voxels are those of its cell and a margin around it
 `render_scale` pixels per world unit: 40 / t, between 1 and 10 (2 to 20
 pixels across a voxel). Such a slice lies at distance ≥ t · detail
 layers, where a unit is at most focal / (t · detail · LAYER),
-about 40 / t screen pixels at 1600 × 900 (34 / t at 1280),
+about 40 / t screen pixels at 1600 × 900 and 90° (34 / t at 1280),
 so more pixels would not show. The nearest slices get 10, so
 magnified rhombi keep their slanted edges. Other settings scale the chunk
 on screen.
@@ -401,8 +403,8 @@ invite, puts a corner of 4 faces in the middle of the screen.
 "Show Face Seams" draws the seams over the picture.
 
 A chunk's eye depends on where the camera is, not where it looks,
-and detail on the viewport's longer side only, not the field of view.
-So turning and zooming keep every slice and chunk;
+and detail on the leak tolerance only, not the field of view or viewport.
+So turning, zooming and resizing keep every slice and chunk;
 only chunks coming into view are baked,
 and faces coming into view are sliced.
 
@@ -495,7 +497,7 @@ baked again on every render.
 | field of view change | Slices and chunks reused; only the compositor's focal length changes |
 | leak tolerance change | Slices still needed are reused |
 | small z movement | Slices reused but where levels change: there a few slices get a new cutoff or level, the ones they replace standing in until baked |
-| resize | Slices reused unless the longer side crosses a quarter octave (detail changes); placements update |
+| resize | Slices and chunks reused; placements update |
 | gap filling toggle | Chunks rebaked (keyed by whether they are grown) |
 | world regeneration | Whole cache cleared |
 

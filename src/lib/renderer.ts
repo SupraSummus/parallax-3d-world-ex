@@ -1,9 +1,9 @@
-import { selectSlices, leakFreeDetail, eyeOf, sliceCentre, chunkCell, chunkCells, cellMargin, matchTilings, sliceKey as sliceName, siteLayers, MAX_LEVEL, type SliceId } from './slice-selection'
+import { selectSlices, leakFreeDetail, leakAngle, eyeOf, sliceCentre, chunkCell, chunkCells, cellMargin, matchTilings, sliceKey as sliceName, siteLayers, MAX_LEVEL, type SliceId } from './slice-selection'
 import { ChunkBaker, type ChunkImage, type ChunkRequest } from './chunk-baker'
 import { World, type Vec3, type WorldType } from './world'
 import { LayerIndex, type VoxelData } from './voxel-grid'
 import { Coverage } from './occlusion'
-import { FACES, LAYER, faceFocal, faceTangents, inFace, focalLength, onScreen, screenBox, toLocal, type Face, type Orientation, type ScreenBox, type TangentBox, type View } from './view'
+import { FACES, LAYER, faceTangents, inFace, focalLength, onScreen, screenBox, toLocal, type Face, type Orientation, type ScreenBox, type TangentBox, type View } from './view'
 
 export type Camera = Vec3
 
@@ -47,6 +47,8 @@ interface UpdateStats {
   renderTime: number
   /** Distance / max slice thickness, from the leak tolerance (see leakFreeDetail). */
   detail: number
+  /** The most occlusion leaks show on screen at this field of view and viewport, in pixels (see leakAngle). */
+  leakPixels: number
   layerCount: number
   /** Non-empty chunks in view. */
   chunkCount: number
@@ -79,11 +81,13 @@ export const DEFAULT_FOV = 90
 export const MIN_FOV = 5
 export const MAX_FOV = 120
 
-// How many screen pixels of geometry that perspective would hide may show
-// through the gaps between slices. Larger means thicker slices, fewer layers.
-export const DEFAULT_MAX_LEAK = 16
-export const MIN_MAX_LEAK = 1
-export const MAX_MAX_LEAK = 64
+// How far geometry that perspective would hide may show through the gaps
+// between slices, in degrees as seen from the camera. Larger means thicker
+// slices, fewer layers. An angle, not pixels: slicing does not depend on the
+// field of view or viewport; 1.5° is 16 px at 90° on a 1280 px wide view.
+export const DEFAULT_MAX_LEAK = 1.5
+export const MIN_MAX_LEAK = 0.1
+export const MAX_MAX_LEAK = 6
 
 // Visible depth range, relative to the camera: from NEAR_DEPTH to the render
 // distance, in world units (a voxel's neighbours are √2 away, see fcc.ts).
@@ -370,6 +374,7 @@ export class ParallaxRenderer {
     s.lastUpdate = {
       renderTime,
       detail,
+      leakPixels: leakAngle(detail) * view.focal,
       layerCount: frame.layers.length,
       chunkCount,
       chunksReused,
@@ -579,12 +584,12 @@ export class ParallaxRenderer {
   }
 
   /**
-   * Sets how many screen pixels of hidden geometry may show between slices
+   * Sets how far hidden geometry may show between slices, in degrees
    * (clamped to [MIN_MAX_LEAK, MAX_MAX_LEAK]). Slices are keyed by level and
    * layer, so the ones still needed stay cached.
    */
-  setMaxLeak(pixels: number) {
-    this.maxLeak = Math.min(MAX_MAX_LEAK, Math.max(MIN_MAX_LEAK, pixels))
+  setMaxLeak(degrees: number) {
+    this.maxLeak = Math.min(MAX_MAX_LEAK, Math.max(MIN_MAX_LEAK, degrees))
   }
 
   /** Whether faces are grown to fill the gaps between slices (see chunk_faces in bake/src/faces.rs). */
@@ -598,13 +603,14 @@ export class ParallaxRenderer {
   }
 
   /**
-   * Slice detail that keeps occlusion leaks within the tolerance when one
-   * face fills the viewport (faceFocal). It depends neither on where the
-   * camera looks nor on the field of view, so turning and zooming keep the
-   * slices; zoomed in further, leaks grow on screen by the zoom factor.
+   * Slice detail that keeps occlusion leaks within the tolerance, an angle.
+   * It depends only on that: not on where the camera looks, the field of
+   * view or the viewport, so turning, zooming and resizing keep the slices.
+   * How many pixels leaks show is up to the compositor's focal length
+   * (UpdateStats.leakPixels).
    */
   getDetail(): number {
-    return leakFreeDetail(faceFocal(this.width, this.height), this.maxLeak)
+    return leakFreeDetail((this.maxLeak * Math.PI) / 180)
   }
 
   private view(): View {

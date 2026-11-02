@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { ParallaxRenderer, DEFAULT_RENDER_DISTANCE, type Chunk, type Frame } from './renderer'
 import { World } from './world'
-import { selectSlices, leakFreeDetail, chunkCell, eyeOf } from './slice-selection'
+import { selectSlices, leakFreeDetail, leakAngle, chunkCell, eyeOf } from './slice-selection'
 import { FACES, LAYER, faceTangents, focalLength, projector, toLocal, viewBasis, type Face, type Orientation } from './view'
 import type { Vec3 } from './world'
 
@@ -63,6 +63,8 @@ describe('ParallaxRenderer', () => {
   beforeEach(() => {
     renderer = new ParallaxRenderer(world)
     renderer.resize(800, 600)
+    // 16 px at 90° on this viewport (focal 400): coarser than the default, so fewer chunks to bake.
+    renderer.setMaxLeak((16 / 400) * (180 / Math.PI))
   })
 
   describe('camera', () => {
@@ -151,6 +153,7 @@ describe('ParallaxRenderer', () => {
       // A narrower field of view keeps the slices and shows less of every one.
       const narrow = new ParallaxRenderer(world)
       narrow.resize(800, 600)
+      narrow.setMaxLeak((16 / 400) * (180 / Math.PI))
       narrow.setFov(45)
       narrow.setOrientation({ yaw, pitch })
       narrow.render()
@@ -232,7 +235,7 @@ describe('ParallaxRenderer', () => {
     it('keeps world points at their projected position across a resize', () => {
       render()
       const slices = layers().map(l => l.slice)
-      // Same longer side, so the same detail and slices.
+      // The same detail, so the same slices.
       renderer.resize(600, 800)
       render()
       expect(layers().map(l => l.slice)).toEqual(slices)
@@ -320,13 +323,25 @@ describe('ParallaxRenderer', () => {
   })
 
   describe('settings', () => {
-    it('derives detail from the viewport and leak tolerance, not the field of view', () => {
-      for (const [fov, pixels] of [[90, 16], [90, 4], [10, 16], [120, 4]]) {
+    it('derives detail from the leak tolerance only, not the field of view or viewport', () => {
+      for (const [fov, width, degrees] of [[90, 800, 1.5], [90, 800, 0.5], [10, 800, 1.5], [120, 300, 0.5]]) {
         renderer.setFov(fov)
-        renderer.setMaxLeak(pixels)
-        // One face's rays fill the 800 px longer viewport side: focal 400.
-        expect(renderer.getDetail()).toBe(leakFreeDetail(400, pixels))
+        renderer.resize(width, 600)
+        renderer.setMaxLeak(degrees)
+        expect(renderer.getDetail()).toBe(leakFreeDetail((degrees * Math.PI) / 180))
       }
+    })
+
+    it('reports the leak on screen at the current field of view', () => {
+      render()
+      const wide = lastUpdate()
+      expect(wide.leakPixels).toBeCloseTo(leakAngle(wide.detail) * 400)
+      expect(wide.leakPixels).toBeLessThanOrEqual(16)
+      // Zoomed in 4× (tan 45° / tan 14.04°): the same slices, leaking 4× as many pixels.
+      renderer.setFov((2 * Math.atan(0.25) * 180) / Math.PI)
+      render()
+      expect(lastUpdate().detail).toBe(wide.detail)
+      expect(lastUpdate().leakPixels).toBeCloseTo(4 * wide.leakPixels)
     })
 
     it('keeps the slices when zooming', () => {
@@ -341,10 +356,10 @@ describe('ParallaxRenderer', () => {
     })
 
     it('uses fewer, thicker slices for a larger tolerance', () => {
-      renderer.setMaxLeak(4)
+      renderer.setMaxLeak(0.3)
       render()
       const strict = lastUpdate()
-      renderer.setMaxLeak(64)
+      renderer.setMaxLeak(6)
       render()
       expect(lastUpdate().detail).toBeLessThan(strict.detail)
       expect(lastUpdate().layerCount).toBeLessThan(strict.layerCount)
