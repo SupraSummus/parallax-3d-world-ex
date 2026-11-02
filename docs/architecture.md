@@ -338,7 +338,9 @@ and up to 8 workers, each with a copy of the world, bake them
 Until a chunk arrives, the cell's latest bake (along an older direction) stands in;
 if that one is covered (section 4), nothing is baked.
 A cell never baked shows nothing yet, e.g. right after start.
-Those cells are baked first, then the rest, each near to far across all faces.
+Those cells are baked first, near to far across all faces;
+then the re-tiled segments below, those missing fewest chunks first;
+then the rest, near to far.
 When the camera moves along a face's axis, its slices re-tile
 where levels change.
 `matchTilings` pairs the new slices with the ones drawn last:
@@ -347,6 +349,9 @@ and the new ones between two of them
 for the old ones between the same two;
 until a segment's new slices have a bake in every cell they show,
 the old ones are drawn instead.
+Moving fast, segments often re-tile again before they are baked;
+finishing those missing fewest chunks first
+shows about twice as many of the chunks baked meanwhile.
 The list is split by cell between the workers,
 so a cell's surface is cached in one worker
 (rebaking it along a new direction then takes ~40% less).

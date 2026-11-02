@@ -131,11 +131,16 @@ interface CellChunks {
   latest: Chunk | undefined
 }
 
-/** A chunk to bake, how far ahead, and whether an older bake of its cell stands in meanwhile. */
+/**
+ * A chunk to bake, how far ahead, whether an older bake of its cell stands
+ * in meanwhile, and, for a slice not drawn until its re-tiled segment is
+ * baked, how many chunks the segment misses.
+ */
 interface Missing {
   request: ChunkRequest
   distance: number
   stale: boolean
+  segmentMisses?: number
 }
 
 /** One render's settings and what it gathers across slices. */
@@ -327,7 +332,9 @@ export class ParallaxRenderer {
           continue
         }
         // Not drawn, but their chunks are baked.
+        const from = pass.missing.length
         for (const slice of slices) this.drawSlice(pass, of, slice, 'want')
+        for (const m of pass.missing.slice(from)) m.segmentMisses = pass.missing.length - from
         for (const slice of standIns) {
           keep.add(slice)
           commit(slice, this.drawSlice(pass, of, slice, 'standIn'))
@@ -341,11 +348,15 @@ export class ParallaxRenderer {
     this.inView = pass.inView
     this.tilings = tilings
     this.evict(keep)
-    const nearFirst = (missing: Missing[]) => missing.sort((a, b) => a.distance - b.distance).map(m => m.request)
     // Cells that show nothing go first: while the camera moves, near chunks
     // change direction all the time and would keep the workers from ever
-    // reaching them.
-    this.bakery?.want([...nearFirst(pass.missing.filter(m => !m.stale)), ...nearFirst(pass.missing.filter(m => m.stale))])
+    // reaching them. Then re-tiled segments, fewest misses first: one shows
+    // only once all its chunks are baked, and moving fast, most re-tiled
+    // again before that. Then the rest; near to far within each.
+    const group = (m: Missing) => (m.segmentMisses !== undefined ? 1 : m.stale ? 2 : 0)
+    this.bakery?.want(pass.missing
+      .sort((a, b) => group(a) - group(b) || (a.segmentMisses ?? 0) - (b.segmentMisses ?? 0) || a.distance - b.distance)
+      .map(m => m.request))
     const voxelsRendered = this.facesBaked
     this.facesBaked = 0
 
