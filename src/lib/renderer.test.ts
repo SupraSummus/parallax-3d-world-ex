@@ -5,7 +5,7 @@ import { selectSlices, leakFreeDetail, chunkCell, eyeOf } from './slice-selectio
 import { FACES, LAYER, faceTangents, focalLength, projector, toLocal, viewBasis, type Face, type Orientation } from './view'
 import type { Vec3 } from './world'
 
-// A small world with trees: rasterising the forest (~700k voxels) in jsdom
+// A small world with trees: rasterising the forest (~700k voxels)
 // takes seconds per test. The renderer never modifies its world.
 const world = new World(12345, 'hills_with_trees')
 

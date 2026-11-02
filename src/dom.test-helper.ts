@@ -1,3 +1,4 @@
+/** What UI tests need besides jsdom: cleanup, matchers and stubs of what jsdom lacks. */
 import { afterEach, vi } from 'vitest'
 import { cleanup } from '@testing-library/react'
 import '@testing-library/jest-dom/vitest'

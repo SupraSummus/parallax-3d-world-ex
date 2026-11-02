@@ -1,4 +1,4 @@
-/** Tests' stand-in for the compositor (compositor.ts needs WebGL, which jsdom lacks). */
+/** Tests' stand-in for the compositor (compositor.ts needs WebGL, which tests lack). */
 import type { Frame } from './renderer'
 import { inFace, screenBox, screenRay } from './view'
 

@@ -1,6 +1,7 @@
 # Testing
 
-Vitest with jsdom,
+Vitest in Node,
+with jsdom only in UI tests that opt in (`// @vitest-environment jsdom`),
 and `cargo test` for the baker's Rust in `bake/`.
 Commands are in `package.json`:
 
@@ -8,6 +9,7 @@ Commands are in `package.json`:
 pnpm test                       # build the baker, run both once (CI)
 pnpm exec vitest                # watch mode (after pnpm wasm)
 pnpm exec vitest -t "cache"     # filter by test name
+pnpm exec vitest run bake       # files matching "bake"
 ```
 
 ## Layout
@@ -29,14 +31,15 @@ pnpm exec vitest -t "cache"     # filter by test name
 | `src/viewer/mesh.test.ts` | Reference viewer mesh: face culling between neighbours, rhombic dodecahedra at their sites, winding |
 | `src/lib/view.test.ts` | Camera basis, faces are rotations, projection against screen rays, faces cover every ray on screen, culling, screen boxes against projected corners |
 | `src/lib/voxel-grid.test.ts` | Storage holds exactly the lattice's sites; round trip, refusing points off the lattice; counting a face's slice, and bounding where its voxels are |
-| `src/lib/renderer.test.ts` | Layer and chunk contents, culling to the view, baking from each level's eye (again only once the camera leaves its cell), frame order and fog, perspective/parallax placement (straight ahead and turned, across faces), looking all around, cache reuse and invalidation, stats (on a small world: the forest is slow in jsdom) |
+| `src/lib/renderer.test.ts` | Layer and chunk contents, culling to the view, baking from each level's eye (again only once the camera leaves its cell), frame order and fog, perspective/parallax placement (straight ahead and turned, across faces), looking all around, cache reuse and invalidation, stats (on a small world: the forest is slow to bake) |
 | `src/lib/occlusion.test.ts` | Skipping covered chunks leaves the picture (a software compositor's) unchanged |
 | `src/lib/worker-bakery.test.ts` | Baking in workers (simulated in microtasks): same frames as baking on the main thread (straight ahead and across faces), older bakes standing in, cells showing nothing baked first, covered cells not baked (same picture), replaced slices standing in while slices re-tile, no backlog after the camera moves, no rebaking once settled (cache past its cap), stale worlds dropped |
 | `src/lib/renderer-regressions.test.ts` | Previously fixed rendering bugs, checked on chunk pixels and their placement |
 | `src/App.test.tsx` | UI panels, keyboard movement and turning (with a stub forest, for speed) |
 
 `src/lib/picture.test-helper.ts` stands in for the compositor in tests that compare pictures.
-`src/test-setup.ts` stubs what jsdom lacks: a no-op 2D canvas context
+`src/dom.test-helper.ts`, imported by UI tests, stubs what jsdom lacks:
+a no-op 2D canvas context
 (no WebGL, so `compositor.ts` is only checked in the browser),
 `ResizeObserver`, and a timer-based `requestAnimationFrame`.
 

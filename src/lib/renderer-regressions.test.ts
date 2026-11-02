@@ -9,7 +9,7 @@ import { projector } from './view'
  * frame puts them, and the per-render stats.
  */
 
-// A small world with trees: rasterising the forest (~700k voxels) in jsdom
+// A small world with trees: rasterising the forest (~700k voxels)
 // takes seconds per test. The renderer never modifies its world.
 const world = new World(12345, 'hills_with_trees')
 
