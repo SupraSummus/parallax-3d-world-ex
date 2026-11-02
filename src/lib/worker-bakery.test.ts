@@ -34,6 +34,27 @@ function workerRenderer(workers = [new FakeWorker(), new FakeWorker()]) {
   return renderer
 }
 
+/**
+ * A renderer whose chunks bake only when `bake(count)` says, the first
+ * `count` of the latest list, as workers slower than renders do.
+ * `bake` returns how many it baked, `baked` how many in all.
+ */
+function slowRenderer() {
+  const baker = new ChunkBaker(world.grid)
+  let wanted: ChunkRequest[] = []
+  let deliver: Parameters<Bakery['connect']>[0] = () => undefined
+  const renderer = new ParallaxRenderer(world, { bakery: { connect(d) { deliver = d }, setWorld() {}, want(r) { wanted = r } } })
+  renderer.resize(800, 600)
+  let baked = 0
+  const bake = (count = Infinity) => {
+    const requests = wanted.slice(0, count)
+    for (const request of requests) deliver(request, baker.bake(request))
+    baked += requests.length
+    return requests.length
+  }
+  return { renderer, bake, baked: () => baked }
+}
+
 /** Remembers the chunks wanted: all of them, and the latest list. */
 class RecordingBakery extends WorkerBakery {
   all: ChunkRequest[] = []
@@ -181,22 +202,13 @@ describe('WorkerBakery', () => {
   }, 60_000)
 
   it('bakes no cell nearer layers cover, and ends up showing the same', () => {
-    // Bakes a few of the wanted chunks per render, as workers slower than renders do.
     const settled = (skip: boolean) => {
-      const baker = new ChunkBaker(world.grid)
-      let wanted: ChunkRequest[] = []
-      let deliver: Parameters<Bakery['connect']>[0] = () => undefined
-      const renderer = new ParallaxRenderer(world, { bakery: { connect(d) { deliver = d }, setWorld() {}, want(r) { wanted = r } } })
-      renderer.resize(800, 600)
+      const { renderer, bake, baked } = slowRenderer()
       // Among the trees, near the ground.
       renderer.setCamera({ x: 0, y: 15, z: 0 })
       renderer.setSkipCovered(skip)
-      let bakes = 0
-      for (renderer.render(); wanted.length > 0; renderer.render()) {
-        for (const request of wanted.slice(0, 50)) deliver(request, baker.bake(request))
-        bakes += Math.min(50, wanted.length)
-      }
-      return { bakes, picture: picture(renderer.render(), 4) }
+      do renderer.render(); while (bake(50) > 0)
+      return { bakes: baked(), picture: picture(renderer.render(), 4) }
     }
     const [skipping, all] = [settled(true), settled(false)]
     expect(skipping.picture).toEqual(all.picture)
@@ -223,6 +235,21 @@ describe('WorkerBakery', () => {
     expect(drawn).toBeGreaterThan(settled.length / 4)
     // Without stand-ins, ~15%.
     expect(gaps).toBeLessThan(drawn / 10)
+  })
+
+  it('moving faster than chunks bake, finishes the re-tiled segments that miss fewest chunks first', () => {
+    const { renderer, bake } = slowRenderer()
+    do renderer.render(); while (bake() > 0)
+    const shown = () => renderer.getStats().totalChunksRegenerated
+    const [{ z }, before] = [renderer.getCamera(), shown()]
+    // Forward 6 a render, 50 chunks baked between renders: slices re-tile faster than they bake.
+    for (let k = 1; k <= 16; k++) {
+      renderer.setCamera({ z: z + 6 * k })
+      renderer.render()
+      bake(50)
+    }
+    // Of the 800 baked, ~140 reach the screen; near first, ~30.
+    expect(shown() - before).toBeGreaterThan(100)
   })
 
   it('drops chunks baked from a replaced world', async () => {
