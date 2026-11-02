@@ -61,10 +61,6 @@ parallax camera with the same perspective (field of view) and fog. It is
 the reference for checking what a scene looks like, independent of the
 slice renderer.
 
-**Layers panel** – Thumbnail (of the chunks in view), face and depth range, thickness and
-voxel count of every slice with something in view, with a visibility toggle
-per slice.
-
 **Statistics panel** – Session totals (updates, average render time, average
 cache efficiency, voxels rendered) and details of the last update (layers,
 slice detail, chunks in view reused vs newly baked, chunks still baking,

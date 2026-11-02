@@ -87,8 +87,9 @@ describe('WorkerBakery', () => {
     renderer.setCamera(camera)
     renderer.setOrientation({ yaw, pitch })
     expect(shown(renderer.render()).flat()).toEqual([])
-    expect(shown(await settle(renderer))).toEqual(reference(camera, world, { yaw, pitch }))
-    const faces = new Set(renderer.getLayers().filter(l => l.chunks.length > 0).map(l => l.face))
+    const settled = await settle(renderer)
+    expect(shown(settled)).toEqual(reference(camera, world, { yaw, pitch }))
+    const faces = new Set(settled.layers.filter(l => l.placements.length > 0).map(l => l.face))
     // Straight along +z, four faces meet in the middle of the screen.
     expect(faces.size).toBeGreaterThanOrEqual(yaw === 0 ? 4 : 3)
   })

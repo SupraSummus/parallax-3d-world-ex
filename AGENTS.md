@@ -30,7 +30,6 @@ src/
 ├── ErrorFallback.tsx
 ├── main.css                 # Tailwind + design tokens
 ├── components/
-│   ├── LayerPreview.tsx     # Layers panel
 │   └── ui/                  # shadcn/ui primitives (generated; CLI config in components.json)
 └── lib/
     ├── fcc.ts               # Voxel geometry: rhombic dodecahedra of the FCC lattice

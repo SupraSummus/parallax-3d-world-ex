@@ -170,8 +170,6 @@ interface Table {
   aMin: number
   layers: number
   blocks: number
-  /** Voxels before each layer (c − cMin), and in all of them at the end. */
-  sums: Float64Array
   /** By (c − cMin, block of a − aMin): the least and greatest b, or least > greatest if there is no voxel. */
   low: Int16Array
   high: Int16Array
@@ -179,11 +177,10 @@ interface Table {
 
 /**
  * Where a grid's voxels are along each face's layers (in a face's lattice
- * coordinates (a, b, c), see Face in view.ts): how many each layer c holds,
- * and for each layer and block of EXTENT_BLOCK columns a, the range of b
- * of its voxels. From one pass over the grid, so the renderer can count a
- * slice's voxels, and tell which chunk cells are empty and how high their
- * content reaches, without walking or baking them.
+ * coordinates (a, b, c), see Face in view.ts): for each layer c and block
+ * of EXTENT_BLOCK columns a, the range of b of its voxels. From one pass
+ * over the grid, so the renderer can tell which chunk cells are empty and
+ * how high their content reaches, without walking or baking them.
  */
 export class LayerIndex {
   private keys: string[]
@@ -205,12 +202,8 @@ export class LayerIndex {
     })
     // All tables' arrays in one, for one pass over the grid.
     const n = shapes.length
-    const [sumAt, lowAt] = [new Int32Array(n + 1), new Int32Array(n + 1)]
-    shapes.forEach(({ layers, blocks }, k) => {
-      sumAt[k + 1] = sumAt[k] + layers + 1
-      lowAt[k + 1] = lowAt[k] + layers * blocks
-    })
-    const sums = new Float64Array(sumAt[n])
+    const lowAt = new Int32Array(n + 1)
+    shapes.forEach(({ layers, blocks }, k) => { lowAt[k + 1] = lowAt[k] + layers * blocks })
     const low = new Int16Array(lowAt[n]).fill(32767)
     const high = new Int16Array(lowAt[n]).fill(-32768)
     const blocks = Int32Array.from(shapes, s => s.blocks)
@@ -232,7 +225,6 @@ export class LayerIndex {
             const a = row[3 * k] + vectors[v] * dx
             const b = row[3 * k + 1] + vectors[v + 3] * dx
             const c = row[3 * k + 2] + vectors[v + 6] * dx
-            sums[sumAt[k] + c + 1]++
             // a ≥ 0 here, and EXTENT_BLOCK is 8.
             const at = lowAt[k] + c * blocks[k] + (a >> 3)
             if (b < low[at]) low[at] = b
@@ -241,11 +233,7 @@ export class LayerIndex {
         }
       }
     }
-    this.tables = shapes.map((shape, k) => {
-      const table = { ...shape, sums: sums.subarray(sumAt[k], sumAt[k + 1]), low: low.subarray(lowAt[k], lowAt[k + 1]), high: high.subarray(lowAt[k], lowAt[k + 1]) }
-      for (let c = 1; c < table.sums.length; c++) table.sums[c] += table.sums[c - 1]
-      return table
-    })
+    this.tables = shapes.map((shape, k) => ({ ...shape, low: low.subarray(lowAt[k], lowAt[k + 1]), high: high.subarray(lowAt[k], lowAt[k + 1]) }))
     this.keys = shapes.map(s => LayerIndex.key(s.lattice.forward))
   }
 
@@ -267,13 +255,6 @@ export class LayerIndex {
   private table({ forward }: { forward: Vec3 }, c0: number, c1: number, a0: number, a1: number): [Table, number, number, number, number] {
     const table = this.tables[this.keys.indexOf(LayerIndex.key(forward))]
     return LayerIndex.mirrored(forward) ? [table, 1 - c1, 1 - c0, 1 - a1, 1 - a0] : [table, c0, c1, a0, a1]
-  }
-
-  /** Number of voxels in a face's layers [from, to): a slice's. */
-  count(lattice: { forward: Vec3 }, from: number, to: number): number {
-    const [{ cMin, sums }, c0, c1] = this.table(lattice, from, to, 0, 0)
-    const at = (c: number) => sums[Math.min(sums.length - 1, Math.max(0, c - cMin))]
-    return Math.max(0, at(c1) - at(c0))
   }
 
   /**
