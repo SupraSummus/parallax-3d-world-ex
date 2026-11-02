@@ -8,11 +8,15 @@ export const SKY_TOP = '#3f73b8'
 export const SKY_HORIZON = '#b9d3e8'
 const SKY_TOP_TANGENT = 0.625
 
+// Seams between faces, when shown: lines this many CSS pixels wide.
+const SEAM_COLOR = '#ff2fd0'
+const SEAM_WIDTH = 1.5
+
 // One rectangle per chunk on its layer's plane, projected like
 // projector() in view.ts; `view` has the camera's axes as columns, in the
 // layer's face coordinates (the world's for the sky). The corners come
-// from gl_VertexID, so there are no vertex buffers. The sky covers the
-// screen.
+// from gl_VertexID, so there are no vertex buffers. The sky and the seams
+// cover the screen.
 const VERTEX_SHADER = `#version 300 es
 uniform vec2 viewport;
 uniform float focal;
@@ -21,10 +25,11 @@ uniform vec4 rect; // x, y of the top-left corner, width, height (camera-relativ
 uniform float distance;
 uniform float depth;
 uniform bool sky;
+uniform bool seams;
 out vec2 uv;
 void main() {
   uv = vec2(gl_VertexID & 1, gl_VertexID >> 1);
-  if (sky) {
+  if (sky || seams) {
     gl_Position = vec4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
     return;
   }
@@ -39,6 +44,10 @@ void main() {
 // leaves a seam pixel to neither. Chunk pixels are opaque or empty, so
 // nothing is blended: empty pixels are discarded and the depth test hides
 // what nearer layers cover. The sky is one more rectangle, behind every layer.
+// Seams, if shown, are drawn last, over everything, with `view` in world
+// coordinates. A ray's face is the neighbour direction (±1, ±1, 0) along its
+// two largest components, so faces meet where the second and third largest
+// are equal in size.
 const FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 uniform vec2 viewport;
@@ -50,10 +59,22 @@ uniform vec3 skyTop;
 uniform vec3 horizon;
 uniform float fog;
 uniform bool sky;
+uniform bool seams;
+uniform vec3 seamColor;
+uniform float seamWidth; // device pixels
 in vec2 uv;
 out vec4 color;
 void main() {
   vec3 ray = view * vec3((gl_FragCoord.xy / resolution - 0.5) * viewport / focal, 1.0);
+  if (seams) {
+    vec3 a = abs(ray);
+    float second = max(min(a.x, a.y), min(max(a.x, a.y), a.z));
+    float third = min(min(a.x, a.y), a.z);
+    // Device pixels to the seam, near it.
+    float pixels = (second - third) / max(fwidth(second - third), 1e-9);
+    color = vec4(seamColor, 1.0 - smoothstep(seamWidth / 2.0 - 0.5, seamWidth / 2.0 + 0.5, pixels));
+    return;
+  }
   vec3 rgb;
   if (sky) {
     float elevation = ray.y / length(ray.xz);
@@ -70,7 +91,7 @@ void main() {
 
 const rgb = (hex: string) => [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16) / 255) as [number, number, number]
 
-const UNIFORMS = ['viewport', 'resolution', 'focal', 'view', 'rect', 'distance', 'depth', 'skyTop', 'horizon', 'fog', 'sky'] as const
+const UNIFORMS = ['viewport', 'resolution', 'focal', 'view', 'rect', 'distance', 'depth', 'skyTop', 'horizon', 'fog', 'sky', 'seams', 'seamColor', 'seamWidth'] as const
 type Uniform = (typeof UNIFORMS)[number]
 
 /**
@@ -84,6 +105,7 @@ export class Compositor {
   private uniforms = {} as Record<Uniform, WebGLUniformLocation | null>
   private textures = new Map<Chunk, WebGLTexture>()
   private frame: Frame | null = null
+  private showSeams = false
 
   /** Throws if the browser has no WebGL 2. */
   constructor(canvas: HTMLCanvasElement) {
@@ -102,6 +124,12 @@ export class Compositor {
       this.setup()
       if (this.frame) this.draw(this.frame)
     })
+  }
+
+  /** Whether to draw the seams between faces over the picture; redraws the last frame. */
+  setShowSeams(show: boolean) {
+    this.showSeams = show
+    if (this.frame) this.draw(this.frame)
   }
 
   draw(frame: Frame) {
@@ -156,6 +184,17 @@ export class Compositor {
     gl.uniform1f(u.fog, frame.fog)
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
 
+    if (this.showSeams) {
+      gl.uniform1i(u.seams, 1)
+      gl.uniform1f(u.seamWidth, SEAM_WIDTH * dpr)
+      gl.disable(gl.DEPTH_TEST)
+      gl.enable(gl.BLEND)
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+      gl.disable(gl.BLEND)
+      gl.enable(gl.DEPTH_TEST)
+      gl.uniform1i(u.seams, 0)
+    }
+
     for (const [chunk, texture] of this.textures) {
       if (drawn.has(chunk)) continue
       gl.deleteTexture(texture)
@@ -181,6 +220,8 @@ export class Compositor {
     }
     gl.uniform3f(this.uniforms.skyTop, ...rgb(SKY_TOP))
     gl.uniform3f(this.uniforms.horizon, ...rgb(SKY_HORIZON))
+    gl.uniform3f(this.uniforms.seamColor, ...rgb(SEAM_COLOR))
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
     gl.enable(gl.DEPTH_TEST)
     gl.depthFunc(gl.LESS)
   }
