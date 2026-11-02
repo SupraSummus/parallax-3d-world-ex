@@ -11,7 +11,13 @@
 </head>
 
 <body>
-    <div id="root"></div>
+    <div id="root">
+        <!-- Generating in App.tsx, until the app first renders (it generates the world first). -->
+        <div role="status" class="pointer-events-none absolute inset-0 flex items-center justify-center gap-3 font-mono text-sm text-white">
+            <span class="size-5 animate-spin rounded-full border-2 border-white border-t-transparent"></span>
+            Generating world…
+        </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
 </body>
 
