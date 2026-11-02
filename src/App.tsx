@@ -45,6 +45,8 @@ function App() {
   const compositorRef = useRef<Compositor | null>(null)
   // A render scheduled to show chunks baked since the last one.
   const bakedFrameRef = useRef<number | undefined>(undefined)
+  // See the effect setting it.
+  const renderBehindMessagesRef = useRef<() => void>(() => undefined)
   // Without it (e.g. jsdom) the panels still work, but the scene isn't drawn.
   const [hasWebGL2] = useState(() => document.createElement('canvas').getContext('webgl2') !== null)
 
@@ -81,6 +83,24 @@ function App() {
     setOrientation(renderer.getOrientation())
   }, [])
 
+  // Renders asked for in an animation frame (moving, chunks baked) run as a
+  // task queued behind the workers' messages received by then: in the frame,
+  // while a key was held, the browser ran only input and frames.
+  useEffect(() => {
+    const channel = new MessageChannel()
+    let queued = false
+    channel.port1.onmessage = () => {
+      queued = false
+      requestRender()
+    }
+    renderBehindMessagesRef.current = () => {
+      if (queued) return
+      queued = true
+      channel.port2.postMessage(null)
+    }
+    return () => { channel.port1.close() }
+  }, [requestRender])
+
   // Renderer lifecycle.
   useEffect(() => {
     const canvas = canvasRef.current
@@ -95,7 +115,7 @@ function App() {
       : startBakeWorkers(Math.max(1, Math.min(8, navigator.hardwareConcurrency - 1)))
     // Baked chunks arrive one by one; show them at most once per frame.
     const onBaked = () => {
-      bakedFrameRef.current ??= requestAnimationFrame(requestRender)
+      bakedFrameRef.current ??= requestAnimationFrame(() => { renderBehindMessagesRef.current() })
     }
     const renderer = new ParallaxRenderer(new World(Date.now(), 'forest'), { bakery, onBaked })
     rendererRef.current = renderer
@@ -152,7 +172,9 @@ function App() {
         }
         renderer.setCamera(cam)
         renderer.setOrientation({ yaw: yaw + turnYaw, pitch: pitch + turnPitch })
-        requestRender()
+        setCamera(renderer.getCamera())
+        setOrientation(renderer.getOrientation())
+        renderBehindMessagesRef.current()
       }
       frame = requestAnimationFrame(tick)
     }
@@ -189,7 +211,7 @@ function App() {
       window.removeEventListener('blur', stop)
       stop()
     }
-  }, [requestRender])
+  }, [])
 
   // Dragging on the scene turns the camera: right turns right, up looks up.
   const handlePointerMove = (e: PointerEvent) => {
