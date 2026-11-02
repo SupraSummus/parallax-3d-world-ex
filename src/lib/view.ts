@@ -78,6 +78,15 @@ export function inFace(x: number, y: number, z: number): boolean {
   return Math.abs(x) + Math.SQRT2 * Math.abs(y) <= z
 }
 
+/**
+ * Focal length in pixels at which one face's rays fill the viewport:
+ * their largest tangent, 1 (see inFace), reaches the edge of the longer
+ * side. Showing one direction whole takes 90° × 70.5°.
+ */
+export function faceFocal(width: number, height: number): number {
+  return Math.max(width, height) / 2
+}
+
 const dot = (a: Vec3, b: Vec3) => a.x * b.x + a.y * b.y + a.z * b.z
 
 /** World vector v in the coordinates of `axes`. */

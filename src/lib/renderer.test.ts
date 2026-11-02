@@ -148,14 +148,15 @@ describe('ParallaxRenderer', () => {
         expect(box.right).toBeGreaterThan(0)
         expect(box.bottom).toBeGreaterThan(0)
       }
-      // A smaller view at the same focal length, so with the same slices,
-      // shows less of every slice.
+      // A narrower field of view keeps the slices and shows less of every one.
       const narrow = new ParallaxRenderer(world)
-      narrow.resize(400, 300)
-      narrow.setFov((2 * Math.atan(0.5) * 180) / Math.PI)
+      narrow.resize(800, 600)
+      narrow.setFov(45)
       narrow.setOrientation({ yaw, pitch })
       narrow.render()
-      expect(narrow.getStats().lastUpdate?.cachedPixels).toBeLessThan(wide.cachedPixels)
+      const zoomed = narrow.getStats().lastUpdate
+      expect(zoomed?.detail).toBe(wide.detail)
+      expect(zoomed?.cachedPixels).toBeLessThan(wide.cachedPixels)
     })
 
   })
@@ -319,14 +320,24 @@ describe('ParallaxRenderer', () => {
   })
 
   describe('settings', () => {
-    it('derives detail from the field of view, viewport and leak tolerance', () => {
-      for (const [fov, pixels] of [[90, 16], [90, 4], [10, 16]]) {
+    it('derives detail from the viewport and leak tolerance, not the field of view', () => {
+      for (const [fov, pixels] of [[90, 16], [90, 4], [10, 16], [120, 4]]) {
         renderer.setFov(fov)
         renderer.setMaxLeak(pixels)
-        const tan = Math.tan((fov * Math.PI) / 360)
-        // The longer viewport side is 800 px; a face draws rays up to tangent 1.
-        expect(renderer.getDetail()).toBe(leakFreeDetail(400 / tan, pixels))
+        // One face's rays fill the 800 px longer viewport side: focal 400.
+        expect(renderer.getDetail()).toBe(leakFreeDetail(400, pixels))
       }
+    })
+
+    it('keeps the slices when zooming', () => {
+      render()
+      const slices = layers().map(l => ({ face: l.face, ...l.slice }))
+      renderer.setFov(30)
+      render()
+      const zoomed = layers().map(l => ({ face: l.face, ...l.slice }))
+      expect(zoomed.length).toBeGreaterThan(0)
+      // Fewer faces are in view, but each shows the same slices.
+      for (const slice of zoomed) expect(slices).toContainEqual(slice)
     })
 
     it('uses fewer, thicker slices for a larger tolerance', () => {

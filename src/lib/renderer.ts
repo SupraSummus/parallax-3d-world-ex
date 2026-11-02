@@ -3,7 +3,7 @@ import { ChunkBaker, type ChunkImage, type ChunkRequest } from './chunk-baker'
 import { World, type Vec3, type WorldType } from './world'
 import { LayerIndex, type VoxelData } from './voxel-grid'
 import { Coverage } from './occlusion'
-import { FACES, LAYER, faceTangents, inFace, focalLength, onScreen, screenBox, toLocal, type Face, type Orientation, type ScreenBox, type TangentBox, type View } from './view'
+import { FACES, LAYER, faceFocal, faceTangents, inFace, focalLength, onScreen, screenBox, toLocal, type Face, type Orientation, type ScreenBox, type TangentBox, type View } from './view'
 
 export type Camera = Vec3
 
@@ -563,8 +563,7 @@ export class ParallaxRenderer {
 
   /**
    * Sets the field of view in degrees (clamped to [MIN_FOV, MAX_FOV]). It
-   * zooms, and changes the focal length the slicing depends on (see
-   * leakFreeDetail).
+   * only zooms: the slices do not depend on it (see getDetail).
    */
   setFov(fov: number) {
     this.fov = Math.min(MAX_FOV, Math.max(MIN_FOV, fov))
@@ -599,12 +598,13 @@ export class ParallaxRenderer {
   }
 
   /**
-   * Slice detail that keeps occlusion leaks within the tolerance on the
-   * current viewport. It does not depend on where the camera looks, so
-   * turning keeps the slices.
+   * Slice detail that keeps occlusion leaks within the tolerance when one
+   * face fills the viewport (faceFocal). It depends neither on where the
+   * camera looks nor on the field of view, so turning and zooming keep the
+   * slices; zoomed in further, leaks grow on screen by the zoom factor.
    */
   getDetail(): number {
-    return leakFreeDetail(focalLength(this.fov, this.width, this.height), this.maxLeak)
+    return leakFreeDetail(faceFocal(this.width, this.height), this.maxLeak)
   }
 
   private view(): View {

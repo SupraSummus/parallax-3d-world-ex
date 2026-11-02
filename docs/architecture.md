@@ -142,6 +142,12 @@ Bound, with ε = the "max occlusion leak" setting in screen pixels (default
 16): **geometry that perspective hides never shows by more than ε pixels**
 (or, closer than 2 · `detail` layers, by more than two layer spacings;
 see below).
+The pixels are those of a view where one face's rays fill the viewport:
+their largest tangent, 1 (`inFace`), at the edge of the longer side,
+so `focal` below is `faceFocal` = max(W, H) / 2, a 90° view.
+The field of view only zooms the composited picture
+and does not change the slices:
+zoomed in further than that, leaks grow on screen by the zoom factor.
 
 **Derivation.** Every step below is stated and checked on random samples,
 plus end to end against ray-cast perspective, in
@@ -395,8 +401,8 @@ invite, puts a corner of 4 faces in the middle of the screen.
 "Show Face Seams" draws the seams over the picture.
 
 A chunk's eye depends on where the camera is, not where it looks,
-and detail on the focal length only.
-So turning keeps every slice and chunk;
+and detail on the viewport's longer side only, not the field of view.
+So turning and zooming keep every slice and chunk;
 only chunks coming into view are baked,
 and faces coming into view are sliced.
 
@@ -486,7 +492,7 @@ baked again on every render.
 |---|---|
 | x/y movement | Chunks still in view reused unless their level's eye changes: a level is baked again when the camera leaves its eye's cell; chunks entering the view rasterised; placements update |
 | turning | Slices and chunks reused; chunks entering the view baked |
-| field of view change | Focal length, hence detail, changes: slices still needed are reused |
+| field of view change | Slices and chunks reused; only the compositor's focal length changes |
 | leak tolerance change | Slices still needed are reused |
 | small z movement | Slices reused but where levels change: there a few slices get a new cutoff or level, the ones they replace standing in until baked |
 | resize | Slices reused unless the longer side crosses a quarter octave (detail changes); placements update |

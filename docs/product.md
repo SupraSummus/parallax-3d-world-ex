@@ -40,7 +40,11 @@ Slices are thin enough that
 geometry perspective would hide (e.g. stone under the lake's water
 surface) never shows by more than a set number of screen pixels ("Max
 Occlusion Leak", 1–64 px, default 16); the derived slice detail is shown in
-the statistics. "Fill Gaps" (on by default) grows faces that run from one
+the statistics.
+The pixels are counted at a 90° view, where one face fills the screen;
+the field of view only zooms the picture and never re-slices,
+so zoomed in further, leaks look larger.
+"Fill Gaps" (on by default) grows faces that run from one
 slice into the next, where nothing else is drawn in their chunk, so thin
 things like a floor seen from above don't show sky between slices.
 "Skip Covered Chunks" (on by default) doesn't draw chunks that nearer
