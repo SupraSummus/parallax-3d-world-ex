@@ -61,6 +61,7 @@ function App() {
   const [maxLeak, setMaxLeak] = useState(DEFAULT_MAX_LEAK)
   const [fillGaps, setFillGaps] = useState(true)
   const [skipCovered, setSkipCovered] = useState(true)
+  const [showSeams, setShowSeams] = useState(false)
 
   // Read from the movement loop without restarting it.
   const getMoveSpeed = useEffectEvent(() => moveSpeed)
@@ -247,6 +248,11 @@ function App() {
     requestRender()
   }
 
+  const handleShowSeamsChange = (value: boolean) => {
+    setShowSeams(value)
+    compositorRef.current?.setShowSeams(value)
+  }
+
   const handleFillGapsChange = (value: boolean) => {
     setFillGaps(value)
     rendererRef.current?.setFillGaps(value)
@@ -331,6 +337,10 @@ function App() {
             <label className="flex items-center justify-between text-xs text-muted-foreground">
               Skip Covered Chunks
               <Switch checked={skipCovered} onCheckedChange={handleSkipCoveredChange} aria-label="Skip covered chunks" />
+            </label>
+            <label className="flex items-center justify-between text-xs text-muted-foreground">
+              Show Face Seams
+              <Switch checked={showSeams} onCheckedChange={handleShowSeamsChange} aria-label="Show face seams" />
             </label>
             <div className="space-y-0.5 text-xs text-muted-foreground">
               <div className="flex items-center gap-2"><Move size={14} /><span>W/S - Forward/Back</span></div>

@@ -44,7 +44,8 @@ slice into the next, where nothing else is drawn in their chunk, so thin
 things like a floor seen from above don't show sky between slices.
 "Skip Covered Chunks" (on by default) doesn't draw chunks that nearer
 ones cover, nor bakes them; the picture is the same, it is there to
-compare. See [architecture.md](architecture.md).
+compare. "Show Face Seams" (off by default) draws lines where the twelve
+stacks meet on screen. See [architecture.md](architecture.md).
 
 **Worlds** – Procedurally generated, regenerable with a new seed; the camera
 moves to the world's spawn point.

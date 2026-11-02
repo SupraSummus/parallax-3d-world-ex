@@ -384,6 +384,7 @@ deciding by the pixel's ray, the same for all layers of a face,
 with a hair of overlap so no seam pixel falls to neither face.
 Looking straight along a world axis, as the scenes' walls and streets
 invite, puts a corner of 4 faces in the middle of the screen.
+"Show Face Seams" draws the seams over the picture.
 
 A chunk's baking direction depends on where the chunk is,
 not on where the camera looks,
