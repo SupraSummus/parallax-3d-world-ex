@@ -14,10 +14,12 @@ pnpm exec vitest -t "cache"     # filter by test name
 
 | File | Covers |
 |------|--------|
-| `src/lib/slice-selection.test.ts` | Slice math: documented examples plus invariants (contiguous, aligned, logarithmic) over a grid of camera positions and detail levels; the two cases of leak-free detail; pairing a re-tiled face's slices with the ones they replace |
+| `src/lib/cells.test.ts` | Cells of N·FCC: N³ sites in the layers `ownedLayers` gives, nearest coarse site with ties to the greatest c, b, a, isotropic second moments, not nested |
+| `bake/src/cells.rs` | The baker's cells: nearest coarse sites, N³ sites per cell, its table agreeing with the direct search |
+| `src/lib/slice-selection.test.ts` | Slice math: the documented example plus invariants over a grid of camera positions and detail levels (every site in exactly one slice, near to far, thin enough, logarithmic, names kept as the camera moves); slab thicknesses and centres; bricks tiling the plane, one around each site of M·FCC seen along the axis; the two cases of leak-free detail; pairing a re-tiled face's slices with the ones they replace |
 | `src/lib/leak-bound.test.ts` | The occlusion-leak bound as a step-by-step derivation, each step checked on seeded random samples, ending in a 2D ray-cast comparison (on the lattice's cross-section) of chunked, directed baking against true perspective |
 | `src/lib/fcc.test.ts` | Voxel geometry: 12 rhombic faces towards the nearest sites, on the voxel's boundary, wound outwards, volume 2 |
-| `src/lib/bake.test.ts` | The baker's chunks pixel by pixel against rays cast through the slice's voxels (surfaces, painting order, faces, rasterisation); only open faces crossing a slice plane grow; shading by world direction |
+| `src/lib/bake.test.ts` | The baker's chunks pixel by pixel against rays cast through the slice's voxels (surfaces, painting order, faces, rasterisation); only open faces of voxels going on into another slice grow; shading by world direction |
 | `bake/src/coverage.rs` | Counting a chunk's solid blocks in any range from sums of them, and bounding them, as scanning them does |
 | `bake/src/fill.rs` | Shared edges filled without overlap or gaps; grown faces equal to the face swept over its growth, painted only into empty pixels; blocks all or partly drawn |
 | `src/lib/world.test.ts` | Toy world types: determinism, bounds in blocks |

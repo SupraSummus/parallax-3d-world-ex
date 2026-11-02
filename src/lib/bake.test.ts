@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { shadedPalette, faceShade, FACE_SHADE } from './bake'
 import { ChunkBaker, FACE } from './chunk-baker'
 import { VOXEL_FACES } from './fcc'
-import { sliceCentre } from './slice-selection'
+import { sliceCentre, holds } from './slice-selection'
 import { FACES, LAYER, toLocal, type Face } from './view'
 import { VoxelGrid, type Voxel } from './voxel-grid'
 import type { Vec3 } from './world'
@@ -96,16 +96,19 @@ describe('ChunkBaker', () => {
   const baker = new ChunkBaker(grid)
   const palette = shadedPalette(grid.materials, face.lattice)
 
-  // Slices starting above the blob's bottom show cut faces. Directions
-  // within the face's rhombus, some on its edge.
+  // Slices with sites above the blob's bottom show cut faces; the blob is
+  // within one slab of level 3, and of level 4, made of cells of 2·FCC.
+  // Directions within the face's rhombus, some on its edge.
   it.each([
-    [0, 1, 0, 0], [0, 2, 0.5, -0.25], [0, 2, -1, 0], [0, 4, 0.25, 0.5], [0, 8, 0.5, 0.25],
-    [2, 1, 0.5, 0.35], [2, 4, -0.5, -0.35], [3, 2, 0, -LAYER],
-  ])('paints what a ray along the baking direction hits first (depth %s, size %s, tangents %s, %s)', (depth, size, tanX, tanY) => {
-    const centre = sliceCentre({ depth, size })
-    const sites = voxels.filter(v => v.c >= depth && v.c < depth + size)
+    [0, 0, Infinity, 0, 0], [0, 3, Infinity, 0.5, -0.25], [1, 1, Infinity, -1, 0], [1, 2, Infinity, 0.25, 0.5], [2, 1, Infinity, 0.5, 0.25],
+    [3, 0, 4, 0.5, 0.35], [4, 0, Infinity, -0.5, -0.35], [0, 5, Infinity, 0, -LAYER],
+  ])('paints what a ray along the baking direction hits first (level %s, layer %s, cutoff %s, tangents %s, %s)', (level, layer, cutoff, tanX, tanY) => {
+    const slice = { level, layer, cutoff }
+    const centre = sliceCentre(slice)
+    const sites = voxels.filter(v => holds(slice, [v.a, v.b, v.c]))
       .map(v => ({ x: v.a * LAYER, y: v.b, z: v.c * LAYER, id: ids.get(v.color) ?? 0 }))
-    const { width, height, pixels, originX, originY, scale } = baker.bake({ face: face.name, depth, size, i: 0, j: 0, tanX, tanY, fillDetail: 0 })
+    expect(sites.length).toBeGreaterThan(20)
+    const { width, height, pixels, originX, originY, scale } = baker.bake({ face: face.name, ...slice, i: 0, j: 0, tanX, tanY, fillDetail: 0 })
 
     let compared = 0
     const wrong: string[] = []
@@ -127,25 +130,26 @@ describe('ChunkBaker', () => {
     expect(wrong).toEqual([])
   }, 30_000)
 
-  it('grows only the open faces of voxels going on into the next slice', () => {
-    // A floor two units thick through slices [0, 4) and [4, 8), baked
-    // straight along the face's axis, so its sides facing up show only grown.
+  it('grows only the open faces of voxels going on into another slice', () => {
+    // A floor two units thick through layers 0 to 7, baked straight along
+    // the face's axis, so its sides facing up show only grown.
     const floor = VoxelGrid.fromVoxels(voxels.filter(v => v.b >= 0 && v.b < 2))
-    const data = new ChunkBaker(floor).faces({ face: face.name, depth: 0, size: 4, i: 0, j: 0, tanX: 0, tanY: 0, fillDetail: 27 })
-    const isOpen = (a: number, b: number, c: number, kind: number) => {
-      const { a: da, b: db, c: dc } = kindOffsets[kind]
-      const p = toWorld(face, a + da, b + db, c + dc)
-      return floor.get(p.x, p.y, p.z) === 0
+    const slice = { level: 1, layer: 1, cutoff: Infinity }
+    const data = new ChunkBaker(floor).faces({ face: face.name, ...slice, i: 0, j: 0, tanX: 0, tanY: 0, fillDetail: 27 })
+    const filled = (a: number, b: number, c: number) => {
+      const p = toWorld(face, a, b, c)
+      return floor.get(p.x, p.y, p.z) !== 0
     }
     const grown = Array.from({ length: data.length / FACE }, (_, f) => f * FACE)
       .filter(o => data.subarray(o + 10, o + 14).some(g => g > 0))
       .map(o => {
         const [a, b, c] = data.subarray(o + 14, o + 17)
-        return { c, open: isOpen(a, b, c, data[o + 8] % VOXEL_FACES.length), reached: data[o + 9] }
+        const { a: da, b: db, c: dc } = kindOffsets[data[o + 8] % VOXEL_FACES.length]
+        const crossing = kindOffsets.some(k => filled(a + k.a, b + k.b, c + k.c) && !holds(slice, [a + k.a, b + k.b, c + k.c]))
+        return { open: !filled(a + da, b + db, c + dc), crossing, reached: data[o + 9] }
       })
     expect(grown.length).toBeGreaterThan(0)
-    // Neighbours are up to two layers on.
-    expect(grown.every(({ c, open }) => open && c >= 2)).toBe(true)
+    expect(grown.every(({ open, crossing }) => open && crossing)).toBe(true)
     expect(grown.some(({ reached }) => reached === 0)).toBe(true)
   })
 })

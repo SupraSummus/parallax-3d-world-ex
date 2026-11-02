@@ -10,12 +10,14 @@ Entry point for AI agents working on this codebase. Read this first.
 | [docs/product.md](docs/product.md) | What the product does and doesn't do | Adding or changing features |
 | [docs/architecture.md](docs/architecture.md) | Slicing, caching and compositing architecture | Touching `src/lib` |
 | [docs/testing.md](docs/testing.md) | Test layout and conventions | Writing tests |
+| [docs/todo.md](docs/todo.md) | Measured or derived improvements not done yet | Looking for what to do next |
 
 Each concept has one home:
 build/test commands live in `package.json` scripts,
 architecture in `docs/architecture.md`,
 product behaviour in `docs/product.md`,
 test conventions in `docs/testing.md`,
+planned work in `docs/todo.md`,
 agent rules here.
 Link instead of duplicating.
 Docs go in `docs/` with lower-case names;
@@ -38,6 +40,7 @@ src/
     ├── forest.ts            # Forest scene generator (UNIT_SIZE lives here)
     ├── city.ts              # City scene generator: streets, buildings, maze of rooms
     ├── noise.ts             # Seeded hash, value noise and PRNG for the generators
+    ├── cells.ts             # Cells of the coarser lattices N·FCC that slices are made of
     ├── slice-selection.ts   # Slices, chunks and baking directions (pure functions)
     ├── view.ts              # Camera orientation, the 12 faces (FCC directions), projection
     ├── renderer.ts          # Slices and chunks in view, caching, screen placement (no DOM)
@@ -56,6 +59,7 @@ bake/                        # Chunk baker and coverage in Rust, compiled to Web
 └── src/
     ├── lib.rs               # Baker: cached cell surfaces, one chunk per call; the WebAssembly exports
     ├── world.rs             # Grid and voxel faces as handed over, read per face
+    ├── cells.rs             # cells.ts, with a table per level
     ├── slicing.rs           # The parts of slice-selection.ts baking needs
     ├── surface.rs           # A cell's voxels that can show
     ├── faces.rs             # Which voxel faces a chunk shows, baked onto its centre plane

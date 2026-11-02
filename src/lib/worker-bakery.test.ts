@@ -46,7 +46,7 @@ class RecordingBakery extends WorkerBakery {
 }
 
 /** A chunk's cell: its face, slice and position. */
-const cell = ({ face, depth, size, i, j }: ChunkRequest) => [face, depth, size, i, j].join()
+const cell = ({ face, level, layer, cutoff, i, j }: ChunkRequest) => [face, level, layer, cutoff, i, j].join()
 
 const pending = (renderer: ParallaxRenderer) => renderer.getStats().lastUpdate?.chunksPending ?? 0
 
@@ -128,7 +128,7 @@ describe('WorkerBakery', () => {
   })
 
   it('bakes from the latest list, a chunk again only once the main thread took it', () => {
-    const at = (i: number) => ({ face: '+x+z', depth: 0, size: 64, i, j: 0, tanX: 0, tanY: 0, fillDetail: 0 })
+    const at = (i: number) => ({ face: '+x+z', level: 6, layer: 0, cutoff: Infinity, i, j: 0, tanX: 0, tanY: 0, fillDetail: 0 })
     const baked: [number, number][] = []
     const steps: (() => void)[] = []
     const handle = bakeHandler(({ seq, request }) => baked.push([seq, request.i]), step => steps.push(step))
@@ -226,7 +226,7 @@ describe('WorkerBakery', () => {
   })
 
   it('drops chunks baked from a replaced world', async () => {
-    const request = { face: '+x+z', depth: 0, size: 64, i: 0, j: 0, tanX: 0, tanY: 0, fillDetail: 0 }
+    const request = { face: '+x+z', level: 5, layer: 0, cutoff: Infinity, i: 0, j: 0, tanX: 0, tanY: 0, fillDetail: 0 }
     expect(new ChunkBaker(world.grid).bake(request).facesDrawn).toBeGreaterThan(0)
 
     const bakery = new WorkerBakery([new FakeWorker()])

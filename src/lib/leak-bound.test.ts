@@ -25,10 +25,10 @@
  * slice thickness measured from the centre instead of the near face [4],
  * an angle error that ignores the chunk width [7, 8].
  *
- * Depths are in face coordinates (view.ts): layers are LAYER apart, and
- * slices are cut in whole layers. A slice of `size` layers is
- * s = (size + 1) · LAYER thick: its voxels reach from layer depth − 1 to
- * depth + size.
+ * Depths are in face coordinates (view.ts): layers are LAYER apart. A
+ * slice is a slab of layers of whole cells (cells.ts, slice-selection.ts);
+ * its sites span siteLayers from the slab's first layer, and its voxels reach a
+ * layer past those, so it is s = thickness · LAYER thick.
  *
  * Notation, for one lateral axis (x and y are independent): the camera is
  * at lateral 0, depth 0 (so z is relative to it). A slice has its near
@@ -39,8 +39,8 @@
  */
 import { describe, it, expect } from 'vitest'
 import {
-  selectSlices, leakFreeDetail, bakeAngleError, directionStep, chunkCell, nearestDirection, sliceCentre,
-  type SliceBoundary,
+  selectSlices, leakFreeDetail, bakeAngleError, directionStep, chunkCell, nearestDirection, sliceCentre, thickness, siteLayers, holds,
+  CHUNK_SPAN, MAX_LEVEL, type SliceId,
 } from './slice-selection'
 import { ChunkBaker, FACE } from './chunk-baker'
 import { FACES, LAYER } from './view'
@@ -64,8 +64,14 @@ function forAll<T>(n: number, generate: (random: (lo: number, hi: number) => num
   }
 }
 
-const C = chunkCell(1).columns
+const C = CHUNK_SPAN
 const EPSILON = 1e-9
+
+/** A random slice: level, layer, no cutoff. */
+const randomSlice = (r: (lo: number, hi: number) => number, from: number, to: number): SliceId =>
+  ({ level: Math.floor(r(0, MAX_LEVEL + 1)), layer: Math.floor(r(from, to)), cutoff: Infinity })
+/** The layer of a slice's voxels' near tips. */
+const nearSide = ({ level, layer }: SliceId) => layer * 2 ** level + siteLayers(level)[0] - 1
 
 describe('Step 1: a baked, drawn point is off by (τ − τ_b)·(z − D)', () => {
   /*
@@ -77,11 +83,11 @@ describe('Step 1: a baked, drawn point is off by (τ − τ_b)·(z − D)', () =
    */
   it('holds for random points, slices and directions', () => {
     forAll(2000, r => {
-      const slice: SliceBoundary = { depth: Math.floor(r(1, 300)), size: 2 ** Math.floor(r(0, 7)) }
+      const slice = randomSlice(r, 1, 30)
       const cameraZ = r(-1, 0)
       // Relative to the camera.
       const D = sliceCentre(slice) - cameraZ
-      const z = (slice.depth - 1 + r(0, slice.size + 1)) * LAYER - cameraZ
+      const z = (nearSide(slice) + r(0, thickness(slice.level))) * LAYER - cameraZ
       return { D, z, tau: r(-1.5, 1.5), tauB: r(-1.5, 1.5) }
     }, ({ D, z, tau, tauB }) => {
       const x = tau * z
@@ -95,17 +101,24 @@ describe('Step 1: a baked, drawn point is off by (τ − τ_b)·(z − D)', () =
 
 describe('Step 2: within a slice |z − D| ≤ s/2', () => {
   /*
-   * A voxel in layer c reaches from layer c − 1 to c + 1, so a slice of
-   * layers [depth, depth + size) spans layers [depth − 1, depth + size],
-   * s = (size + 1) · LAYER thick, and sliceCentre is its middle. With
-   * step 1, every point of a slice is drawn at most |τ − τ_b|·s/2 from
-   * where it belongs.
+   * A voxel in layer c reaches from layer c − 1 to c + 1, so a slice whose
+   * sites are in layers [l + lo, l + hi] (siteLayers, l its slab's first layer)
+   * spans [l + lo − 1, l + hi + 1], s = thickness · LAYER thick, and
+   * sliceCentre is its middle. With step 1, every point of a slice is drawn
+   * at most |τ − τ_b|·s/2 from where it belongs.
    */
-  it('holds for every point of random slices', () => {
+  it('holds for every point of the voxels of random slices', () => {
     forAll(2000, r => {
-      const slice: SliceBoundary = { depth: Math.floor(r(-300, 300)), size: 2 ** Math.floor(r(0, 7)) }
-      return { slice, z: (slice.depth - 1 + r(0, slice.size + 1)) * LAYER }
-    }, ({ slice, z }) => Math.abs(z - sliceCentre(slice)) <= ((slice.size + 1) / 2) * LAYER + EPSILON)
+      const slice = randomSlice(r, -10, 10)
+      const n = 2 ** slice.level
+      // A site near the slab, kept if the slice holds it.
+      const c = slice.layer * n + Math.floor(r(-n, 2 * n))
+      const site: [number, number, number] = [2 * Math.floor(r(-n, n)) + (c & 1), 2 * Math.floor(r(-n, n)) + (c & 1), c]
+      return { slice, site, z: (site[2] + r(-1, 1)) * LAYER }
+    }, ({ slice, site, z }) => {
+      if (!holds(slice, site)) return true
+      return Math.abs(z - sliceCentre(slice)) <= (thickness(slice.level) / 2) * LAYER + EPSILON
+    })
   })
 })
 
@@ -141,33 +154,33 @@ describe('Step 4: in pixels, a leak is at most τ_err·focal / detail', () => {
    * w·focal/a pixels. With step 3, w ≤ τ_err·s. Slices are at most
    * a / detail thick (or one voxel, see step 7), so the leak is at most
    * τ_err·s·focal/a ≤ τ_err·focal/detail pixels. This checks the slicing
-   * keeps size + 1 ≤ max(2, a / detail), in layers, a measured to the
-   * slice's near side, layer depth − 1.
+   * keeps thickness ≤ max(2, a / detail), in layers, a measured to the
+   * slice's near side (single layers, level 0, are 2 thick).
    */
   it('selectSlices keeps every slice at most max(2, a / detail) thick', () => {
     forAll(300, r => ({ cameraZ: r(-300, 300), detail: 2 ** r(0, 8), range: r(10, 1000) }), ({ cameraZ, detail, range }) =>
       selectSlices(cameraZ, 2, range, detail).every(s => {
-        const a = s.depth - 1 - cameraZ
-        return s.size + 1 <= Math.max(2, a / detail) && sliceCentre(s) / LAYER - cameraZ >= a
+        const a = nearSide(s) - cameraZ
+        return thickness(s.level) <= Math.max(2, a / detail) && sliceCentre(s) / LAYER - cameraZ >= a
       }))
   })
 })
 
 describe('Step 5: rays through a chunk are within C / (2·detail) of its centre ray', () => {
   /*
-   * A chunk of a slice of `size` layers is at most C · size layer spacings
-   * wide and high (chunkCell) on the plane at distance D ≥ a, so its rays
-   * span at most C · size · LAYER / D in tangent, at most C / detail when
-   * size + 1 ≤ a / (LAYER · detail) (step 4). The renderer only shows what
-   * lands inside the chunk's cell, so no ray is further than half that
-   * from the ray through the cell's centre.
+   * A chunk of a slice is C · 2^level layer spacings wide and 1/√2 of that
+   * high (chunkCell), less than C · thickness, on the plane at distance D ≥ a, so
+   * its rays span at most C · thickness · LAYER / D in tangent, at most
+   * C / detail when thickness ≤ a / detail (step 4). The renderer only
+   * shows what lands inside the chunk's cell, so no ray is further than
+   * half that from the ray through the cell's centre.
    */
   it('holds for the chunks of random slicings', () => {
     forAll(300, r => ({ cameraZ: r(-300, 300), detail: 2 ** r(0, 8) }), ({ cameraZ, detail }) =>
       selectSlices(cameraZ, 2, 1000, detail)
-        .filter(s => s.size + 1 <= (s.depth - 1 - cameraZ) / detail)
+        .filter(s => thickness(s.level) <= (nearSide(s) - cameraZ) / detail)
         .every(s => {
-          const { width, height } = chunkCell(s.size)
+          const { width, height } = chunkCell(s.level, 0, 0)
           return Math.max(width, height) / 2 / (sliceCentre(s) - cameraZ * LAYER) <= C / (2 * detail) + EPSILON
         }))
   })
@@ -302,7 +315,7 @@ describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', T
   }
 
   /** dirStep 0 bakes every chunk straight along the face's axis. */
-  function parallaxOwners(cells: Cell[], cu: number, cz: number, slices: SliceBoundary[], dirStep: number): number[] {
+  function parallaxOwners(cells: Cell[], cu: number, cz: number, slices: SliceId[], dirStep: number): number[] {
     // The renderer's own face logic, on voxels (u, 0, z) of the face's lattice.
     const { right: R, forward: F } = face.lattice
     const baker = new ChunkBaker(VoxelGrid.fromVoxels(cells.map(({ u, z }) => ({
@@ -313,22 +326,24 @@ describe.each([1, 0.5, 0.25])('Step 8: ray-cast leaks with tan(fov / 2) = %s', T
     for (const slice of [...slices].reverse()) {
       const centre = sliceCentre(slice)
       const distance = centre - cz * LAYER
-      const { columns, width: w } = chunkCell(slice.size)
-      const chunkCells = new Set(cells.filter(({ z }) => z >= slice.depth && z < slice.depth + slice.size).flatMap(({ u }) => {
-        const i = Math.floor(u / columns)
+      // Bricks of row 0, which holds b = 0: brick i spans [x + i · w, x + (i + 1) · w).
+      const { x, width: w } = chunkCell(slice.level, 0, 0)
+      const inSlice = ({ u, z }: Cell) => holds(slice, [u, 0, z])
+      const chunkCells = new Set(cells.filter(inSlice).flatMap(({ u }) => {
+        const i = Math.floor((u * LAYER - x) / w)
         return [i - 1, i, i + 1]
       }))
       for (const i of chunkCells) {
-        const tan = dirStep === 0 ? 0 : Math.max(-1, Math.min(1, nearestDirection(((i + 0.5) * w - cu * LAYER) / distance, dirStep)))
-        const data = baker.faces({ face: face.name, depth: slice.depth, size: slice.size, i, j: 0, tanX: tan, tanY: 0, fillDetail: 0 })
+        const tan = dirStep === 0 ? 0 : Math.max(-1, Math.min(1, nearestDirection((x + (i + 0.5) * w - cu * LAYER) / distance, dirStep)))
+        const data = baker.faces({ face: face.name, ...slice, i, j: 0, tanX: tan, tanY: 0, fillDetail: 0 })
         for (let f = 0; f < data.length / FACE; f++) {
           if (data[f * FACE + 9] === 0) continue
           const extent = onAxis(data.subarray(f * FACE, f * FACE + 8))
           if (!extent) continue
           const voxel = cellAt.get(`${String(data[f * FACE + 14])},${String(data[f * FACE + 16])}`) ?? -1
           // Clipped to the chunk's cell, then drawn at the centre plane's distance.
-          const from = Math.max(i * w, extent[0])
-          const to = Math.min((i + 1) * w, extent[1])
+          const from = Math.max(x + i * w, extent[0])
+          const to = Math.min(x + (i + 1) * w, extent[1])
           const first = Math.ceil(((from - cu * LAYER) / distance + TAN_HALF_FOV) / step)
           const last = Math.floor(((to - cu * LAYER) / distance + TAN_HALF_FOV) / step)
           for (let k = Math.max(0, first); k <= Math.min(RAYS - 1, last); k++) owner[k] = voxel

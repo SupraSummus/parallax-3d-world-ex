@@ -18,10 +18,11 @@ interface Entry {
 }
 
 /** Which of `count` workers bakes a chunk: always the same for a cell, so that its surface is cached once. */
-function workerOf({ face, depth, size, i, j }: ChunkRequest, count: number): number {
+function workerOf({ face, level, layer, cutoff, i, j }: ChunkRequest, count: number): number {
   let hash = 0x811c9dc5
   for (let k = 0; k < face.length; k++) hash = Math.imul(hash ^ face.charCodeAt(k), 0x01000193)
-  for (const n of [depth, size, i, j]) hash = Math.imul(hash ^ n, 0x01000193)
+  // An infinite cutoff hashes as 0, like none.
+  for (const n of [level, layer, cutoff, i, j]) hash = Math.imul(hash ^ n, 0x01000193)
   return (hash >>> 0) % count
 }
 

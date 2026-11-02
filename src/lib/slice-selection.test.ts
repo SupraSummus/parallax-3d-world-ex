@@ -1,40 +1,27 @@
 import { describe, it, expect } from 'vitest'
-import { selectSlices, getSliceAtDepth, leakFreeDetail, matchTilings } from './slice-selection'
+import { selectSlices, leakFreeDetail, matchTilings, sliceCentre, thickness, sliceKey, siteLayers, chunkCell, chunkCells, holds, type SliceId } from './slice-selection'
+import { LAYER } from './view'
 
-const sizes = (slices: { size: number }[]) => slices.map(s => s.size)
+const name = ({ level, layer, cutoff }: SliceId) => `${String(level)}:${String(layer)}${Number.isFinite(cutoff) ? `|${String(cutoff)}` : ''}`
 
-describe('getSliceAtDepth', () => {
-  it('returns the smallest aligned size >= minSize', () => {
-    expect(getSliceAtDepth(0, 1).size).toBe(1)
-    expect(getSliceAtDepth(0, 4).size).toBe(4)
-    expect(getSliceAtDepth(0, 64).size).toBe(64)
-    expect(getSliceAtDepth(8, 3).size).toBe(4)
-    expect(getSliceAtDepth(-16, 16).size).toBe(16)
-  })
-
-  it('falls back to the largest aligned size when minSize is not available', () => {
-    expect(getSliceAtDepth(8, 16).size).toBe(8)
-    expect(getSliceAtDepth(6, 4).size).toBe(2)
-    expect(getSliceAtDepth(7, 64).size).toBe(1)
-  })
-
-  it('caps sizes at 64', () => {
-    expect(getSliceAtDepth(0, 1000).size).toBe(64)
-  })
-})
+/** How many of `slices` hold each site (a, b, c) with a and b in a small window and c in [from, to). */
+function holders(slices: SliceId[], from: number, to: number): Map<string, number> {
+  const count = new Map<string, number>()
+  for (let c = from; c < to; c++) {
+    for (let a = -6 + (c & 1); a <= 6; a += 2) {
+      for (let b = -6 + (c & 1); b <= 6; b += 2) {
+        count.set(`${String(a)},${String(b)},${String(c)}`, slices.filter(s => holds(s, [a, b, c])).length)
+      }
+    }
+  }
+  return count
+}
 
 describe('selectSlices', () => {
-  // docs/architecture.md, section 1 (detail 1).
-  it('matches the documented progression for camera z=0', () => {
-    const slices = selectSlices(0, 1, 200, 1)
-    expect(slices.map(s => s.depth)).toEqual([1, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192])
-    expect(sizes(slices)).toEqual([1, 1, 1, 2, 2, 4, 4, 8, 8, 16, 16, 32, 32, 64, 64])
-  })
-
-  it('matches the documented progression for camera z=-67', () => {
-    const slices = selectSlices(-67, 1, 200, 1)
-    expect(slices.map(s => s.depth)).toEqual([-66, -65, -64, -63, -62, -60, -56, -48, -32, 0, 64, 128])
-    expect(sizes(slices)).toEqual([1, 1, 1, 1, 2, 4, 8, 16, 32, 64, 64, 64])
+  // docs/architecture.md, section 1 (detail 1): level:layer, |cutoff.
+  it('matches the documented slicing for camera z=0', () => {
+    expect(selectSlices(0, 1, 200, 1).map(name).join(' ')).toBe(
+      '0:1 0:2 0:3 1:2 1:3 2:2 2:3 3:2 3:3|32 3:4|32 4:2 4:3|64 4:4|64 5:2 5:3|128 5:4|128 6:2 6:3')
   })
 
   it('returns nothing for an empty range', () => {
@@ -43,50 +30,62 @@ describe('selectSlices', () => {
   })
 
   it('makes slices thinner as detail increases', () => {
-    const counts = [1, 2, 4, 8, 16].map(detail => selectSlices(-30, 1, 200, detail).length)
+    const counts = [1, 2, 4, 8, 16].map(detail => selectSlices(-30, 1, 400, detail).length)
     expect(counts).toEqual([...counts].sort((a, b) => a - b))
     expect(new Set(counts).size).toBe(counts.length)
   })
 
   describe.each([1, 2, 4, 8, 16])('invariants with detail %s', detail => {
-    const cameras = Array.from({ length: 81 }, (_, i) => -200 + i * 5.13)
+    const cameras = Array.from({ length: 21 }, (_, i) => -100 + i * 9.37)
 
     it.each(cameras)('camera z=%s', cameraZ => {
-      const slices = selectSlices(cameraZ, 1, 200, detail)
+      const slices = selectSlices(cameraZ, 1, 120, detail)
+      const near = Math.ceil(cameraZ + 1)
 
-      // Covers voxels with z in [cameraZ + 1, cameraZ + 200) contiguously; none
-      // nearer, as a slice close to the camera would be blown up over the screen.
-      expect(slices[0].depth).toBeGreaterThanOrEqual(cameraZ + 1)
-      expect(slices[0].depth - 1).toBeLessThan(cameraZ + 1)
-      const last = slices[slices.length - 1]
-      expect(last.depth + last.size).toBeGreaterThanOrEqual(cameraZ + 200)
+      // Every site from the first layer ahead to the far end is in exactly
+      // one slice; none nearer (a slice close to the camera would be blown
+      // up over the screen).
+      const held = holders(slices, near - 3, Math.floor(cameraZ + 120))
+      for (const [site, count] of held) {
+        const c = Number(site.split(',')[2])
+        expect(count, site).toBe(c < near ? 0 : 1)
+      }
+
       for (let i = 1; i < slices.length; i++) {
-        expect(slices[i].depth).toBe(slices[i - 1].depth + slices[i - 1].size)
+        // Near to far: level by level, layer by layer. (Where a level ends,
+        // its last slices hold sites of cells one level up before the next
+        // level's first layer, so they come first, though their centre
+        // planes may be a little farther.)
+        const [p, q] = [slices[i - 1], slices[i]]
+        expect(q.level > p.level || (q.level === p.level && q.layer === p.layer + 1), `${name(p)} ${name(q)}`).toBe(true)
+        expect(sliceCentre(q)).toBeGreaterThan(sliceCentre(p) - 2 * LAYER)
       }
 
       for (const s of slices) {
-        // Aligned powers of two, so a (depth, size) slice is camera-independent and cacheable.
-        expect(Math.abs(s.depth % s.size)).toBe(0)
-        expect([1, 2, 4, 8, 16, 32, 64]).toContain(s.size)
-        // Never thicker (a voxel reaches 1 past its layer: size + 1) than
-        // (distance to the near side) / detail, or one layer (two units).
-        expect(s.size + 1).toBeLessThanOrEqual(Math.max(2, (s.depth - 1 - cameraZ) / detail))
+        // Past level 0, never thicker than (distance to the near side) / detail.
+        const a = s.layer * 2 ** s.level + siteLayers(s.level)[0] - 1 - cameraZ
+        if (s.level > 0) expect(thickness(s.level)).toBeLessThanOrEqual(a / detail)
       }
 
       // Logarithmic, not linear, in the view distance.
-      expect(slices.length).toBeLessThanOrEqual(7 * detail + 10)
+      expect(slices.length).toBeLessThanOrEqual(12 * detail + 30)
     })
   })
 
-  it('uses thicker slices farther from the camera', () => {
+  it('uses thicker slabs farther from the camera', () => {
     for (const cameraZ of [-100, -67, -30, 0, 17]) {
       const slices = selectSlices(cameraZ, 1, 200, 1)
-      expect(slices[0].size).toBeLessThanOrEqual(2)
-      for (const s of slices) {
-        if (s.depth - cameraZ > 50) expect(s.size).toBeGreaterThan(1)
-      }
-      expect(slices[slices.length - 1].size).toBeGreaterThanOrEqual(32)
+      expect(slices[0].level).toBe(0)
+      expect(slices.map(s => s.level)).toEqual(slices.map(s => s.level).sort((a, b) => a - b))
+      expect(slices[slices.length - 1].level).toBeGreaterThanOrEqual(4)
     }
+  })
+
+  it('names the same slice the same from nearby cameras', () => {
+    // Moving one layer forward keeps all but the slices near where levels change.
+    const before = new Set(selectSlices(0, 1, 400, 16).map(sliceKey))
+    const after = selectSlices(1, 1, 400, 16).map(sliceKey)
+    expect(after.filter(k => before.has(k)).length).toBeGreaterThan(after.length * 0.9)
   })
 })
 
@@ -104,38 +103,71 @@ describe('leakFreeDetail', () => {
 })
 
 describe('matchTilings', () => {
-  const tiling = (...sizes: number[]) => sizes.reduce<{ depth: number; size: number }[]>((slices, size) => {
-    const depth = slices.length === 0 ? 0 : slices[slices.length - 1].depth + slices[slices.length - 1].size
-    return [...slices, { depth, size }]
-  }, [])
-  const layers = (slices: { depth: number; size: number }[]) => slices.length === 0 ? null : [slices[0].depth, slices[slices.length - 1].depth + slices[slices.length - 1].size]
+  const s = (level: number, layer: number, cutoff = Infinity): SliceId => ({ level, layer, cutoff })
 
-  it('pairs segments ending at boundaries both tilings share, with the slices holding the same layers', () => {
-    // [0, 1, 2, 4, 8) against [0, 2, 3, 4, 8).
-    const segments = matchTilings(tiling(1, 1, 2, 4), tiling(2, 1, 1, 4))
-    expect(segments.map(s => [layers(s.wanted), layers(s.previous)])).toEqual([[[0, 2], [0, 2]], [[2, 4], [2, 4]], [[4, 8], [4, 8]]])
-    expect(segments[1].previous.map(s => s.size)).toEqual([1, 1])
+  it('pairs slices in both with themselves, and the ones between with what is between in the other', () => {
+    const previous = [s(0, 1), s(0, 2, 6), s(0, 3, 6), s(1, 3), s(1, 4)]
+    const wanted = [s(0, 1), s(0, 2), s(0, 3, 8), s(0, 4, 8), s(1, 4)]
+    const segments = matchTilings(wanted, previous)
+    expect(segments.map(g => [g.wanted.map(name), g.previous.map(name)])).toEqual([
+      [['0:1'], ['0:1']],
+      [['0:2', '0:3|8', '0:4|8'], ['0:2|6', '0:3|6', '1:3']],
+      [['1:4'], ['1:4']],
+    ])
   })
 
-  it('lets the first segment start within a previous slice, and pairs nothing beyond the previous tiling', () => {
-    // The camera moved forward: wanted starts at 1, previous at 0 and ends at 4.
-    const wanted = tiling(1, 1, 2, 4, 8).slice(1)
-    const segments = matchTilings(wanted, tiling(2, 2))
-    expect(segments.map(s => [layers(s.wanted), layers(s.previous)])).toEqual([[[1, 2], [0, 2]], [[2, 4], [2, 4]], [[4, 16], null]])
+  it('lets the first segment stand on nearer slices, and pairs nothing past the last shared one', () => {
+    const segments = matchTilings([s(0, 2), s(0, 3), s(1, 2)], [s(0, 1), s(0, 2, 6), s(0, 3)])
+    expect(segments.map(g => [g.wanted.map(name), g.previous.map(name)])).toEqual([
+      [['0:2'], ['0:1', '0:2|6']],
+      [['0:3'], ['0:3']],
+      [['1:2'], []],
+    ])
   })
 
-  it('covers every wanted slice once, in order, for any two tilings', () => {
+  it('covers every wanted slice once, in order, for any two slicings', () => {
     for (let cameraZ = -40; cameraZ < 40; cameraZ += 3) {
       for (const previousZ of [cameraZ - 5, cameraZ, cameraZ + 7]) {
         const wanted = selectSlices(cameraZ, 1, 300, 2)
         const previous = selectSlices(previousZ, 1, 300, 2)
-        const segments = matchTilings(wanted, previous)
-        expect(segments.flatMap(s => s.wanted)).toEqual(wanted)
-        for (const { wanted: w, previous: p } of segments) {
-          if (p.length === 0) continue
-          expect(layers(p)?.[1]).toBe(layers(w)?.[1])
-          expect(p[0].depth).toBeLessThanOrEqual(w[0].depth)
+        expect(matchTilings(wanted, previous).flatMap(g => g.wanted)).toEqual(wanted)
+      }
+    }
+  })
+})
+
+describe('sliceCentre', () => {
+  it('is halfway through what the voxels of the slice span', () => {
+    // Level 3, slabs of 8 voxel layers: sites in layers 40 to 47, voxels reaching from 39 to 48.
+    expect(sliceCentre({ level: 3, layer: 5, cutoff: Infinity })).toBeCloseTo(43.5 * LAYER)
+    // Level 4, slabs of 8 layers of cells of 2·FCC: their sites in layers 32 to 46, holding sites from 30 to 46, voxels reaching from 29 to 47.
+    expect(sliceCentre({ level: 4, layer: 2, cutoff: Infinity })).toBeCloseTo(38 * LAYER)
+    // Level 5, cells of 4·FCC in layers 32 to 60, holding sites from 28 to 63; voxels from 27 to 64.
+    expect(sliceCentre({ level: 5, layer: 1, cutoff: Infinity })).toBeCloseTo(45.5 * LAYER)
+  })
+})
+
+describe('chunkCell', () => {
+  it('tiles the plane with bricks, each around one site of M·FCC seen along the axis', () => {
+    for (const level of [0, 2]) {
+      const m = 8 * 2 ** level
+      // Sites of M·FCC seen along the axis: a and b multiples of M, a / M and b / M of one parity.
+      for (let a = -4 * m; a <= 4 * m; a += m) {
+        for (let b = -4 * m; b <= 4 * m; b += m) {
+          if ((((a - b) / m) & 1) !== 0) continue
+          const x = a * LAYER
+          const inside = chunkCells(level, x, x + 1e-9, b, b + 1e-9).map(([i, j]) => chunkCell(level, i, j))
+          expect(inside).toHaveLength(1)
+          // In the middle of its brick.
+          expect(inside[0].x + inside[0].width / 2).toBeCloseTo(x)
+          expect(inside[0].y + inside[0].height / 2).toBeCloseTo(b)
         }
+      }
+      // Points of the plane are each in exactly one brick.
+      for (let k = 0; k < 200; k++) {
+        const [x, y] = [Math.sin(k * 12.9898) * 300, Math.cos(k * 78.233) * 300]
+        const near = chunkCells(level, x - 50, x + 50, y - 50, y + 50).map(([i, j]) => chunkCell(level, i, j))
+        expect(near.filter(r => x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height)).toHaveLength(1)
       }
     }
   })
